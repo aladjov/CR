@@ -25,6 +25,7 @@ class LifecycleEnrichmentConfig:
     status_column: Optional[str] = None
     terminal_status_values: Tuple[str, ...] = ()
     drop_columns: Tuple[str, ...] = ()
+    protected_columns: Tuple[str, ...] = ()
     on_corrupt_row: OnCorruptRow = "raise"
     event_type_column: str = "event_type"
     event_timestamp_column: str = "event_timestamp"
@@ -59,11 +60,18 @@ class LifecycleEnrichmentConfig:
                 f"in drop_columns — the doubled stream needs it for "
                 f"event_timestamp on START rows"
             )
+        protected_in_drop = sorted(set(self.protected_columns) & set(self.drop_columns))
+        if protected_in_drop:
+            raise ValueError(
+                f"protected_columns {protected_in_drop} must not appear in "
+                f"drop_columns — they are declared VALUE_COLUMNs or otherwise "
+                f"required downstream of lifecycle enrichment"
+            )
 
     def to_dict(self) -> Dict[str, Any]:
         raw = asdict(self)
         # Tuples → lists for JSON-friendly round-trip.
-        for key in ("valid_to_columns", "terminal_status_values", "drop_columns"):
+        for key in ("valid_to_columns", "terminal_status_values", "drop_columns", "protected_columns"):
             raw[key] = list(raw[key])
         return raw
 
@@ -76,7 +84,7 @@ class LifecycleEnrichmentConfig:
                 f"unknown LifecycleEnrichmentConfig field(s): {sorted(unknown)}"
             )
         kwargs: Dict[str, Any] = dict(data)
-        for key in ("valid_to_columns", "terminal_status_values", "drop_columns"):
+        for key in ("valid_to_columns", "terminal_status_values", "drop_columns", "protected_columns"):
             if key in kwargs and kwargs[key] is not None:
                 kwargs[key] = tuple(kwargs[key])
         return cls(**kwargs)
