@@ -129,6 +129,9 @@ COLLECT_BOUNDARY_FILES = {
     #     The snapshot DataFrame itself is MERGE'd via DeltaTable.merge(...)
     #     directly — never collected to the driver.
     "stages/causal/snapshot_writer.py",
+    # Lifecycle enrichment — .agg().collect()[0] for corrupt-row counts (1 row,
+    # 3 count columns) in the on_corrupt_row='raise'/'warn' triage path.
+    "stages/lifecycle/enrich.py",
 }
 
 # ── bare 'import pandas as pd' allowlist ────────────────────────────────
