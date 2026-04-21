@@ -27,6 +27,8 @@ from .field_availability_audit import (
     FieldAvailabilityAuditor,
     FieldAvailabilityAuditResult,
     FieldLeadLagProfile,
+    audit_surprises_against_drop_list,
+    reshape_event_stream_to_snapshot,
     run_field_availability_audit,
 )
 from .findings import (
@@ -242,6 +244,8 @@ __all__ = [
     "FieldAvailabilityAuditResult",
     "FieldAvailabilityAuditor",
     "FieldLeadLagProfile",
+    "audit_surprises_against_drop_list",
+    "reshape_event_stream_to_snapshot",
     "run_field_availability_audit",
     "ServiceUnitConfig",
     "DatasetLinkage",

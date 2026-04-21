@@ -9,7 +9,13 @@ from typing import TYPE_CHECKING, Any, Callable, Optional
 
 import yaml
 
-from customer_retention.core.compat import DataFrame, _is_spark_pandas, native_pd
+from customer_retention.core.compat import (
+    DataFrame,
+    _is_spark_pandas,
+    as_pandas_api,
+    as_spark_df,
+    native_pd,
+)
 
 from .service_unit_detector import (
     DatasetLinkage,
@@ -1277,3 +1283,92 @@ def run_field_availability_audit(
             print(f"  {name}: {path}")
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Event-stream → snapshot reshape (audit input adapter)
+# ---------------------------------------------------------------------------
+
+
+def reshape_event_stream_to_snapshot(
+    df: DataFrame,
+    *,
+    unit_id_column: str,
+    event_type_column: str,
+    terminate_value: str,
+    event_timestamp_column: str,
+    output_termination_column: str = "TERMINATION_DATE",
+) -> DataFrame:
+    required = {unit_id_column, event_type_column, event_timestamp_column}
+    missing = required - set(df.columns)
+    if missing:
+        raise KeyError(
+            f"reshape_event_stream_to_snapshot: missing required columns {sorted(missing)}"
+        )
+    if _is_spark_pandas(df):
+        return _reshape_event_stream_to_snapshot_spark(
+            df, unit_id_column, event_type_column, terminate_value,
+            event_timestamp_column, output_termination_column,
+        )
+    return _reshape_event_stream_to_snapshot_pandas(
+        df, unit_id_column, event_type_column, terminate_value,
+        event_timestamp_column, output_termination_column,
+    )
+
+
+def _reshape_event_stream_to_snapshot_pandas(
+    df: native_pd.DataFrame, unit_id_column: str, event_type_column: str,
+    terminate_value: str, event_timestamp_column: str,
+    output_termination_column: str,
+) -> native_pd.DataFrame:
+    starts = df[df[event_type_column] == "start"].copy()
+    if output_termination_column in starts.columns:
+        starts = starts.drop(columns=[output_termination_column])
+    terms = df[df[event_type_column] == terminate_value]
+    if len(terms) == 0:
+        starts[output_termination_column] = native_pd.NaT
+        return starts.reset_index(drop=True)
+    term_max = (
+        terms.groupby(unit_id_column)[event_timestamp_column]
+        .max()
+        .rename(output_termination_column)
+        .reset_index()
+    )
+    return starts.merge(term_max, on=unit_id_column, how="left").reset_index(drop=True)
+
+
+def _reshape_event_stream_to_snapshot_spark(  # pragma: no cover
+    df: DataFrame, unit_id_column: str, event_type_column: str,
+    terminate_value: str, event_timestamp_column: str,
+    output_termination_column: str,
+) -> DataFrame:
+    import pyspark.sql.functions as F  # noqa: N812
+
+    sdf = as_spark_df(df)
+    starts = sdf.filter(F.col(event_type_column) == "start")
+    if output_termination_column in starts.columns:
+        starts = starts.drop(output_termination_column)
+    terminations = (
+        sdf.filter(F.col(event_type_column) == terminate_value)
+        .groupBy(unit_id_column)
+        .agg(F.max(event_timestamp_column).alias(output_termination_column))
+    )
+    snapshot = starts.join(terminations, on=unit_id_column, how="left")
+    return as_pandas_api(snapshot)
+
+
+def audit_surprises_against_drop_list(
+    audit_result: FieldAvailabilityAuditResult,
+    drop_columns: list[str],
+    *,
+    threshold: float = 0.5,
+) -> set[str]:
+    flagged: set[str] = set(audit_result.recommended_exclusions)
+    for profile in audit_result.field_profiles:
+        if profile.suspicion_score >= threshold:
+            flagged.add(profile.field_name)
+        value_score = profile.value_suspicion_score
+        if value_score is not None and value_score >= threshold:
+            flagged.add(profile.field_name)
+    dropped = {c for c in drop_columns}
+    return {col for col in flagged if col not in dropped}
