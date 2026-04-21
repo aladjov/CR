@@ -241,6 +241,7 @@ class FindingsParser:
         self._reconcile_bronze_columns(config)
         self._reconcile_gold_columns(config)
         if self._feature_spec is not None:
+            self._reconcile_config_with_spec(config)
             self._enforce_spec_schema_parity(config)
         return config
 
@@ -1279,6 +1280,137 @@ class FindingsParser:
                     "Dropped post-shaping step(s) from '%s' — columns not in aggregated output: %s",
                     name, ", ".join(dropped),
                 )
+
+    def _reconcile_config_with_spec(self, config: "PipelineConfig") -> None:
+        """Treat ``FeatureSpec.selected_features`` as the authoritative oracle.
+
+        NB08 has already selected features from NB01d's full emission, so any
+        heuristic in NB10 (sparse prune, lag-gated temporal block, narrow
+        aggregation windows, unset cyclical flag) that would prevent a
+        selected feature from reaching gold is a parity bug. This pass walks
+        each ``BronzeEventConfig`` and lifts just the config knobs required to
+        produce the selected columns.
+        """
+        spec = self._feature_spec
+        if spec is None:
+            return
+        for event_cfg in config.bronze_event.values():
+            self._reconcile_event_config_with_spec(event_cfg, spec)
+
+    @staticmethod
+    def _reconcile_event_config_with_spec(
+        event_cfg: "BronzeEventConfig", spec: FeatureSpec,
+    ) -> None:
+        selected = set(spec.selected_features)
+        FindingsParser._reconcile_aggregation_windows_with_spec(event_cfg, selected)
+        FindingsParser._reconcile_blocked_aggregate_funcs_with_spec(event_cfg, selected)
+        FindingsParser._reconcile_lifecycle_with_spec(event_cfg, selected)
+        FindingsParser._reconcile_temporal_features_with_spec(event_cfg, selected)
+
+    @staticmethod
+    def _reconcile_aggregation_windows_with_spec(
+        event_cfg: "BronzeEventConfig", selected: Set[str],
+    ) -> None:
+        agg = event_cfg.aggregation
+        if agg is None:
+            return
+        required = FindingsParser._windows_required_by_spec(selected, agg)
+        missing = [w for w in required if w not in agg.windows]
+        if missing:
+            agg.windows = list(agg.windows) + sorted(missing)
+
+    @staticmethod
+    def _windows_required_by_spec(
+        selected: Set[str], agg: "AggregationWindowConfig",
+    ) -> Set[str]:
+        required: Set[str] = set()
+        for feat in selected:
+            suffix = FindingsParser._match_trailing_window(feat)
+            if suffix:
+                required.add(suffix)
+        return required
+
+    _WINDOW_TOKEN_RE = re.compile(r"_((?:\d+[dhw])|all_time)$")
+
+    @staticmethod
+    def _match_trailing_window(feature: str) -> Optional[str]:
+        match = FindingsParser._WINDOW_TOKEN_RE.search(feature)
+        return match.group(1) if match else None
+
+    @staticmethod
+    def _reconcile_blocked_aggregate_funcs_with_spec(
+        event_cfg: "BronzeEventConfig", selected: Set[str],
+    ) -> None:
+        agg = event_cfg.aggregation
+        if agg is None or not agg.column_blocked_funcs:
+            return
+        updated: Dict[str, List[str]] = {}
+        for col, funcs in agg.column_blocked_funcs.items():
+            preserved = [
+                func for func in funcs
+                if not FindingsParser._spec_requires_agg_func(selected, col, func, agg.windows)
+            ]
+            if preserved:
+                updated[col] = preserved
+        agg.column_blocked_funcs = updated
+
+    @staticmethod
+    def _spec_requires_agg_func(
+        selected: Set[str], column: str, func: str, windows: List[str],
+    ) -> bool:
+        return any(f"{column}_{func}_{w}" in selected for w in windows)
+
+    _LIFECYCLE_SPEC_FLAGS = {
+        "include_cyclical_features": ("dow_sin", "dow_cos"),
+        "include_month_cyclical": ("month_sin", "month_cos"),
+        "include_quarter_cyclical": ("quarter_sin", "quarter_cos"),
+        "include_recency_bucket": ("recency_bucket",),
+        "include_lifecycle_quadrant": ("lifecycle_quadrant",),
+        "include_trend_features": ("recent_vs_overall_ratio", "entity_trend_slope"),
+        "include_cohort_features": ("cohort_year", "cohort_quarter"),
+    }
+
+    @staticmethod
+    def _reconcile_lifecycle_with_spec(
+        event_cfg: "BronzeEventConfig", selected: Set[str],
+    ) -> None:
+        needed_flags = [
+            flag for flag, trigger_cols in FindingsParser._LIFECYCLE_SPEC_FLAGS.items()
+            if any(col in selected for col in trigger_cols)
+        ]
+        if not needed_flags:
+            return
+        if event_cfg.lifecycle is None:
+            event_cfg.lifecycle = LifecycleConfig()
+        for flag in needed_flags:
+            setattr(event_cfg.lifecycle, flag, True)
+
+    _TEMPORAL_RECENCY_COLS = frozenset({
+        "days_since_last_event", "days_since_first_event",
+        "active_span_days", "recency_ratio",
+    })
+    _TEMPORAL_REGULARITY_COLS = frozenset({
+        "event_frequency", "inter_event_gap_mean", "inter_event_gap_std",
+        "inter_event_gap_max", "regularity_score",
+    })
+
+    @staticmethod
+    def _reconcile_temporal_features_with_spec(
+        event_cfg: "BronzeEventConfig", selected: Set[str],
+    ) -> None:
+        groups_needed: Set[str] = set()
+        if FindingsParser._TEMPORAL_RECENCY_COLS & selected:
+            groups_needed.add("recency")
+        if FindingsParser._TEMPORAL_REGULARITY_COLS & selected:
+            groups_needed.add("regularity")
+        if not groups_needed:
+            return
+        tf = event_cfg.temporal_features
+        if tf is None:
+            tf = TemporalFeatureConfig(lag_columns=[], feature_groups=[])
+            event_cfg.temporal_features = tf
+        existing = set(tf.feature_groups or [])
+        tf.feature_groups = sorted(existing | groups_needed)
 
     @staticmethod
     def _silver_derived_sources_available(rec, pipeline_columns: Set[str]) -> bool:
