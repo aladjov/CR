@@ -106,30 +106,53 @@ def _coalesce_pandas(df: Any, valid_to_columns: List[str]) -> Any:
 def _apply_corrupt_row_policy_pandas(df: Any, config: LifecycleEnrichmentConfig) -> Any:
     valid_from = df[config.valid_from_column]
     eff = df["__effective_valid_to__"]
+    null_start_mask = valid_from.isna()
     inverted_mask = eff.notna() & (valid_from > eff)
+    if config.status_column and config.terminal_status_values:
+        is_terminal = df[config.status_column].isin(list(config.terminal_status_values))
+        terminal_null_term_mask = is_terminal & eff.isna() & ~null_start_mask
+    else:
+        terminal_null_term_mask = null_start_mask & False
+    n_null_start = int(null_start_mask.sum())
+    n_terminal_null_term = int(terminal_null_term_mask.sum())
     n_inverted = int(inverted_mask.sum())
-    if n_inverted == 0:
+    n_corrupt = n_null_start + n_terminal_null_term + n_inverted
+    if n_corrupt == 0:
         return df
 
     if config.on_corrupt_row == "raise":
         raise ValueError(
-            f"{n_inverted} rows have inverted lifecycle "
-            f"(valid_from > effective_valid_to). Set "
-            f"on_corrupt_row='skip' or 'warn' to triage."
+            f"{n_corrupt} rows have corrupt lifecycle "
+            f"(null_start={n_null_start}, "
+            f"terminal_status_with_null_valid_to={n_terminal_null_term}, "
+            f"inverted={n_inverted}). Set on_corrupt_row='skip' or "
+            f"'warn' to triage."
         )
+    drop_mask = null_start_mask | terminal_null_term_mask
     if config.on_corrupt_row == "skip":
+        drop_mask = drop_mask | inverted_mask
         logger.warning(
-            "Dropping %d rows with inverted lifecycle (valid_from > effective_valid_to)",
+            "Dropping %d rows with corrupt lifecycle "
+            "(null_start=%d, terminal_status_with_null_valid_to=%d, inverted=%d)",
+            n_corrupt, n_null_start, n_terminal_null_term, n_inverted,
+        )
+        return df[~drop_mask]
+    if n_null_start or n_terminal_null_term:
+        logger.warning(
+            "Dropping %d rows with corrupt lifecycle that cannot be clamped "
+            "(null_start=%d, terminal_status_with_null_valid_to=%d)",
+            n_null_start + n_terminal_null_term, n_null_start, n_terminal_null_term,
+        )
+        df = df.loc[~drop_mask].copy()
+    if n_inverted:
+        logger.warning(
+            "Clamping %d rows with inverted lifecycle to valid_from",
             n_inverted,
         )
-        return df[~inverted_mask]
-    logger.warning(
-        "Clamping %d rows with inverted lifecycle to valid_from",
-        n_inverted,
-    )
-    df["__effective_valid_to__"] = df["__effective_valid_to__"].where(
-        ~inverted_mask, df[config.valid_from_column]
-    )
+        inverted_after_drop = inverted_mask.loc[df.index]
+        df["__effective_valid_to__"] = df["__effective_valid_to__"].where(
+            ~inverted_after_drop, df[config.valid_from_column]
+        )
     return df
 
 
@@ -208,32 +231,64 @@ def _apply_corrupt_row_policy_spark(
 ) -> Any:
     from pyspark.sql import functions as F  # noqa: N812
 
+    null_start_expr = F.col(config.valid_from_column).isNull()
     inverted_expr = F.col("__effective_valid_to__").isNotNull() & (
         F.col(config.valid_from_column) > F.col("__effective_valid_to__")
     )
+    if config.status_column and config.terminal_status_values:
+        is_terminal = F.col(config.status_column).isin(list(config.terminal_status_values))
+        terminal_null_term_expr = (
+            is_terminal
+            & F.col("__effective_valid_to__").isNull()
+            & F.col(config.valid_from_column).isNotNull()
+        )
+    else:
+        terminal_null_term_expr = F.lit(False)
+
+    drop_expr = null_start_expr | terminal_null_term_expr
+    corrupt_expr = drop_expr | inverted_expr
 
     if config.on_corrupt_row == "skip":
-        return spark_df.filter(~inverted_expr)
+        return spark_df.filter(~corrupt_expr)
 
-    n_inverted = spark_df.filter(inverted_expr).count()
-    if n_inverted == 0:
+    counts_row = spark_df.agg(
+        F.sum(F.when(null_start_expr, 1).otherwise(0)).alias("null_start"),
+        F.sum(F.when(terminal_null_term_expr, 1).otherwise(0)).alias("terminal_null_term"),
+        F.sum(F.when(inverted_expr, 1).otherwise(0)).alias("inverted"),
+    ).collect()[0]
+    n_null_start = int(counts_row["null_start"] or 0)
+    n_terminal_null_term = int(counts_row["terminal_null_term"] or 0)
+    n_inverted = int(counts_row["inverted"] or 0)
+    n_corrupt = n_null_start + n_terminal_null_term + n_inverted
+    if n_corrupt == 0:
         return spark_df
 
     if config.on_corrupt_row == "raise":
         raise ValueError(
-            f"{n_inverted} rows have inverted lifecycle "
-            f"(valid_from > effective_valid_to). Set "
-            f"on_corrupt_row='skip' or 'warn' to triage."
+            f"{n_corrupt} rows have corrupt lifecycle "
+            f"(null_start={n_null_start}, "
+            f"terminal_status_with_null_valid_to={n_terminal_null_term}, "
+            f"inverted={n_inverted}). Set on_corrupt_row='skip' or "
+            f"'warn' to triage."
         )
-    logger.warning(
-        "Clamping %d rows with inverted lifecycle to valid_from",
-        n_inverted,
-    )
-    return spark_df.withColumn(
-        "__effective_valid_to__",
-        F.when(inverted_expr, F.col(config.valid_from_column))
-         .otherwise(F.col("__effective_valid_to__")),
-    )
+    if n_null_start or n_terminal_null_term:
+        logger.warning(
+            "Dropping %d rows with corrupt lifecycle that cannot be clamped "
+            "(null_start=%d, terminal_status_with_null_valid_to=%d)",
+            n_null_start + n_terminal_null_term, n_null_start, n_terminal_null_term,
+        )
+        spark_df = spark_df.filter(~drop_expr)
+    if n_inverted:
+        logger.warning(
+            "Clamping %d rows with inverted lifecycle to valid_from",
+            n_inverted,
+        )
+        spark_df = spark_df.withColumn(
+            "__effective_valid_to__",
+            F.when(inverted_expr, F.col(config.valid_from_column))
+             .otherwise(F.col("__effective_valid_to__")),
+        )
+    return spark_df
 
 
 # ---------------------------------------------------------------------------

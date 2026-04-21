@@ -88,7 +88,7 @@ class TestEventGeneration:
 class TestCorruptRowPolicy:
     def test_corrupt_row_raise_default(self, df_factory, synthetic_contract_records):
         df = df_factory([r for r in synthetic_contract_records if r["ACCOUNT_ID"] == "E"])
-        with pytest.raises(ValueError, match="inverted lifecycle"):
+        with pytest.raises(ValueError, match="corrupt lifecycle"):
             enrich_lifecycle_dataset(df, config=_base_config(on_corrupt_row="raise"))
 
     def test_corrupt_row_skip_drops_inverted_rows(
@@ -348,9 +348,12 @@ class _FakeSparkDF:
     assert the resulting call sequence.
     """
 
-    def __init__(self, columns, *, count=0, history=None):
+    def __init__(self, columns, *, count=0, corrupt_counts=None, history=None):
         self._columns = list(columns)
         self._count = count
+        self._corrupt_counts = corrupt_counts or {
+            "null_start": 0, "terminal_null_term": 0, "inverted": count,
+        }
         self.history = history if history is not None else []
 
     @property
@@ -360,24 +363,54 @@ class _FakeSparkDF:
     def withColumn(self, name, expr):  # noqa: N802 — Spark API
         self.history.append(("withColumn", name, str(expr)))
         new_cols = self._columns if name in self._columns else self._columns + [name]
-        return _FakeSparkDF(new_cols, count=self._count, history=self.history)
+        return _FakeSparkDF(
+            new_cols, count=self._count, corrupt_counts=self._corrupt_counts,
+            history=self.history,
+        )
 
     def filter(self, expr):
         self.history.append(("filter", str(expr)))
-        return _FakeSparkDF(self._columns, count=self._count, history=self.history)
+        return _FakeSparkDF(
+            self._columns, count=self._count, corrupt_counts=self._corrupt_counts,
+            history=self.history,
+        )
 
     def drop(self, *cols):
         self.history.append(("drop", cols))
         remaining = [c for c in self._columns if c not in cols]
-        return _FakeSparkDF(remaining, count=self._count, history=self.history)
+        return _FakeSparkDF(
+            remaining, count=self._count, corrupt_counts=self._corrupt_counts,
+            history=self.history,
+        )
 
     def count(self):
         self.history.append(("count",))
         return self._count
 
+    def agg(self, *exprs):
+        self.history.append(("agg", tuple(str(e) for e in exprs)))
+
+        class _Row(dict):
+            def __getitem__(self, key):
+                return dict.__getitem__(self, key)
+
+        row = _Row(self._corrupt_counts)
+
+        class _Collectable:
+            def collect(self):
+                return [row]
+
+            def head(self):
+                return row
+
+        return _Collectable()
+
     def unionByName(self, other):  # noqa: N802 — Spark API
         self.history.append(("unionByName", id(other)))
-        return _FakeSparkDF(self._columns, count=self._count, history=self.history)
+        return _FakeSparkDF(
+            self._columns, count=self._count, corrupt_counts=self._corrupt_counts,
+            history=self.history,
+        )
 
 
 class TestEnrichDistributed:
@@ -438,10 +471,11 @@ class TestEnrichDistributed:
         df = _FakeSparkDF(
             ["CONTRACT_START_DATE", "__effective_valid_to__"],
             count=3,
+            corrupt_counts={"null_start": 0, "terminal_null_term": 0, "inverted": 3},
         )
         cfg = _base_config(on_corrupt_row="raise")
 
-        with pytest.raises(ValueError, match="3 rows have inverted lifecycle"):
+        with pytest.raises(ValueError, match="3 rows have corrupt lifecycle"):
             _apply_corrupt_row_policy_spark(df, cfg)
 
     def test_distributed_raise_no_corrupt_returns_input(self):
@@ -451,6 +485,7 @@ class TestEnrichDistributed:
         df = _FakeSparkDF(
             ["CONTRACT_START_DATE", "__effective_valid_to__"],
             count=0,
+            corrupt_counts={"null_start": 0, "terminal_null_term": 0, "inverted": 0},
         )
         cfg = _base_config(on_corrupt_row="raise")
 
@@ -459,7 +494,7 @@ class TestEnrichDistributed:
         # No corrupt rows: input returned unmodified, no withColumn called
         assert result is df
         ops = [h[0] for h in df.history]
-        assert "count" in ops
+        assert "agg" in ops
         assert "withColumn" not in ops
 
     def test_distributed_warn_clamps_inverted_rows(self, caplog):
@@ -469,15 +504,16 @@ class TestEnrichDistributed:
         df = _FakeSparkDF(
             ["CONTRACT_START_DATE", "__effective_valid_to__"],
             count=2,
+            corrupt_counts={"null_start": 0, "terminal_null_term": 0, "inverted": 2},
         )
         cfg = _base_config(on_corrupt_row="warn")
 
         with caplog.at_level(logging.WARNING, logger="customer_retention.stages.lifecycle.enrich"):
             _apply_corrupt_row_policy_spark(df, cfg)
 
-        # warn path: count + withColumn clamp
+        # warn path: agg (corrupt counts) + withColumn clamp
         ops = [h[0] for h in df.history]
-        assert "count" in ops
+        assert "agg" in ops
         assert "withColumn" in ops
         clamp_calls = [h for h in df.history if h[0] == "withColumn"]
         assert clamp_calls[0][1] == "__effective_valid_to__"
