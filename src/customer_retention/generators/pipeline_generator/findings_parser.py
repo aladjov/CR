@@ -1,9 +1,24 @@
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import yaml
+
+_PARITY_MODE_ENV_VAR = "CR_FEATURE_SPEC_PARITY_MODE"
+_PARITY_MODES = frozenset({"strict", "warn"})
+
+
+def _resolve_parity_mode(explicit: Optional[str]) -> str:
+    candidate = explicit if explicit is not None else os.environ.get(_PARITY_MODE_ENV_VAR, "strict")
+    normalized = str(candidate).strip().lower()
+    if normalized not in _PARITY_MODES:
+        raise ValueError(
+            f"parity_mode must be one of {sorted(_PARITY_MODES)}; got {candidate!r}. "
+            f"Set via constructor arg or ${_PARITY_MODE_ENV_VAR}."
+        )
+    return normalized
 
 _URI_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://")
 _DBFS_PREFIXES = ("dbfs:", "/Volumes/", "/dbfs/", "/mnt/", "/Workspace/")
@@ -188,6 +203,7 @@ class FindingsParser:
         intent=None,
         bronze_aggregation_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
         disable_user_extensions: Optional[bool] = None,
+        parity_mode: Optional[str] = None,
     ):
         self._findings_dir = Path(findings_dir)
         self._namespace = namespace
@@ -199,12 +215,17 @@ class FindingsParser:
         self._raw_source_columns: Dict[str, Set[str]] = {}
         self._feature_spec: Optional[FeatureSpec] = None
         self._silver_merged_columns_cache: Optional[Set[str]] = None
+        self._parity_mode: str = _resolve_parity_mode(parity_mode)
         from customer_retention.runtime.flags import is_user_extensions_disabled
         self._ext_disabled: bool = is_user_extensions_disabled(disable_user_extensions)
 
     @property
     def user_extensions_disabled(self) -> bool:
         return self._ext_disabled
+
+    @property
+    def parity_mode(self) -> str:
+        return self._parity_mode
 
     def parse(self) -> PipelineConfig:
         self._feature_spec = self._load_feature_spec()
@@ -307,12 +328,16 @@ class FindingsParser:
     ) -> Set[str]:
         missing = [c for c in spec.selected_features if c not in pipeline_columns]
         if missing:
-            raise ValueError(
+            message = (
                 f"FeatureSpec parity violation at generation time: pipeline is missing "
                 f"{len(missing)} declared selected_features: {missing[:10]}. "
                 f"Bronze/silver/gold derivation is out of sync with exploration — "
                 f"regenerate upstream layers or re-run NB08."
             )
+            if getattr(self, "_parity_mode", "strict") == "warn":
+                logger.warning(message)
+            else:
+                raise ValueError(message)
         keep: Set[str] = set(spec.selected_features)
         keep.add(target_column)
         keep.update(_FEATURE_SPEC_PROTECTED_COLUMNS)

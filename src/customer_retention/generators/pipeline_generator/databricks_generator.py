@@ -28,6 +28,7 @@ class DatabricksPipelineGenerator(PipelineGeneratorBase):
         bronze_aggregation_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
         disable_user_extensions: Optional[bool] = None,
         harvest_result: Optional["HarvestResult"] = None,
+        parity_mode: Optional[str] = None,
     ):
         self._findings_dir = Path(findings_dir)
         self._output_dir = Path(output_dir)
@@ -41,6 +42,7 @@ class DatabricksPipelineGenerator(PipelineGeneratorBase):
             intent=intent,
             bronze_aggregation_overrides=bronze_aggregation_overrides,
             disable_user_extensions=disable_user_extensions,
+            parity_mode=parity_mode,
         )
         self._harvest_result = harvest_result
         self._renderer = DatabricksCodeRenderer(
