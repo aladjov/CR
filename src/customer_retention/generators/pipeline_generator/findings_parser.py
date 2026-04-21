@@ -1055,6 +1055,17 @@ class FindingsParser:
         return columns
 
     def _read_silver_merged_columns(self) -> Set[str]:
+        """Return ONLY unpaired ``_x``/``_y``-suffixed columns from stale silver.
+
+        Why: a previous silver Delta may carry bare columns (e.g. ``dow_sin``)
+        that the current bronze config no longer produces — lifting those into
+        ``pipeline_columns`` silently green-lights silver derived-column recs
+        that crash at runtime with ``UNRESOLVED_COLUMN``. Bare names must come
+        from the current config (``bronze_raw ∪ event_aggregated``); the stale
+        cache is only trusted for merge-artifact suffixes, which genuinely only
+        exist post-silver-merge and cannot be predicted from bronze alone.
+        Paired ``<base>_x``/``<base>_y`` are pandas-merge collisions and excluded.
+        """
         cached = getattr(self, "_silver_merged_columns_cache", None)
         if cached is not None:
             return cached
@@ -1065,8 +1076,19 @@ class FindingsParser:
             return self._silver_merged_columns_cache
         delta = _get_delta_for_silver_schema()
         df = delta.read(str(silver_path))
-        self._silver_merged_columns_cache = self._strip_merge_suffix_artifacts(set(df.columns))
+        self._silver_merged_columns_cache = self._unpaired_merge_suffix_columns(set(df.columns))
         return self._silver_merged_columns_cache
+
+    @staticmethod
+    def _unpaired_merge_suffix_columns(columns: Set[str]) -> Set[str]:
+        merge_pairs = {
+            c[:-2] for c in columns
+            if c.endswith("_x") and (c[:-2] + "_y") in columns
+        }
+        return {
+            c for c in columns
+            if (c.endswith("_x") or c.endswith("_y")) and c[:-2] not in merge_pairs
+        }
 
     @staticmethod
     def _strip_merge_suffix_artifacts(columns: Set[str]) -> Set[str]:

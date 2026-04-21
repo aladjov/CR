@@ -7223,7 +7223,11 @@ class TestCollectKnownPipelineColumns:
     def test_silver_merged_schema_read_lazily_from_delta(self, tmp_path, monkeypatch):
         """The schema-of-silver_merged read happens via `get_delta().read(path)`
         (Spark Connect-safe — `.columns` is plan-level, no .rdd, no Spark job).
-        Cached on first access so the parity check stays cheap.
+        Cached on first access so the parity check stays cheap. Only unpaired
+        `_x`/`_y` suffixed columns are retained from the stale Delta; bare
+        names must come from the current bronze config to avoid silently
+        green-lighting silver derived-column recs that reference columns
+        the current pipeline no longer produces.
         """
         from unittest.mock import MagicMock
 
@@ -7237,14 +7241,14 @@ class TestCollectKnownPipelineColumns:
         parser._namespace = ns
 
         fake_df = MagicMock()
-        fake_df.columns = ["entity_id", "as_of_date", "extra_col"]
+        fake_df.columns = ["entity_id", "as_of_date", "extra_col", "legit_trailing_x"]
         fake_delta = MagicMock()
         fake_delta.read.return_value = fake_df
         monkeypatch.setattr(fp, "_get_delta_for_silver_schema", lambda: fake_delta)
 
         first = parser._read_silver_merged_columns()
         second = parser._read_silver_merged_columns()
-        assert first == {"entity_id", "as_of_date", "extra_col"}
+        assert first == {"legit_trailing_x"}
         assert second == first
         fake_delta.read.assert_called_once()
 
@@ -7283,6 +7287,173 @@ class TestStripMergeSuffixArtifacts:
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
         cols = {"solo_y", "other"}
         assert FindingsParser._strip_merge_suffix_artifacts(cols) == {"solo_y", "other"}
+
+
+class TestStaleSilverMergedCacheDoesNotLeak:
+    """Regression: a previous silver_merged Delta carries columns that the
+    CURRENT bronze config no longer produces (e.g. ``dow_sin`` after
+    ``bronze_event.lifecycle.include_cyclical_features`` flipped to False).
+    If the stale cache feeds those bare names into ``_collect_pipeline_columns``,
+    ``_silver_derived_sources_available`` green-lights a silver interaction that
+    references a phantom column, and the generated silver script crashes at
+    runtime with ``UNRESOLVED_COLUMN``.
+
+    Contract: ``_read_silver_merged_columns`` must scope the stale Delta to
+    merge-artifact-suffixed columns only. Bare names have to come from the
+    current pipeline config (``bronze_raw ∪ event_aggregated``).
+    """
+
+    @staticmethod
+    def _parser_with_event(include_cyclical: bool, silver_derived):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import (
+            AggregationWindowConfig,
+            BronzeEventConfig,
+            GoldLayerConfig,
+            LifecycleConfig,
+            PipelineConfig,
+            SilverLayerConfig,
+            SourceConfig,
+        )
+        event_src = SourceConfig(
+            name="customer_emails", path="ce.csv", format="csv",
+            entity_key="customer_id", raw_source_path="/data/customer_emails.csv",
+            is_event_level=True, time_column="sent_date",
+        )
+        event_cfg = BronzeEventConfig(
+            source=event_src, entity_column="customer_id", time_column="sent_date",
+            aggregation=AggregationWindowConfig(
+                windows=["180d", "365d", "all_time"],
+                value_columns=[], agg_funcs=["count"],
+            ),
+            lifecycle=(
+                LifecycleConfig(include_cyclical_features=True) if include_cyclical else None
+            ),
+        )
+        config = PipelineConfig(
+            name="t", target_column="churn", sources=[event_src],
+            bronze={}, silver=SilverLayerConfig(derived_columns=list(silver_derived)),
+            gold=GoldLayerConfig(), output_dir=".",
+        )
+        config.bronze_event = {"customer_emails": event_cfg}
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._raw_source_columns = {"customer_emails": {"customer_id", "sent_date"}}
+        parser._source_findings_paths = {}
+        parser._silver_merged_columns_cache = None
+        parser._namespace = None
+        return parser, config
+
+    def test_stale_silver_bare_columns_do_not_satisfy_availability(self, tmp_path, monkeypatch):
+        """Reproduce the ``dow_sin`` regression: previous silver Delta has
+        ``dow_sin`` baked in (broken-landing era); current bronze doesn't
+        emit it (lifecycle=None). The interaction rec MUST be filtered out.
+        """
+        from unittest.mock import MagicMock
+
+        from customer_retention.analysis.auto_explorer.layered_recommendations import (
+            LayeredRecommendation,
+        )
+        from customer_retention.generators.pipeline_generator import findings_parser as fp
+
+        parser, config = self._parser_with_event(include_cyclical=False, silver_derived=[])
+        ns = MagicMock()
+        silver_dir = tmp_path / "silver_merged"
+        silver_dir.mkdir()
+        ns.silver_merged_path = silver_dir
+        parser._namespace = ns
+
+        fake_df = MagicMock()
+        fake_df.columns = [
+            "entity_id", "as_of_date", "event_count_180d",
+            "event_count_365d", "event_count_all_time",
+            "dow_sin", "dow_cos", "lifecycle_quadrant",
+        ]
+        fake_delta = MagicMock()
+        fake_delta.read.return_value = fake_df
+        monkeypatch.setattr(fp, "_get_delta_for_silver_schema", lambda: fake_delta)
+
+        rec = LayeredRecommendation(
+            id="int-1", layer="silver", category="derived", action="interaction",
+            target_column="event_count_180d_x_dow_sin",
+            parameters={"features": ["event_count_180d", "dow_sin"]},
+            rationale="stale-era interaction", source_notebook="05_relationship_analysis",
+        )
+        pipeline_columns = parser._collect_pipeline_columns(config)
+        assert "dow_sin" not in pipeline_columns, (
+            "bare stale columns from previous silver Delta must not leak into "
+            "pipeline_columns — lifecycle.include_cyclical_features=False means "
+            "current bronze doesn't emit dow_sin, and silver must not reference it"
+        )
+        assert parser._silver_derived_sources_available(rec, pipeline_columns) is False
+
+    def test_unpaired_merge_suffix_still_trusted_from_stale_disk(self, tmp_path, monkeypatch):
+        """Merge-artifact suffixes (single ``_x``/``_y`` with no counterpart)
+        are legitimately silver-only columns — predicting them from bronze
+        config alone is not possible, so stale cache stays authoritative for
+        these specific columns.
+        """
+        from unittest.mock import MagicMock
+
+        from customer_retention.generators.pipeline_generator import findings_parser as fp
+
+        parser, _ = self._parser_with_event(include_cyclical=False, silver_derived=[])
+        ns = MagicMock()
+        silver_dir = tmp_path / "silver_merged"
+        silver_dir.mkdir()
+        ns.silver_merged_path = silver_dir
+        parser._namespace = ns
+
+        fake_df = MagicMock()
+        fake_df.columns = [
+            "entity_id", "as_of_date", "event_count_180d",
+            "legit_trailing_x", "another_legit_y",
+            "paired_x", "paired_y",
+        ]
+        fake_delta = MagicMock()
+        fake_delta.read.return_value = fake_df
+        monkeypatch.setattr(fp, "_get_delta_for_silver_schema", lambda: fake_delta)
+
+        cached = parser._read_silver_merged_columns()
+        assert cached == {"legit_trailing_x", "another_legit_y"}
+        assert "entity_id" not in cached
+        assert "event_count_180d" not in cached
+        assert "paired_x" not in cached
+        assert "paired_y" not in cached
+
+    def test_bronze_with_cyclical_still_supplies_dow_sin(self, tmp_path, monkeypatch):
+        """Counterpart: when the CURRENT bronze config DOES include cyclical
+        features, ``dow_sin`` flows in through ``_event_aggregated_columns``
+        (not the stale cache), so the interaction rec stays accepted.
+        """
+        from unittest.mock import MagicMock
+
+        from customer_retention.analysis.auto_explorer.layered_recommendations import (
+            LayeredRecommendation,
+        )
+        from customer_retention.generators.pipeline_generator import findings_parser as fp
+
+        parser, config = self._parser_with_event(include_cyclical=True, silver_derived=[])
+        ns = MagicMock()
+        silver_dir = tmp_path / "silver_merged"
+        silver_dir.mkdir()
+        ns.silver_merged_path = silver_dir
+        parser._namespace = ns
+
+        fake_df = MagicMock()
+        fake_df.columns = ["entity_id", "as_of_date"]
+        fake_delta = MagicMock()
+        fake_delta.read.return_value = fake_df
+        monkeypatch.setattr(fp, "_get_delta_for_silver_schema", lambda: fake_delta)
+
+        rec = LayeredRecommendation(
+            id="int-1", layer="silver", category="derived", action="interaction",
+            target_column="event_count_180d_x_dow_sin",
+            parameters={"features": ["event_count_180d", "dow_sin"]},
+            rationale="legit", source_notebook="05_relationship_analysis",
+        )
+        pipeline_columns = parser._collect_pipeline_columns(config)
+        assert "dow_sin" in pipeline_columns
+        assert parser._silver_derived_sources_available(rec, pipeline_columns) is True
 
 
 class TestPredictOneHotExpandedColumns:
