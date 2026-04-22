@@ -14,6 +14,24 @@ from customer_retention.core.config.column_config import ColumnType, DatasetGran
 
 from .profile_result import GranularityResult, TypeConfidence, TypeInference
 
+_NUMERIC_OBJECT_INFER_KINDS = frozenset({
+    "integer", "floating", "decimal", "mixed-integer-float",
+    "boolean", "complex",
+})
+
+
+def _is_text_like(series) -> bool:
+    dtype = getattr(series, "dtype", None)
+    if dtype is None:
+        return False
+    if dtype != object:
+        return True
+    try:
+        kind = native_pd.api.types.infer_dtype(series, skipna=True)
+    except Exception:
+        return True
+    return kind not in _NUMERIC_OBJECT_INFER_KINDS
+
 
 class TypeDetector:
     IDENTIFIER_PATTERNS = ["id", "key", "code", "uuid", "guid"]
@@ -303,7 +321,7 @@ class TypeDetector:
     def detect_text_columns(self, df: DataFrame, type_overrides: dict | None = None) -> list[str]:
         string_cols = [
             c for c in df.columns
-            if is_string_dtype(df[c]) or df[c].dtype == object
+            if is_string_dtype(df[c]) and _is_text_like(df[c])
         ]
         if not string_cols:
             return []

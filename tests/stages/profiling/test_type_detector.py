@@ -250,6 +250,132 @@ class TestTypeDetector:
         assert all(isinstance(e, str) for e in result.evidence)
 
 
+class TestDetectTextColumns:
+    """Guards against AUTO_DROP_TEXT_COLUMNS eating numeric-object columns.
+
+    Cycle 7 (engagement_e4ad6e1b) lost three dataset-level ``VALUE_COLUMN``
+    entries at landing — ``NET_PRICE`` (subscription), ``USD_MONTHLY_RECURRING``
+    (opportunity_product), ``USD_BOOKINGS_MONTHLY_RECURRING`` (opportunity) —
+    because Snowflake ``DECIMAL(18,2)`` columns surface as ``dtype == object``
+    in pandas/pyspark.pandas. The previous implementation of
+    ``detect_text_columns`` caught every ``object``-dtype column via
+    ``df[c].dtype == object`` and dropped any with ``distinct_count > 100``.
+
+    These tests pin the new behaviour: ``object``-dtype columns are only
+    treated as text when ``pandas.api.types.infer_dtype(series, skipna=True)``
+    actually indicates a text-like payload. Numeric payloads in object
+    dtype (decimals, floats, integers, booleans) stay untouched.
+    """
+
+    @staticmethod
+    def _decimal_series(n: int) -> pd.Series:
+        from decimal import Decimal
+        # Distinct values > 100 so the old `distinct_count > 100` branch
+        # would drop the column if the infer_dtype guard is missing.
+        values = [Decimal(f"{i}.{(i * 7) % 100:02d}") for i in range(n)]
+        return pd.Series(values, dtype=object)
+
+    def test_high_cardinality_string_column_dropped(self):
+        detector = TypeDetector()
+        values = [f"note-{i}-free-text-payload" for i in range(150)]
+        df = pd.DataFrame({"NOTES": pd.Series(values, dtype=object)})
+        assert detector.detect_text_columns(df) == ["NOTES"]
+
+    def test_object_dtype_decimal_column_not_dropped(self):
+        detector = TypeDetector()
+        df = pd.DataFrame({
+            "NET_PRICE": self._decimal_series(150),
+        })
+        assert detector.detect_text_columns(df) == []
+
+    def test_object_dtype_float_column_not_dropped(self):
+        detector = TypeDetector()
+        df = pd.DataFrame({
+            "USD_MONTHLY_RECURRING": pd.Series(
+                [float(i) / 3 for i in range(200)], dtype=object,
+            ),
+        })
+        assert detector.detect_text_columns(df) == []
+
+    def test_object_dtype_integer_column_not_dropped(self):
+        detector = TypeDetector()
+        df = pd.DataFrame({
+            "QUANTITY": pd.Series(list(range(200)), dtype=object),
+        })
+        assert detector.detect_text_columns(df) == []
+
+    def test_mixed_integer_float_object_column_not_dropped(self):
+        detector = TypeDetector()
+        values = [1 if i % 2 else float(i) / 7 for i in range(200)]
+        df = pd.DataFrame({"AMOUNT": pd.Series(values, dtype=object)})
+        assert detector.detect_text_columns(df) == []
+
+    def test_boolean_object_column_not_dropped(self):
+        detector = TypeDetector()
+        df = pd.DataFrame({
+            "IS_ACTIVE": pd.Series([bool(i % 2) for i in range(200)], dtype=object),
+        })
+        assert detector.detect_text_columns(df) == []
+
+    def test_mixed_numeric_columns_and_text_column(self):
+        detector = TypeDetector()
+        df = pd.DataFrame({
+            "NET_PRICE": self._decimal_series(150),
+            "NOTES": pd.Series(
+                [f"customer {i} narrative" for i in range(150)], dtype=object,
+            ),
+            "STATUS": pd.Series(["active", "cancelled", "pending"] * 50),
+        })
+        dropped = detector.detect_text_columns(df)
+        assert dropped == ["NOTES"]
+
+    def test_low_cardinality_text_column_not_dropped(self):
+        detector = TypeDetector()
+        df = pd.DataFrame({
+            "STATUS": pd.Series(["active", "cancelled", "pending"] * 60),
+        })
+        assert detector.detect_text_columns(df) == []
+
+    def test_type_overrides_skips_column(self):
+        detector = TypeDetector()
+        df = pd.DataFrame({
+            "FREE_TEXT": pd.Series(
+                [f"payload {i}" for i in range(150)], dtype=object,
+            ),
+        })
+        assert detector.detect_text_columns(
+            df, type_overrides={"FREE_TEXT": ColumnType.NUMERIC_CONTINUOUS},
+        ) == []
+
+    def test_identifier_pattern_skipped(self):
+        detector = TypeDetector()
+        df = pd.DataFrame({
+            "ACCOUNT_ID": pd.Series([f"ACC-{i:06d}" for i in range(200)]),
+        })
+        assert detector.detect_text_columns(df) == []
+
+    def test_regression_g9_decimal_object_columns_survive(self):
+        """Cycle 7 regression: the three VALUE_COLUMNs from run
+        ``spschurn-0744fade`` arriving as object-dtype decimals must
+        not be classified as text and must survive AUTO_DROP_TEXT_COLUMNS."""
+        detector = TypeDetector()
+        df = pd.DataFrame({
+            "NET_PRICE": self._decimal_series(500),
+            "USD_MONTHLY_RECURRING": self._decimal_series(300),
+            "USD_BOOKINGS_MONTHLY_RECURRING": self._decimal_series(200),
+            # A legit free-text column in the same frame is still caught.
+            "OPPORTUNITY_DESCRIPTION": pd.Series(
+                [f"deal {i} rationale and narrative" for i in range(250)],
+                dtype=object,
+            ),
+        })
+        dropped = detector.detect_text_columns(df)
+        assert "NET_PRICE" not in dropped
+        assert "USD_MONTHLY_RECURRING" not in dropped
+        assert "USD_BOOKINGS_MONTHLY_RECURRING" not in dropped
+        assert "OPPORTUNITY_DESCRIPTION" in dropped
+
+
 class TestDatasetGranularityDetection:
     """Tests for dataset granularity detection."""
 
