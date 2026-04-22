@@ -701,22 +701,35 @@ def _spark_bulk_stats(df: Any) -> BulkStats:
         mode_row = spark_df.agg(*mode_exprs).collect()[0]
 
     # --- Batch 1c: mode counts ---
-    with log_timing("spark_bulk batch1c (mode counts)", logger, cols=len(all_cols)):
-        count_exprs: list[Any] = []
-        for col in all_cols:
-            mode_val = mode_row[f"__mode__{col}"]
-            if mode_val is not None:
-                count_exprs.append(
-                    F.sum(F.when(F.col(col) == F.lit(mode_val), 1).otherwise(0)).alias(f"__mcount__{col}")
+    cols_with_mode = [c for c in all_cols if mode_row[f"__mode__{c}"] is not None]
+    mode_count_row: Any = None
+    if cols_with_mode:
+        with log_timing("spark_bulk batch1c (mode counts)", logger, cols=len(cols_with_mode)):
+            count_exprs: list[Any] = [
+                F.sum(F.when(F.col(col) == F.lit(mode_row[f"__mode__{col}"]), 1).otherwise(0)).alias(
+                    f"__mcount__{col}"
                 )
-            else:
-                count_exprs.append(F.lit(0).alias(f"__mcount__{col}"))
-        mode_count_row = spark_df.agg(*count_exprs).collect()[0]
+                for col in cols_with_mode
+            ]
+            collected = spark_df.agg(*count_exprs).collect()
+            if collected:
+                mode_count_row = collected[0]
+
+    if total_count == 0:
+        logger.warning(
+            "spark_bulk: empty DataFrame reached profiling "
+            "(total_count=0, columns=%d). All mode/frequency stats will be None; "
+            "check upstream sampler/filters for this dataset.",
+            len(all_cols),
+        )
 
     columns: dict[str, PerColumnStats] = {}
     for col in all_cols:
         mode_val = mode_row[f"__mode__{col}"]
-        mode_freq = _safe_int(mode_count_row[f"__mcount__{col}"]) if mode_val is not None else None
+        if mode_val is not None and mode_count_row is not None:
+            mode_freq = _safe_int(mode_count_row[f"__mcount__{col}"])
+        else:
+            mode_freq = None
         columns[col] = PerColumnStats(
             null_count=_safe_int(row1[f"__null__{col}"]),
             distinct_count=_safe_int(row1[f"__dist__{col}"]),

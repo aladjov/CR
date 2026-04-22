@@ -389,6 +389,62 @@ class TestSparkBulkStatsNullAggregates:
         assert result.columns["a"].distinct_count == 0
         assert result.columns["a"].most_common_value is None
 
+    def test_empty_dataframe_skips_mode_count_batch(self, caplog):
+        """Regression: empty Spark DataFrame made batch1c agg of pure F.lit(0) literals
+        return zero rows, causing IndexError on collect()[0]. Must skip the batch."""
+        from customer_retention.core.compat.bulk_profiling import _spark_bulk_stats
+
+        mock_row1 = MagicMock()
+        mock_row1.__getitem__ = lambda self, k: {
+            "__total_count__": 0, "__null__a": 0, "__dist__a": 0,
+            "__null__b": 0, "__dist__b": 0,
+        }[k]
+        mock_mode_row = MagicMock()
+        mock_mode_row.__getitem__ = lambda self, k: {"__mode__a": None, "__mode__b": None}[k]
+
+        mock_spark_df = MagicMock()
+        mock_spark_df.columns = ["a", "b"]
+        mock_spark_df.schema.fields = []
+        mock_spark_df.agg.return_value.collect.side_effect = [
+            [mock_row1], [mock_mode_row],
+            AssertionError("batch1c must be skipped when all modes are None"),
+        ]
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=mock_spark_df):
+            with caplog.at_level("WARNING"):
+                result = _spark_bulk_stats(MagicMock())
+
+        assert result.total_count == 0
+        assert result.columns["a"].most_common_value is None
+        assert result.columns["a"].most_common_frequency is None
+        assert result.columns["b"].most_common_value is None
+        assert result.columns["b"].most_common_frequency is None
+        assert any("empty DataFrame reached profiling" in r.message for r in caplog.records)
+
+    def test_empty_dataframe_with_mixed_modes_handles_empty_collect(self):
+        """If Spark returns [] for batch1c (defensive), fall back to mode_freq=None."""
+        from customer_retention.core.compat.bulk_profiling import _spark_bulk_stats
+
+        mock_row1 = MagicMock()
+        mock_row1.__getitem__ = lambda self, k: {
+            "__total_count__": 0, "__null__a": 0, "__dist__a": 0,
+        }[k]
+        mock_mode_row = MagicMock()
+        mock_mode_row.__getitem__ = lambda self, k: {"__mode__a": "x"}[k]
+
+        mock_spark_df = MagicMock()
+        mock_spark_df.columns = ["a"]
+        mock_spark_df.schema.fields = []
+        mock_spark_df.agg.return_value.collect.side_effect = [
+            [mock_row1], [mock_mode_row], [],
+        ]
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=mock_spark_df):
+            result = _spark_bulk_stats(MagicMock())
+
+        assert result.columns["a"].most_common_value == "x"
+        assert result.columns["a"].most_common_frequency is None
+
 
 class TestPandasBulkStatsEdgeCases:
     def test_single_row(self):
