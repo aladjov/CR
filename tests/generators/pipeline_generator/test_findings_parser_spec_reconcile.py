@@ -224,6 +224,56 @@ class TestReconcileLifecycleCyclical:
         assert event_cfg.lifecycle is not None
         assert event_cfg.lifecycle.include_cyclical_features is True
 
+    def test_enables_recency_bucket_from_one_hot_expanded_names_only(self):
+        """After NB08 one-hot + sanitize, spec has only expanded names
+        (`recency_bucket_0_7d`, ...) — bare `recency_bucket` is GONE.
+        FIX E: reconciler must still flip the flag via prefix match."""
+        event_cfg = BronzeEventConfig(
+            source=_event_source(), entity_column="ACCOUNT_ID",
+            time_column="CREATED_DATE",
+            lifecycle=LifecycleConfig(include_recency_bucket=False),
+        )
+        spec = _build_spec([
+            "recency_bucket_0_7d", "recency_bucket_8_30d",
+            "recency_bucket_31_90d", "recency_bucket_91_180d",
+            "recency_bucket_180d",
+        ])
+        FindingsParser._reconcile_event_config_with_spec(event_cfg, spec)
+        assert event_cfg.lifecycle.include_recency_bucket is True
+
+    def test_enables_quadrant_from_one_hot_expanded_names_only(self):
+        event_cfg = BronzeEventConfig(
+            source=_event_source(), entity_column="ACCOUNT_ID",
+            time_column="CREATED_DATE",
+            lifecycle=LifecycleConfig(include_lifecycle_quadrant=False),
+        )
+        spec = _build_spec([
+            "lifecycle_quadrant_steady_loyal_lifecycle",
+            "lifecycle_quadrant_intense_brief_lifecycle",
+            "lifecycle_quadrant_occasional_loyal_lifecycle",
+            "lifecycle_quadrant_one_shot_lifecycle",
+        ])
+        FindingsParser._reconcile_event_config_with_spec(event_cfg, spec)
+        assert event_cfg.lifecycle.include_lifecycle_quadrant is True
+
+    def test_prefix_match_does_not_false_positive_on_unrelated_columns(self):
+        """Prefix matching is scoped to the categorical triggers ONLY
+        (`recency_bucket_`, `lifecycle_quadrant_`). Unrelated columns
+        that happen to share a prefix fragment must not flip flags."""
+        event_cfg = BronzeEventConfig(
+            source=_event_source(), entity_column="ACCOUNT_ID",
+            time_column="CREATED_DATE",
+            lifecycle=LifecycleConfig(),
+        )
+        # `month_sin_foo` should NOT flip include_month_cyclical
+        # (exact-match table keeps that safe).
+        spec = _build_spec(["month_sin_foo", "dow_sin_other"])
+        FindingsParser._reconcile_event_config_with_spec(event_cfg, spec)
+        assert event_cfg.lifecycle.include_month_cyclical is False
+        assert event_cfg.lifecycle.include_cyclical_features is False
+        assert event_cfg.lifecycle.include_recency_bucket is False
+        assert event_cfg.lifecycle.include_lifecycle_quadrant is False
+
 
 class TestReconcileTemporalFeatures:
     def test_recency_group_enabled_from_spec(self):

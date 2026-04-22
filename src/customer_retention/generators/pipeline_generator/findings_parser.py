@@ -1441,10 +1441,13 @@ class FindingsParser:
         "include_cyclical_features": ("dow_sin", "dow_cos"),
         "include_month_cyclical": ("month_sin", "month_cos"),
         "include_quarter_cyclical": ("quarter_sin", "quarter_cos"),
-        "include_recency_bucket": ("recency_bucket",),
-        "include_lifecycle_quadrant": ("lifecycle_quadrant",),
         "include_trend_features": ("recent_vs_overall_ratio", "entity_trend_slope"),
         "include_cohort_features": ("cohort_year", "cohort_quarter"),
+    }
+
+    _LIFECYCLE_SPEC_PREFIX_FLAGS = {
+        "include_recency_bucket": ("recency_bucket",),
+        "include_lifecycle_quadrant": ("lifecycle_quadrant",),
     }
 
     @staticmethod
@@ -1454,6 +1457,13 @@ class FindingsParser:
         needed_flags = [
             flag for flag, trigger_cols in FindingsParser._LIFECYCLE_SPEC_FLAGS.items()
             if any(col in selected for col in trigger_cols)
+        ]
+        needed_flags += [
+            flag for flag, trigger_cols in FindingsParser._LIFECYCLE_SPEC_PREFIX_FLAGS.items()
+            if any(
+                bare in selected or any(feat.startswith(bare + "_") for feat in selected)
+                for bare in trigger_cols
+            )
         ]
         if not needed_flags:
             return
@@ -1969,7 +1979,12 @@ class FindingsParser:
         self,
         multi: MultiDatasetFindings,
         findings: Optional[ExplorationFindings] = None,
+        dataset_name: str = "",
     ) -> Optional[LifecycleConfig]:
+        if dataset_name:
+            sibling = (getattr(self, "_landing_sibling_findings", {}) or {}).get(dataset_name)
+            if sibling is not None:
+                findings = sibling
         notes = getattr(multi, "notes", None)
         temporal_config = notes.get("temporal_config", {}) if isinstance(notes, dict) and notes else {}
         feature_groups = temporal_config.get("feature_groups", [])
@@ -2258,7 +2273,7 @@ class FindingsParser:
                 deduplicate=True,
                 pre_shaping=self._extract_transformations(findings),
                 aggregation=self._build_aggregation_config(multi, findings, event_name),
-                lifecycle=self._build_lifecycle_config(multi, findings),
+                lifecycle=self._build_lifecycle_config(multi, findings, event_name),
                 raw_time_column=raw_time_col if raw_time_col and raw_time_col != time_col else None,
                 datetime_derivation=self._build_datetime_derivation_config(
                     findings,
@@ -2288,7 +2303,7 @@ class FindingsParser:
                 deduplicate=True,
                 pre_shaping=self._extract_transformations(preagg),
                 aggregation=self._build_aggregation_config(multi, preagg, agg_name),
-                lifecycle=self._build_lifecycle_config(multi, preagg),
+                lifecycle=self._build_lifecycle_config(multi, preagg, agg_name),
                 raw_time_column=raw_time_col if raw_time_col and raw_time_col != time_col else None,
                 datetime_derivation=self._build_datetime_derivation_config(
                     preagg,

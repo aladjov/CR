@@ -8295,3 +8295,103 @@ class TestNormalizeSourcePath:
         )
 
         assert _normalize_source_path("") == ""
+
+
+class TestBuildLifecycleConfigLandingSiblingPreferred:
+    """FIX G: For event-level datasets whose findings_path points at
+    ``<name>_aggregated_findings.yaml``, ``_load_source_findings`` loads the
+    aggregated findings (which carry no ``metadata.aggregation.include_*``)
+    and registers the original as ``_landing_sibling_findings[name]``.
+    ``_build_lifecycle_config`` must prefer the landing sibling so the
+    lifecycle flags reflect what NB01d actually wrote.
+    """
+
+    def _make_parser(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import (
+            FindingsParser,
+        )
+
+        (tmp_path / "findings").mkdir()
+        return FindingsParser(findings_dir=str(tmp_path / "findings"))
+
+    def _aggregated_findings(self):
+        from customer_retention.analysis.auto_explorer.findings import ExplorationFindings
+        return ExplorationFindings(
+            source_path="/data/customer_emails_aggregated",
+            source_format="delta",
+            metadata={},
+        )
+
+    def _original_findings_with_flags(self):
+        from customer_retention.analysis.auto_explorer.findings import ExplorationFindings
+        return ExplorationFindings(
+            source_path="/data/customer_emails.csv",
+            source_format="csv",
+            metadata={
+                "aggregation": {
+                    "include_lifecycle_quadrant": True,
+                    "include_recency": True,
+                }
+            },
+        )
+
+    def _empty_multi(self):
+        from customer_retention.analysis.auto_explorer.exploration_manager import (
+            MultiDatasetFindings,
+        )
+        return MultiDatasetFindings()
+
+    def test_prefers_landing_sibling_when_registered(self, tmp_path):
+        parser = self._make_parser(tmp_path)
+        parser._landing_sibling_findings = {
+            "customer_emails": self._original_findings_with_flags(),
+        }
+        cfg = parser._build_lifecycle_config(
+            self._empty_multi(),
+            self._aggregated_findings(),
+            "customer_emails",
+        )
+        assert cfg is not None
+        assert cfg.include_lifecycle_quadrant is True
+        assert cfg.include_recency_bucket is True
+
+    def test_no_sibling_falls_back_to_findings_arg(self, tmp_path):
+        parser = self._make_parser(tmp_path)
+        parser._landing_sibling_findings = {}
+        cfg = parser._build_lifecycle_config(
+            self._empty_multi(),
+            self._original_findings_with_flags(),
+            "customer_emails",
+        )
+        assert cfg is not None
+        assert cfg.include_lifecycle_quadrant is True
+        assert cfg.include_recency_bucket is True
+
+    def test_empty_dataset_name_keeps_original_findings_arg(self, tmp_path):
+        """Belt-and-suspenders: when dataset_name is empty (legacy callers),
+        the sibling lookup must not hijack unrelated entries."""
+        parser = self._make_parser(tmp_path)
+        parser._landing_sibling_findings = {
+            "other": self._original_findings_with_flags(),
+        }
+        # Pass aggregated findings directly; no sibling should be used.
+        cfg = parser._build_lifecycle_config(
+            self._empty_multi(),
+            self._aggregated_findings(),
+            "",
+        )
+        assert cfg is None  # no flags anywhere → no LifecycleConfig returned
+
+    def test_entity_level_dataset_not_affected(self, tmp_path):
+        """When the loaded findings IS the original (no _aggregated sibling
+        registered), behavior is byte-identical to pre-FIX-G."""
+        parser = self._make_parser(tmp_path)
+        parser._landing_sibling_findings = {}  # no aggregated path
+        cfg = parser._build_lifecycle_config(
+            self._empty_multi(),
+            self._original_findings_with_flags(),
+            "customer_emails",
+        )
+        assert cfg is not None
+        assert cfg.include_lifecycle_quadrant is True
+        assert cfg.include_recency_bucket is True

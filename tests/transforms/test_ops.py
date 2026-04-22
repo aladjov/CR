@@ -202,6 +202,72 @@ class TestOneHotEncode:
         result = apply_one_hot_encode(sample_df, "nonexistent")
         pd.testing.assert_frame_equal(result, sample_df)
 
+    def test_sanitizes_recency_bucket_labels_matches_feature_spec(self):
+        """FIX F: native pandas ``get_dummies`` keeps raw label values
+        (``>180d``, ``0-7d``) — FeatureSpec written by NB08 (pyspark.pandas
+        path) carries sanitized names (``180d``, ``0_7d``). The generated
+        local pipeline must emit the same sanitized names, matching
+        ``sanitize_column_token`` (strip non-word runs, leading/trailing '_').
+        """
+        df = pd.DataFrame({
+            "entity_id": list(range(5)),
+            "recency_bucket": ["0-7d", "8-30d", "31-90d", "91-180d", ">180d"],
+        })
+        result = apply_one_hot_encode(df, "recency_bucket")
+        expected = {
+            "recency_bucket_0_7d",
+            "recency_bucket_8_30d",
+            "recency_bucket_31_90d",
+            "recency_bucket_91_180d",
+            "recency_bucket_180d",
+        }
+        assert expected.issubset(set(result.columns))
+        # Raw (un-sanitized) names must not leak through.
+        assert "recency_bucket_>180d" not in result.columns
+        assert "recency_bucket_0-7d" not in result.columns
+
+    def test_already_sanitized_values_unchanged(self):
+        """No ``rename`` overhead when ``get_dummies`` output is already
+        alphanumeric (pyspark.pandas path, or alphanumeric categorical)."""
+        df = pd.DataFrame({
+            "entity_id": [0, 1, 2],
+            "cat": ["a", "b", "c"],
+        })
+        result = apply_one_hot_encode(df, "cat")
+        assert set(result.columns) >= {"cat_a", "cat_b", "cat_c"}
+        for col in result.columns:
+            if col.startswith("cat_"):
+                assert "-" not in col and ">" not in col
+
+    def test_idempotent_on_sanitized_input(self):
+        """Applying one-hot to a column whose values are already sanitized
+        yields the same column set whether or not the sanitizer runs."""
+        df = pd.DataFrame({
+            "entity_id": [0, 1],
+            "bucket": ["0_7d", "180d"],
+        })
+        result = apply_one_hot_encode(df, "bucket")
+        assert {"bucket_0_7d", "bucket_180d"}.issubset(set(result.columns))
+
+    def test_lifecycle_quadrant_already_sanitized_passes_through(self):
+        """`lifecycle_quadrant` values are alphanumeric (`steady_loyal_lifecycle`
+        etc.) — no sanitization delta, column set matches FeatureSpec exactly."""
+        df = pd.DataFrame({
+            "entity_id": [0, 1, 2, 3],
+            "lifecycle_quadrant": [
+                "steady_loyal_lifecycle", "occasional_loyal_lifecycle",
+                "intense_brief_lifecycle", "one_shot_lifecycle",
+            ],
+        })
+        result = apply_one_hot_encode(df, "lifecycle_quadrant")
+        expected = {
+            "lifecycle_quadrant_steady_loyal_lifecycle",
+            "lifecycle_quadrant_occasional_loyal_lifecycle",
+            "lifecycle_quadrant_intense_brief_lifecycle",
+            "lifecycle_quadrant_one_shot_lifecycle",
+        }
+        assert expected.issubset(set(result.columns))
+
 
 class TestFeatureSelect:
     def test_drops_column(self, sample_df):

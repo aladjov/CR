@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 
 from customer_retention.core.compat import DataFrame, get_dummies
+from customer_retention.core.naming import sanitize_column_token
 
 
 def _requires_column(fn):
@@ -124,7 +125,19 @@ def apply_cap_then_log(df: DataFrame, column: str, *, _precomputed_q99: float | 
 
 @_requires_column
 def apply_one_hot_encode(df: DataFrame, column: str) -> DataFrame:
-    return get_dummies(df, columns=[column], prefix=column)
+    out = get_dummies(df, columns=[column], prefix=column)
+    prefix = f"{column}_"
+    rename_map: dict[str, str] = {}
+    for c in out.columns:
+        if not (isinstance(c, str) and c.startswith(prefix)):
+            continue
+        token = c[len(prefix):]
+        sanitized = sanitize_column_token(token)
+        if sanitized != token:
+            rename_map[c] = f"{prefix}{sanitized}"
+    if rename_map:
+        out = out.rename(columns=rename_map)
+    return out
 
 
 def apply_feature_select(df: DataFrame, column: str) -> DataFrame:
