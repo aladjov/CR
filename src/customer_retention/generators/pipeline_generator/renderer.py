@@ -2435,7 +2435,7 @@ def apply_event_aggregation(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-{% if config.temporal_features %}
+{% if config.temporal_features and config.temporal_features.has_renderable_content() %}
 
 def compute_temporal_features(agg_df, raw_df):
     from customer_retention.stages.profiling.temporal_feature_engineer import (
@@ -2443,12 +2443,18 @@ def compute_temporal_features(agg_df, raw_df):
     )
     from customer_retention.core.compat import ensure_timestamp
     ensure_timestamp(raw_df, TIME_COLUMN)
-    value_cols = {{ config.temporal_features.lag_columns or config.aggregation.value_columns if config.aggregation else [] }}
+    value_cols = {{ config.temporal_features.lag_columns or (config.aggregation.value_columns if config.aggregation else []) }}
     numeric_vals = [c for c in value_cols if c in raw_df.columns]
     eng_config = TemporalAggregationConfig(
         lag_window_days={{ config.temporal_features.lag_window_days }},
         num_lags={{ config.temporal_features.num_lags }},
         lag_aggregations={{ config.temporal_features.lag_agg_funcs }},
+        compute_velocity={{ 'velocity' in config.temporal_features.feature_groups }},
+        compute_acceleration={{ 'acceleration' in config.temporal_features.feature_groups }},
+        compute_lifecycle={{ 'lifecycle' in config.temporal_features.feature_groups }},
+        compute_recency={{ 'recency' in config.temporal_features.feature_groups }},
+        compute_regularity={{ 'regularity' in config.temporal_features.feature_groups }},
+        compute_cohort={{ 'cohort_comparison' in config.temporal_features.feature_groups }},
     )
     engineer = TemporalFeatureEngineer(eng_config)
     result = engineer.compute(raw_df, ENTITY_COLUMN, TIME_COLUMN, numeric_vals)
@@ -2495,7 +2501,7 @@ def run_bronze_event_{{ source }}():
 {%- else %}
     df = apply_event_aggregation(df)
 {%- endif %}
-{% if config.temporal_features %}
+{% if config.temporal_features and config.temporal_features.has_renderable_content() %}
     df = compute_temporal_features(df, raw_df)
 {% endif %}
 {% if config.text_features %}

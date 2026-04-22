@@ -212,6 +212,7 @@ class FindingsParser:
             dict(bronze_aggregation_overrides) if bronze_aggregation_overrides else {}
         )
         self._source_findings_paths: Dict[str, Path] = {}
+        self._landing_sibling_findings: Dict[str, ExplorationFindings] = {}
         self._raw_source_columns: Dict[str, Set[str]] = {}
         self._feature_spec: Optional[FeatureSpec] = None
         self._silver_merged_columns_cache: Optional[Set[str]] = None
@@ -521,7 +522,52 @@ class FindingsParser:
             if path.exists():
                 result[name] = ExplorationFindings.load(str(path))
                 self._source_findings_paths[name] = path.resolve()
+                self._register_landing_sibling(name, path)
         return result
+
+    def _register_landing_sibling(self, name: str, aggregated_path: Path) -> None:
+        """Load the landing-stage ``<name>_findings.yaml`` sibling of an aggregated profile.
+
+        ``<name>_findings.yaml`` is NB01's profile of the **landing** table —
+        post-NB00/NB01 enrichments (``derive_extra_datetime_features``,
+        lifecycle enrichment, type coercion) but pre-aggregation. It is
+        deliberately preferred here over the raw CSV because those
+        landing-stage enrichments may already introduce columns (e.g.
+        ``event_timestamp``, ``event_type``, ``{col}_hour``) that the
+        bronze aggregator relies on.
+
+        When ``exploration_manager`` preserves EVENT_LEVEL granularity for a
+        dataset whose ``<name>_aggregated_findings.yaml`` lacks
+        ``time_series_metadata`` (``5ebc83a``), the event-level signal —
+        column dtypes, numeric value columns, lag candidates — still lives
+        only on this landing-stage sibling. ``_build_aggregation_config``
+        and ``_build_temporal_feature_config`` consult it so the generator
+        routes ``value_columns`` and ``lag_columns`` from the landing
+        profile instead of the post-aggregation 18-column view.
+
+        Returns silently when no sibling is present or when the sibling is
+        not EVENT_LEVEL — preserving entity-level and already-rich paths.
+        """
+        if not aggregated_path.name.endswith("_aggregated_findings.yaml"):
+            return
+        base = aggregated_path.stem
+        if base.endswith("_aggregated_findings"):
+            base = base[: -len("_aggregated_findings")]
+        else:
+            return
+        sibling = aggregated_path.parent / f"{base}_findings.yaml"
+        if not sibling.exists():
+            return
+        from customer_retention.core.config.column_config import DatasetGranularity
+        try:
+            sibling_findings = ExplorationFindings.load(str(sibling))
+        except (FileNotFoundError, KeyError, ValueError, TypeError) as exc:
+            logger.debug("Skipping landing sibling %s: %s", sibling, exc)
+            return
+        ts = sibling_findings.time_series_metadata
+        if ts is None or getattr(ts, "granularity", None) != DatasetGranularity.EVENT_LEVEL:
+            return
+        self._landing_sibling_findings[name] = sibling_findings
 
     def _build_pipeline_config(
         self,
@@ -1816,7 +1862,9 @@ class FindingsParser:
     def _build_aggregation_config(
         self, multi: MultiDatasetFindings, findings: ExplorationFindings, dataset_name: str = ""
     ) -> Optional[AggregationWindowConfig]:
-        ts = findings.time_series_metadata
+        landing_sibling = (getattr(self, "_landing_sibling_findings", {}) or {}).get(dataset_name) if dataset_name else None
+        schema_source = landing_sibling if landing_sibling is not None else findings
+        ts = schema_source.time_series_metadata or findings.time_series_metadata
         if not ts:
             return None
         material = getattr(ts, "aggregation_windows_used", None) or []
@@ -1835,14 +1883,14 @@ class FindingsParser:
                 f"No aggregation_windows_used in findings for '{dataset_name}'. "
                 "NB01d must run before pipeline generation to record actual aggregation windows."
             )
-        target = findings.target_column or ""
-        entity_col = (findings.time_series_metadata.entity_column if findings.time_series_metadata else None) or ""
-        time_col = (findings.time_series_metadata.time_column if findings.time_series_metadata else None) or ""
+        target = schema_source.target_column or findings.target_column or ""
+        entity_col = (ts.entity_column if ts else None) or ""
+        time_col = (ts.time_column if ts else None) or ""
         exclude = {target, entity_col, time_col}
         value_columns = []
         categorical_columns = []
         binary_columns = []
-        for col_name, col_finding in findings.columns.items():
+        for col_name, col_finding in schema_source.columns.items():
             if col_name in exclude:
                 continue
             col_type = col_finding.inferred_type
@@ -1853,7 +1901,7 @@ class FindingsParser:
                 categorical_columns.append(col_name)
             elif col_type in self._CATEGORICAL_TYPES:
                 categorical_columns.append(col_name)
-        for src in getattr(findings, "datetime_derivation_sources", []):
+        for src in getattr(schema_source, "datetime_derivation_sources", []):
             for suffix in ("_delta_hours", "_hour", "_dow", "_is_weekend"):
                 derived = f"{src}{suffix}"
                 if derived not in value_columns:
@@ -2005,29 +2053,64 @@ class FindingsParser:
         self,
         multi: MultiDatasetFindings,
         findings: Optional[ExplorationFindings] = None,
+        dataset_name: str = "",
     ) -> Optional[TemporalFeatureConfig]:
         notes = getattr(multi, "notes", None)
         temporal_config = notes.get("temporal_config", {}) if isinstance(notes, dict) and notes else {}
         lag_windows = temporal_config.get("lag_windows")
+        landing_sibling = (getattr(self, "_landing_sibling_findings", {}) or {}).get(dataset_name) if dataset_name else None
+        tp_source = landing_sibling if landing_sibling is not None else findings
         if lag_windows:
-            return TemporalFeatureConfig(
+            cfg = TemporalFeatureConfig(
                 lag_window_days=temporal_config.get("lag_window_days", 30),
                 num_lags=temporal_config.get("num_lags", len(lag_windows)),
                 lag_columns=temporal_config.get("columns", []),
                 lag_agg_funcs=temporal_config.get("lag_agg_funcs", ["sum", "mean", "count", "max"]),
                 feature_groups=temporal_config.get("temporal_feature_groups", TemporalFeatureConfig().feature_groups),
+                time_column_known=self._has_time_column(tp_source),
             )
-        if findings is not None:
-            meta = getattr(findings, "metadata", None) or {}
+            if not cfg.lag_columns:
+                cfg.lag_columns = self._derive_lag_columns_from_findings(tp_source)
+            if not cfg.has_renderable_content():
+                return None
+            return cfg
+        if tp_source is not None:
+            meta = getattr(tp_source, "metadata", None) or {}
             tp = meta.get("temporal_patterns", {})
             if tp.get("lag_features_computed"):
-                return TemporalFeatureConfig(
+                cfg = TemporalFeatureConfig(
                     lag_window_days=tp.get("lag_window_days", 30),
                     num_lags=tp.get("num_lags", 4),
-                    lag_columns=tp.get("lag_columns", []),
+                    lag_columns=tp.get("lag_columns") or self._derive_lag_columns_from_findings(tp_source),
                     lag_agg_funcs=tp.get("lag_agg_funcs", ["sum", "mean", "count", "max"]),
+                    time_column_known=self._has_time_column(tp_source),
                 )
+                if not cfg.has_renderable_content():
+                    return None
+                return cfg
         return None
+
+    @staticmethod
+    def _has_time_column(findings: Optional[ExplorationFindings]) -> bool:
+        if findings is None:
+            return False
+        ts = findings.time_series_metadata
+        return bool(ts and getattr(ts, "time_column", None))
+
+    def _derive_lag_columns_from_findings(
+        self, findings: Optional[ExplorationFindings]
+    ) -> List[str]:
+        if findings is None:
+            return []
+        ts = findings.time_series_metadata
+        entity = (ts.entity_column if ts else None) or ""
+        time = (ts.time_column if ts else None) or ""
+        target = findings.target_column or ""
+        exclude = {entity, time, target}
+        return [
+            name for name, col in findings.columns.items()
+            if name not in exclude and col.inferred_type in self._NUMERIC_TYPES
+        ]
 
     @staticmethod
     def _build_text_feature_configs(
@@ -2182,7 +2265,7 @@ class FindingsParser:
                     time_col,
                     mask_future=False,
                 ),
-                temporal_features=self._build_temporal_feature_config(multi, findings),
+                temporal_features=self._build_temporal_feature_config(multi, findings, event_name),
                 text_features=self._build_text_feature_configs(findings),
             )
             self._apply_bronze_aggregation_overrides(
@@ -2212,7 +2295,7 @@ class FindingsParser:
                     time_col,
                     mask_future=False,
                 ),
-                temporal_features=self._build_temporal_feature_config(multi, preagg),
+                temporal_features=self._build_temporal_feature_config(multi, preagg, agg_name),
                 text_features=self._build_text_feature_configs(preagg),
             )
             self._apply_bronze_aggregation_overrides(
@@ -2286,6 +2369,7 @@ class FindingsParser:
             source_name = self._match_preagg_to_source(preagg, index)
             if source_name is not None:
                 result[source_name] = preagg
+                self._register_landing_sibling(source_name, candidate)
         return result
 
     def _match_preagg_to_source(self, preagg: ExplorationFindings, index: Dict[Path, str]) -> Optional[str]:

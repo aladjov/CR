@@ -154,6 +154,18 @@ class TemporalFeatureConfig:
         "lagged_windows", "velocity", "acceleration", "lifecycle",
         "recency", "regularity", "cohort_comparison",
     ])
+    time_column_known: bool = True
+
+    _LAG_FAMILY = frozenset({"lagged_windows", "velocity", "acceleration", "lifecycle", "cohort_comparison"})
+    _TIME_ONLY_FAMILY = frozenset({"recency", "regularity"})
+
+    def has_renderable_content(self) -> bool:
+        groups = set(self.feature_groups or [])
+        if self.lag_columns and (groups & self._LAG_FAMILY):
+            return True
+        if self.time_column_known and (groups & self._TIME_ONLY_FAMILY):
+            return True
+        return False
 
 
 @dataclass
