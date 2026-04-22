@@ -55,7 +55,13 @@ from .snapshot_manager import (
 )
 from .spark_temporal_merger import SparkTemporalMerger
 from .synthetic_coordinator import SyntheticCoordinationParams, SyntheticTimestampCoordinator
-from .temporal_merger import DatasetMergeInput, MergeConfig, MergeReport, TemporalMerger
+from .temporal_merger import (
+    DatasetMergeInput,
+    MergeConfig,
+    MergeReport,
+    TemporalMerger,
+    classify_silver_columns,
+)
 from .timestamp_discovery import (
     DatetimeOrderAnalyzer,
     TimestampCandidate,
@@ -99,4 +105,5 @@ __all__ = [
     "MergeConfig",
     "DatasetMergeInput",
     "MergeReport",
+    "classify_silver_columns",
 ]

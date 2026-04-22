@@ -233,3 +233,54 @@ class TemporalMerger:
                     result.loc[stale_mask, col] = native_pd.NA
 
         return result, null_count
+
+
+_DEFAULT_SPINE_COLUMNS = ("entity_id", "as_of_date")
+
+
+def classify_silver_columns(
+    silver_columns,
+    bronze_columns_by_dataset,
+    base_source,
+    conflict_separator="__",
+    spine_columns=_DEFAULT_SPINE_COLUMNS,
+):
+    if base_source not in bronze_columns_by_dataset:
+        raise KeyError(
+            f"base_source={base_source!r} missing from bronze_columns_by_dataset "
+            f"(got {sorted(bronze_columns_by_dataset)})"
+        )
+
+    origin: dict[str, str] = {c: "spine" for c in spine_columns}
+    merged = set(spine_columns) | set(bronze_columns_by_dataset[base_source])
+    for c in bronze_columns_by_dataset[base_source]:
+        origin[c] = base_source
+
+    ordered = [base_source] + [
+        n for n in bronze_columns_by_dataset if n != base_source
+    ]
+    renamed: dict[str, str] = {}
+    for name in ordered[1:]:
+        cols = set(bronze_columns_by_dataset[name])
+        conflicts = cols & merged
+        non_conflicts = cols - merged
+        for c in conflicts:
+            alias = f"{name}{conflict_separator}{c}"
+            renamed[alias] = name
+            merged.add(alias)
+        for c in non_conflicts:
+            origin.setdefault(c, name)
+            merged.add(c)
+
+    result: dict[str, str] = {}
+    for c in silver_columns:
+        if c in origin:
+            result[c] = origin[c]
+        elif c in renamed:
+            result[c] = renamed[c]
+        else:
+            raise ValueError(
+                f"silver column {c!r} has no origin — not in spine, base source "
+                f"{base_source!r}, any merged bronze, or any renamed alias"
+            )
+    return result
