@@ -1222,7 +1222,7 @@ class FindingsParser:
                 for col in agg.value_columns:
                     col_blocked = set(blocked.get(col, []))
                     for func in agg.agg_funcs:
-                        if func == "count" or func in col_blocked:
+                        if func in col_blocked:
                             continue
                         columns.add(f"{col}_{func}_{window}")
                 for col in agg.categorical_columns:

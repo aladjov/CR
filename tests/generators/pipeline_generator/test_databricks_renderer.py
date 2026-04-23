@@ -505,6 +505,55 @@ class TestDatabricksRenderBronzeEvent:
         result = renderer.render_bronze_event("orders", sample_pipeline_config.bronze_event["orders"])
         assert 'format("parquet")' not in result
 
+    def test_render_bronze_event_emits_per_column_count_agg(self, renderer):
+        """FIX SPS-1 — when 'count' is in agg_funcs, the renderer must
+        emit `F.count(col).alias(f"{col}_count_{window}")` alongside the
+        row-level `event_count_{window}`. NB01d's time_window_aggregator
+        emits `{col}_count_{window}` at exploration; the generator must
+        match so NB04/NB08 features / recs remain realizable."""
+        source = SourceConfig(
+            name="events", path="/data/events.csv", format="csv",
+            entity_key="customer_id", time_column="event_date",
+            is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id", time_column="event_date",
+            aggregation=AggregationWindowConfig(
+                windows=["30d", "all_time"], value_columns=["amount"],
+                agg_funcs=["sum", "mean", "count"],
+            ),
+        )
+        result = renderer.render_bronze_event("events", config)
+        # Row-level event_count is emitted for every window (unchanged).
+        assert 'F.count("*").alias("event_count_30d")' in result
+        assert 'F.count("*").alias("event_count_all_time")' in result
+        # Per-column count IS emitted now (was skipped pre-FIX-SPS-1).
+        assert 'F.count(col).alias(f"{col}_count_30d")' in result
+        assert 'F.count(col).alias(f"{col}_count_all_time")' in result
+        # Other aggs still rendered as before.
+        assert 'F.sum(col).alias(f"{col}_sum_30d")' in result
+        assert 'F.mean(col).alias(f"{col}_mean_30d")' in result
+        ast.parse(result)
+
+    def test_render_bronze_event_omits_count_when_not_in_agg_funcs(self, renderer):
+        """Without 'count' in agg_funcs, per-column count is NOT emitted;
+        row-level event_count_{window} remains unconditional."""
+        source = SourceConfig(
+            name="events", path="/data/events.csv", format="csv",
+            entity_key="customer_id", time_column="event_date",
+            is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id", time_column="event_date",
+            aggregation=AggregationWindowConfig(
+                windows=["30d"], value_columns=["amount"],
+                agg_funcs=["sum", "mean"],
+            ),
+        )
+        result = renderer.render_bronze_event("events", config)
+        assert 'F.count("*").alias("event_count_30d")' in result
+        assert 'F.count(col).alias(f"{col}_count_30d")' not in result
+
     def test_render_bronze_event_uses_time_column_without_redundant_rename(self, renderer):
         source = SourceConfig(
             name="emails",

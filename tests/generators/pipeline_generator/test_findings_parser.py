@@ -5754,7 +5754,12 @@ class TestEventAggregatedColumns:
             "event_count_all_time", "event_count_30d",
         }
 
-    def test_aggregation_excludes_per_column_count(self):
+    def test_aggregation_emits_per_column_count(self):
+        """FIX SPS-1 — per-column count aggregation is emitted alongside
+        row-count `event_count_{window}`. NB01d's time_window_aggregator
+        emits `{value_col}_count_{window}` at exploration time; the
+        predictor and the bronze_event renderer must predict/produce the
+        same name so FeatureSpec / NB04 recs referencing it survive."""
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
         from customer_retention.generators.pipeline_generator.models import AggregationWindowConfig
         agg = AggregationWindowConfig(
@@ -5766,8 +5771,25 @@ class TestEventAggregatedColumns:
         assert "send_hour_mean_7d" in cols
         assert "event_count_7d" in cols
         assert "event_count_180d" in cols
-        assert "send_hour_count_7d" not in cols
-        assert "send_hour_count_180d" not in cols
+        # Per-column count is now predicted (parity with NB01d + renderer).
+        assert "send_hour_count_7d" in cols
+        assert "send_hour_count_180d" in cols
+
+    def test_aggregation_respects_blocked_count_per_column(self):
+        """Column-level blocking still works; a column can opt out of
+        `count` via `column_blocked_funcs` while others keep it."""
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import AggregationWindowConfig
+        agg = AggregationWindowConfig(
+            windows=["30d"], value_columns=["amount", "latency"],
+            agg_funcs=["sum", "count"],
+            column_blocked_funcs={"latency": ["count"]},
+        )
+        cols = FindingsParser._event_aggregated_columns(self._make_event_cfg(aggregation=agg))
+        assert "amount_count_30d" in cols
+        assert "latency_count_30d" not in cols
+        assert "amount_sum_30d" in cols
+        assert "latency_sum_30d" in cols
 
     def test_categorical_columns(self):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser

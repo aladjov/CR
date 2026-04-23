@@ -836,7 +836,7 @@ def apply_event_aggregation(df):
     agg_exprs = [F.count("*").alias("event_count_{{ window }}")]
     for col in numeric_columns:
         _blocked = COLUMN_BLOCKED_FUNCS.get(col, [])
-{%- for agg_func in config.aggregation.agg_funcs if agg_func != "count" %}
+{%- for agg_func in config.aggregation.agg_funcs %}
         if "{{ agg_func }}" not in _blocked:
             agg_exprs.append(F.{{ agg_func }}(col).alias(f"{col}_{{ agg_func }}_{{ window }}"))
 {%- endfor %}

@@ -2266,7 +2266,12 @@ class TestBronzeEventCategoricalAggregation:
         assert "event_count_7d" in result_df.columns
         assert len(result_df) == 2
 
-    def test_bronze_event_aggregation_excludes_per_column_count(self, renderer):
+    def test_bronze_event_aggregation_emits_per_column_count(self, renderer):
+        """FIX SPS-1 — per-column count IS emitted alongside row-level
+        `event_count_{window}`. NB01d's time_window_aggregator emits
+        `{value_col}_count_{window}` at exploration; the rendered
+        pipeline must match so NB04/NB08 artifacts referencing it
+        remain realizable."""
         import pandas as pd
 
         source = SourceConfig(
@@ -2336,7 +2341,10 @@ class TestBronzeEventCategoricalAggregation:
         assert "send_hour_sum_7d" in result_df.columns
         assert "send_hour_mean_7d" in result_df.columns
         assert "event_count_7d" in result_df.columns
-        assert "send_hour_count_7d" not in result_df.columns
+        # Per-column count is now emitted (parity with NB01d / predictor).
+        assert "send_hour_count_7d" in result_df.columns
+        # And it counts non-null values of the column (2 per entity here).
+        assert result_df.set_index("customer_id")["send_hour_count_7d"].tolist() == [2, 2]
 
 
 class TestDatetimeDerivationRendering:

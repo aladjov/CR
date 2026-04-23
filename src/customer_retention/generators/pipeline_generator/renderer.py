@@ -2288,7 +2288,7 @@ def _safe_mode(x):
 
 AGGREGATION_WINDOWS = {{ config.aggregation.windows }}
 VALUE_COLUMNS = {{ config.aggregation.value_columns }}
-AGG_FUNCS = {{ config.aggregation.agg_funcs | reject("equalto", "count") | list }}
+AGG_FUNCS = {{ config.aggregation.agg_funcs }}
 CATEGORICAL_COLUMNS = {{ config.aggregation.categorical_columns }}
 CATEGORICAL_AGG_FUNCS = {{ config.aggregation.categorical_agg_funcs }}
 BINARY_COLUMNS = {{ config.aggregation.binary_columns }}
