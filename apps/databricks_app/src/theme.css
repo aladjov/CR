@@ -249,7 +249,7 @@ hr, [data-testid="stHorizontalBlock"] + div { border: none; }
   font-size: 1.02rem;
   line-height: 1.65;
   color: var(--ink-soft);
-  max-width: 62ch;
+  max-width: none;
   margin: 0 0 2.25rem 0;
   font-weight: 400;
 }
@@ -302,21 +302,21 @@ hr, [data-testid="stHorizontalBlock"] + div { border: none; }
 }
 
 .stat-value {
-  font-family: var(--font-serif);
-  font-weight: 400;
-  font-size: clamp(2rem, 3.5vw, 2.6rem);
+  font-family: var(--font-sans);
+  font-weight: 500;
+  font-size: clamp(1.9rem, 3.4vw, 2.45rem);
   line-height: 1;
   color: var(--ink);
-  letter-spacing: -0.028em;
-  font-variation-settings: "opsz" 144;
+  letter-spacing: -0.02em;
+  font-feature-settings: "tnum" 1, "lnum" 1;
   display: flex;
   align-items: baseline;
   gap: 0.3rem;
 }
 .stat-value em {
-  font-style: italic;
+  font-style: normal;
   color: var(--blue-500);
-  font-weight: 500;
+  font-weight: 600;
 }
 .stat-unit {
   font-family: var(--font-mono);

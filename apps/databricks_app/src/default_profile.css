@@ -135,14 +135,14 @@ body {
   text-align: right;
 }
 .cr-prob-value {
-  font-family: var(--font-serif);
-  font-weight: 400;
-  font-style: italic;
-  font-size: 3.2rem;
-  line-height: 0.9;
-  letter-spacing: -0.035em;
+  font-family: var(--font-sans);
+  font-weight: 500;
+  font-style: normal;
+  font-size: 3rem;
+  line-height: 0.95;
+  letter-spacing: -0.025em;
   color: var(--ink);
-  font-variation-settings: "opsz" 144;
+  font-feature-settings: "tnum" 1, "lnum" 1;
 }
 .cr-tier-risk-high   .cr-prob-value { color: var(--blue-700); }
 .cr-tier-risk-medium .cr-prob-value { color: var(--yellow-800); }
@@ -186,18 +186,18 @@ body {
   color: var(--muted);
 }
 .cr-kpi-value {
-  font-family: var(--font-serif);
-  font-weight: 400;
-  font-size: 1.45rem;
+  font-family: var(--font-sans);
+  font-weight: 500;
+  font-size: 1.4rem;
   color: var(--ink);
   line-height: 1.1;
-  letter-spacing: -0.02em;
-  font-variation-settings: "opsz" 96;
+  letter-spacing: -0.015em;
+  font-feature-settings: "tnum" 1, "lnum" 1;
 }
 .cr-kpi-emph .cr-kpi-value {
   color: var(--blue-700);
-  font-style: italic;
-  font-weight: 500;
+  font-style: normal;
+  font-weight: 600;
 }
 
 /* --------------------------------------------------------------------------
