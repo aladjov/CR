@@ -463,8 +463,11 @@ active_archetypes AS (
         MAX(name) AS archetype_name,
         MAX(description) AS archetype_description,
         MAX(rationale) AS archetype_rationale,
-        MAX(feature_thresholds) AS archetype_feature_thresholds,
-        MAX(top_shap_features) AS archetype_top_shap_features,
+        -- feature_thresholds and top_shap_features are MAP/ARRAY<STRUCT> which
+        -- Spark cannot MAX() — use ANY_VALUE() so one active row per archetype_id
+        -- wins deterministically (active rows are already filtered in WHERE).
+        ANY_VALUE(feature_thresholds) AS archetype_feature_thresholds,
+        ANY_VALUE(top_shap_features) AS archetype_top_shap_features,
         MAX(cluster_mean_churn_probability) AS archetype_mean_churn_probability,
         MAX(cluster_size) AS archetype_cluster_size
     FROM {catalog}.{schema}.archetype_catalog
