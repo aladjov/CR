@@ -70,13 +70,30 @@ def render() -> None:
 
 
 def _extract_click(event) -> str | None:
+    """Return the clicked archetype name.
+
+    Tree layout: <playbook> → archetype_name → risk_tier. Clicking any tile under
+    a given archetype (including its risk-tier leaves) should resolve to that
+    archetype, so we prefer `parent` when the label is a risk-tier leaf.
+    """
     if not event:
         return None
     points = (event.get("selection") or {}).get("points") or []
     if not points:
         return None
     p = points[0]
-    cd = p.get("customdata") or []
-    if cd and cd[0]:
-        return cd[0]
-    return p.get("label")
+    label = (p.get("label") or "").strip()
+    parent = (p.get("parent") or "").strip()
+    if not label:
+        return None
+    # Root tile (playbook name used as synthetic root) — ignore
+    pb = state.get("selected_playbook") or ""
+    if label == pb:
+        return None
+    # Top-level archetype tile — parent is the root (playbook name or "")
+    if parent in ("", pb) or parent.endswith(f"/{pb}") or parent == pb:
+        return label
+    # Drilled into risk-tier leaf — parent encodes archetype
+    if "/" in parent:
+        return parent.rsplit("/", 1)[-1]
+    return parent

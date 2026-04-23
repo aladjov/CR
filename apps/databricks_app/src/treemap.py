@@ -91,13 +91,29 @@ def render() -> None:
 
 
 def _extract_click(event) -> str | None:
+    """Return the clicked playbook name.
+
+    Tree layout: All → playbook_name → risk_tier. Use `parent` so the drill-down
+    resolves to the playbook regardless of which level the user clicked — clicking
+    a risk-tier leaf must still select its parent playbook.
+    """
     if not event:
         return None
     points = (event.get("selection") or {}).get("points") or []
     if not points:
         return None
     p = points[0]
-    cd = p.get("customdata") or []
-    if cd and cd[0]:
-        return cd[0]
-    return p.get("label")
+    label = (p.get("label") or "").strip()
+    parent = (p.get("parent") or "").strip()
+    if not label or label == "All":
+        return None
+    # Top-level playbook tile — parent is the synthetic root
+    if parent in ("", "All"):
+        return label
+    # Drilled into risk-tier leaf — parent IS the playbook
+    if parent == "All" or parent == "":
+        return label
+    # Leaf with parent = "All/<playbook>" (plotly sometimes prefixes with root)
+    if parent.startswith("All/"):
+        return parent.split("/", 1)[1]
+    return parent
