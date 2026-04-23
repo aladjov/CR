@@ -1124,6 +1124,7 @@ def _shape_snapshot_rows(
         F.col("holdout_seed"),
         F.col("playbook_suppressed_reason"),
         F.col("recommended"),
+        F.col("is_dashboard_visible"),
         F.lit(written_at).alias("written_at"),
     )
 
