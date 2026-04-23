@@ -115,6 +115,11 @@ class LandingRecommendations:
         return self.filters + self.lifecycle_enrichments
 
 
+_BRONZE_AGG_OVERRIDE_KEYS = frozenset(
+    {"per_grid_date_mode", "value_counts_columns", "windows", "categorical_value_counts"}
+)
+
+
 class RecommendationRegistry:
     def __init__(self, disable_user_extensions: Optional[bool] = None):
         self.sources: Dict[str, BronzeRecommendations] = {}
@@ -123,6 +128,7 @@ class RecommendationRegistry:
         self.gold: Optional[GoldRecommendations] = None
         self.landing: Optional[LandingRecommendations] = None
         self.fit_artifacts: Dict[str, str] = {}
+        self.bronze_aggregations: Dict[str, Dict[str, Any]] = {}
         self._id_counter = 0
         self._ext_disabled: bool = is_user_extensions_disabled(disable_user_extensions)
         self._discarded_landing: List[LayeredRecommendation] = []
@@ -204,6 +210,81 @@ class RecommendationRegistry:
         if self.landing is None:
             self.init_landing()
         self.landing.lifecycle_enrichments.append(rec)
+
+    def add_bronze_value_counts(
+        self,
+        dataset: str,
+        columns,
+        windows=None,
+        rationale: str = "",
+        source_notebook: str = "",
+        per_grid_date_mode: bool = True,
+    ) -> None:
+        cols = tuple(columns)
+        if not cols:
+            raise ValueError("add_bronze_value_counts requires at least one column")
+        entry: Dict[str, Any] = self.bronze_aggregations.setdefault(dataset, {})
+        existing_cols = tuple(entry.get("value_counts_columns") or ())
+        entry["value_counts_columns"] = tuple(dict.fromkeys(existing_cols + cols))
+        entry["per_grid_date_mode"] = bool(per_grid_date_mode)
+        if windows is not None:
+            entry["windows"] = tuple(windows)
+        rec = self._create_recommendation(
+            "bronze", "aggregation", "value_counts", dataset,
+            {"columns": list(entry["value_counts_columns"]),
+             "windows": list(entry.get("windows") or ()),
+             "per_grid_date_mode": entry["per_grid_date_mode"]},
+            rationale, source_notebook,
+        )
+        if dataset in self.sources:
+            self.sources[dataset].modeling_strategy.append(rec)
+        elif self.bronze:
+            self.bronze.modeling_strategy.append(rec)
+
+    def add_bronze_aggregation_override(
+        self,
+        dataset: str,
+        overrides: Dict[str, Any],
+        rationale: str = "",
+        source_notebook: str = "",
+    ) -> None:
+        unknown = set(overrides) - _BRONZE_AGG_OVERRIDE_KEYS
+        if unknown:
+            raise ValueError(
+                f"unknown bronze aggregation override key(s) for '{dataset}': {sorted(unknown)}. "
+                f"Recognized: {sorted(_BRONZE_AGG_OVERRIDE_KEYS)}"
+            )
+        entry: Dict[str, Any] = self.bronze_aggregations.setdefault(dataset, {})
+        for k, v in overrides.items():
+            if k == "value_counts_columns":
+                entry[k] = tuple(v)
+            elif k == "windows":
+                entry[k] = tuple(v)
+            else:
+                entry[k] = v
+        rec = self._create_recommendation(
+            "bronze", "aggregation", "override", dataset,
+            {k: (list(v) if isinstance(v, (list, tuple)) else v) for k, v in entry.items()},
+            rationale, source_notebook,
+        )
+        if dataset in self.sources:
+            self.sources[dataset].modeling_strategy.append(rec)
+        elif self.bronze:
+            self.bronze.modeling_strategy.append(rec)
+
+    def merge_bronze_aggregation_overrides(
+        self, nb10_overrides: Optional[Dict[str, Dict[str, Any]]] = None
+    ) -> Dict[str, Dict[str, Any]]:
+        merged: Dict[str, Dict[str, Any]] = {}
+        for name, cfg in (self.bronze_aggregations or {}).items():
+            merged[name] = {
+                k: (list(v) if isinstance(v, tuple) else v) for k, v in cfg.items()
+            }
+        for name, cfg in (nb10_overrides or {}).items():
+            bucket = merged.setdefault(name, {})
+            for k, v in cfg.items():
+                bucket[k] = list(v) if isinstance(v, tuple) else v
+        return merged
 
     def add_bronze_null(self, column: str, strategy: str, rationale: str, source_notebook: str,
                         source: Optional[str] = None) -> None:
@@ -562,6 +643,14 @@ class RecommendationRegistry:
             result["gold"] = self._layer_to_dict(self.gold)
         if self.fit_artifacts:
             result["fit_artifacts"] = self.fit_artifacts.copy()
+        if self.bronze_aggregations:
+            result["bronze_aggregations"] = {
+                name: {
+                    k: (list(v) if isinstance(v, tuple) else _to_native(v))
+                    for k, v in cfg.items()
+                }
+                for name, cfg in self.bronze_aggregations.items()
+            }
         return result
 
     def compute_recommendations_hash(self, length: int = 8) -> str:
@@ -595,6 +684,9 @@ class RecommendationRegistry:
         for reg in registries:
             result.sources.update(reg.sources)
             result.fit_artifacts.update(reg.fit_artifacts)
+            for name, cfg in (reg.bronze_aggregations or {}).items():
+                bucket = result.bronze_aggregations.setdefault(name, {})
+                bucket.update(cfg)
         if primary:
             result.silver, result.gold, result.bronze = primary.silver, primary.gold, primary.bronze
             result.landing = primary.landing
@@ -616,6 +708,14 @@ class RecommendationRegistry:
             registry.gold = cls._gold_from_dict(data["gold"])
         if "fit_artifacts" in data:
             registry.fit_artifacts = data["fit_artifacts"].copy()
+        if "bronze_aggregations" in data:
+            for name, cfg in (data["bronze_aggregations"] or {}).items():
+                normalized = dict(cfg)
+                if "value_counts_columns" in normalized:
+                    normalized["value_counts_columns"] = tuple(normalized["value_counts_columns"])
+                if "windows" in normalized:
+                    normalized["windows"] = tuple(normalized["windows"])
+                registry.bronze_aggregations[name] = normalized
         return registry
 
     def _create_recommendation(self, layer: str, category: str, action: str, column: str,

@@ -7,6 +7,7 @@ from customer_retention.core.config.experiments import get_framework_repo_path
 
 from .databricks_renderer import DatabricksCodeRenderer
 from .findings_parser import FindingsParser
+from .override_merge import _merge_registry_bronze_overrides
 from .protocols import PipelineGeneratorBase
 
 if TYPE_CHECKING:
@@ -36,11 +37,14 @@ class DatabricksPipelineGenerator(PipelineGeneratorBase):
         self._catalog = catalog
         self._schema = schema
         self._experiments_dir = experiments_dir
+        merged_bronze_overrides = _merge_registry_bronze_overrides(
+            namespace, bronze_aggregation_overrides
+        )
         self._parser = FindingsParser(
             findings_dir,
             namespace=namespace,
             intent=intent,
-            bronze_aggregation_overrides=bronze_aggregation_overrides,
+            bronze_aggregation_overrides=merged_bronze_overrides,
             disable_user_extensions=disable_user_extensions,
             parity_mode=parity_mode,
         )

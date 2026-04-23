@@ -5,6 +5,7 @@ from customer_retention.core.naming import Manifest
 
 from .findings_parser import FindingsParser
 from .models import PipelineConfig
+from .override_merge import _merge_registry_bronze_overrides
 from .protocols import PipelineGeneratorBase
 from .renderer import CodeRenderer
 
@@ -33,11 +34,14 @@ class PipelineGenerator(PipelineGeneratorBase):
         self._experiments_dir = experiments_dir
         self._production_dir = production_dir
         self._namespace = namespace
+        merged_bronze_overrides = _merge_registry_bronze_overrides(
+            namespace, bronze_aggregation_overrides
+        )
         self._parser = FindingsParser(
             findings_dir,
             namespace=namespace,
             intent=intent,
-            bronze_aggregation_overrides=bronze_aggregation_overrides,
+            bronze_aggregation_overrides=merged_bronze_overrides,
             disable_user_extensions=disable_user_extensions,
             parity_mode=parity_mode,
         )
