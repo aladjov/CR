@@ -121,6 +121,14 @@ class SnapshotConfig:
     # gold table joined in. Required whenever any active policy has a
     # non-empty requires_features list.
     gold_features_fqn: Optional[str] = None
+    # Dashboard visibility cutoff: rows below this churn probability are
+    # flagged `is_dashboard_visible=FALSE` so the progressive-disclosure
+    # views can hide low-risk accounts that CSMs will never act on while
+    # keeping the full snapshot available for calibration / uplift
+    # analytics. Default 0.0 keeps every row visible (no-op for existing
+    # behavior). High-tier rows are always visible regardless of this
+    # threshold.
+    dashboard_min_churn_probability: float = 0.0
 
 
 @dataclass
@@ -389,6 +397,7 @@ def apply_decision_policy(
     risk_tier_high: float = 0.6,
     risk_tier_medium: float = 0.3,
     capacity_partition_column: Optional[str] = None,
+    dashboard_min_churn_probability: float = 0.0,
 ) -> "DataFrame":
     """Apply suppression, capacity, holdout, and rank in one Spark plan.
 
@@ -491,6 +500,11 @@ def apply_decision_policy(
             F.collect_set(F.col("playbook_id")).over(entity_set_window),
         )
         .withColumn("eligible_playbook_count", F.size(F.col("eligible_playbooks_set")))
+        .withColumn(
+            "is_dashboard_visible",
+            (F.col(probability_column) >= F.lit(float(dashboard_min_churn_probability)))
+            | (F.col("risk_tier") == F.lit(_RISK_TIER_HIGH)),
+        )
     )
     return eligible_df
 
@@ -579,6 +593,7 @@ def build_eligibility_snapshot(config: SnapshotConfig) -> SnapshotResult:
         risk_tier_high=risk_tier_high,
         risk_tier_medium=risk_tier_medium,
         capacity_partition_column=config.capacity_partition_column,
+        dashboard_min_churn_probability=config.dashboard_min_churn_probability,
     )
 
     # Cache before consuming twice (snapshot MERGE + summary aggregation).

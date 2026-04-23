@@ -441,6 +441,12 @@ def eligibility_snapshot_schema() -> "StructType":
             # Operational policy snapshot
             t["StructField"]("playbook_suppressed_reason", t["StringType"](), True),
             t["StructField"]("recommended", t["BooleanType"](), False),
+            # Dashboard visibility flag — TRUE when the row's churn_probability
+            # meets the configured cutoff or the row is High-tier. Nullable so
+            # rows written before the flag existed read back as NULL; the
+            # dashboard views COALESCE to TRUE to keep pre-migration rows
+            # visible.
+            t["StructField"]("is_dashboard_visible", t["BooleanType"](), True),
             t["StructField"]("written_at", t["TimestampType"](), False),
         ]
     )

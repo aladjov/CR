@@ -39,10 +39,10 @@ class TestRenderDashboardViewSql:
 
 
 class TestSplitViewStatements:
-    def test_splits_six_views(self):
+    def test_splits_one_statement_per_named_view(self):
         rendered = render_dashboard_view_sql("c", "s")
         statements = split_view_statements(rendered)
-        assert len(statements) == 6
+        assert len(statements) == len(DASHBOARD_VIEW_NAMES)
         for stmt in statements:
             assert "CREATE OR REPLACE VIEW" in stmt
 
@@ -56,13 +56,12 @@ class TestSplitViewStatements:
 
 
 class TestPublishDashboardViews:
-    def test_publishes_six_statements_in_order(self):
+    def test_publishes_one_statement_per_named_view(self):
         spark = MagicMock()
         statements = publish_dashboard_views(spark, "c", "s")
-        assert len(statements) == 6
-        # Each statement should have been submitted to spark.sql exactly once
-        assert spark.sql.call_count == 6
-        # Each call must be a CREATE OR REPLACE VIEW
+        expected = len(DASHBOARD_VIEW_NAMES)
+        assert len(statements) == expected
+        assert spark.sql.call_count == expected
         for call in spark.sql.call_args_list:
             assert "CREATE OR REPLACE VIEW" in call.args[0]
 
