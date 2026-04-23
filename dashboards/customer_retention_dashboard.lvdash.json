@@ -1,681 +1,2527 @@
 {
-  "displayName": "Customer Retention — Causal Track",
   "datasets": [
     {
       "name": "ds_portfolio_matrix",
       "displayName": "Portfolio risk matrix (L1)",
       "queryLines": [
-        "SELECT playbook_id, playbook_name, risk_tier, eligible_count, recommended_count, holdout_count, suppressed_count, total_value_at_risk, mean_churn_probability",
-        "FROM IDENTIFIER(:catalog || '.' || :schema || '.v_portfolio_risk_matrix')",
-        "WHERE (:selected_playbook IS NULL OR :selected_playbook = '' OR playbook_name = :selected_playbook)",
-        "  AND (:selected_risk_tier IS NULL OR :selected_risk_tier = '' OR risk_tier = :selected_risk_tier)"
+        "SELECT playbook_id, playbook_name, risk_tier, eligible_count, recommended_count, holdout_count, suppressed_count, total_value_at_risk, mean_churn_probability FROM IDENTIFIER(concat(:catalog, '.', :schema, '.v_portfolio_risk_matrix'))"
       ],
       "parameters": [
-        {"displayName": "catalog", "keyword": "catalog", "dataType": "STRING", "defaultSelection": {"values": {"dataType": "STRING", "values": [{"value": "churnkit"}]}}},
-        {"displayName": "schema", "keyword": "schema", "dataType": "STRING", "defaultSelection": {"values": {"dataType": "STRING", "values": [{"value": "analysis"}]}}},
-        {"displayName": "selected_playbook", "keyword": "selected_playbook", "dataType": "STRING", "defaultSelection": {"values": {"dataType": "STRING", "values": [{"value": ""}]}}},
-        {"displayName": "selected_risk_tier", "keyword": "selected_risk_tier", "dataType": "STRING", "defaultSelection": {"values": {"dataType": "STRING", "values": [{"value": ""}]}}}
+        {
+          "displayName": "catalog",
+          "keyword": "catalog",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "churnkit"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "schema",
+          "keyword": "schema",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "analysis"
+                }
+              ]
+            }
+          }
+        }
       ]
     },
     {
       "name": "ds_portfolio_totals",
-      "displayName": "Portfolio totals (L1 KPI)",
+      "displayName": "Portfolio totals (KPI)",
       "queryLines": [
-        "SELECT",
-        "  SUM(eligible_count) AS total_eligible,",
-        "  SUM(recommended_count) AS total_recommended,",
-        "  SUM(total_value_at_risk) AS total_value_at_risk,",
-        "  COUNT(DISTINCT playbook_id) AS active_playbooks",
-        "FROM IDENTIFIER(:catalog || '.' || :schema || '.v_portfolio_risk_matrix')",
-        "WHERE (:selected_playbook IS NULL OR :selected_playbook = '' OR playbook_name = :selected_playbook)",
-        "  AND (:selected_risk_tier IS NULL OR :selected_risk_tier = '' OR risk_tier = :selected_risk_tier)"
+        "SELECT SUM(eligible_count) AS total_eligible, SUM(recommended_count) AS total_recommended, SUM(total_value_at_risk) AS total_value_at_risk, COUNT(DISTINCT playbook_id) AS active_playbooks FROM IDENTIFIER(concat(:catalog, '.', :schema, '.v_portfolio_risk_matrix')) WHERE (COALESCE(:selected_playbook, '') IN ('', 'None') OR playbook_name = :selected_playbook) AND (COALESCE(:selected_risk_tier, '') IN ('', 'None') OR risk_tier = :selected_risk_tier)"
       ],
       "parameters": [
-        {"displayName": "catalog", "keyword": "catalog", "dataType": "STRING", "defaultSelection": {"values": {"dataType": "STRING", "values": [{"value": "churnkit"}]}}},
-        {"displayName": "schema", "keyword": "schema", "dataType": "STRING", "defaultSelection": {"values": {"dataType": "STRING", "values": [{"value": "analysis"}]}}},
-        {"displayName": "selected_playbook", "keyword": "selected_playbook", "dataType": "STRING", "defaultSelection": {"values": {"dataType": "STRING", "values": [{"value": ""}]}}},
-        {"displayName": "selected_risk_tier", "keyword": "selected_risk_tier", "dataType": "STRING", "defaultSelection": {"values": {"dataType": "STRING", "values": [{"value": ""}]}}}
+        {
+          "displayName": "catalog",
+          "keyword": "catalog",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "churnkit"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "schema",
+          "keyword": "schema",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "analysis"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "selected_playbook",
+          "keyword": "selected_playbook",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "selected_risk_tier",
+          "keyword": "selected_risk_tier",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": ""
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "ds_scope_indicator",
+      "displayName": "Current filter scope",
+      "queryLines": [
+        "SELECT CASE WHEN COALESCE(:selected_playbook, '') IN ('', 'None')    AND COALESCE(:selected_risk_tier, '') IN ('', 'None')    THEN 'Full portfolio (no filter)'    ELSE CONCAT(     CASE WHEN COALESCE(:selected_playbook, '') NOT IN ('', 'None') THEN CONCAT('Playbook: ', :selected_playbook) ELSE 'All playbooks' END,      '  \u2022  ',      CASE WHEN COALESCE(:selected_risk_tier, '') NOT IN ('', 'None') THEN CONCAT('Risk tier: ', :selected_risk_tier) ELSE 'All risk tiers' END   ) END AS scope_label"
+      ],
+      "parameters": [
+        {
+          "displayName": "catalog",
+          "keyword": "catalog",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "churnkit"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "schema",
+          "keyword": "schema",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "analysis"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "selected_playbook",
+          "keyword": "selected_playbook",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "selected_risk_tier",
+          "keyword": "selected_risk_tier",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": ""
+                }
+              ]
+            }
+          }
+        }
       ]
     },
     {
       "name": "ds_playbook_archetypes",
-      "displayName": "Playbook → archetype rollup (L2)",
+      "displayName": "Playbook \u2192 archetype rollup (L2)",
       "queryLines": [
-        "SELECT playbook_id, playbook_name, archetype_id, archetype_name, risk_tier, account_count, recommended_count, mean_churn_probability, total_value_at_risk",
-        "FROM IDENTIFIER(:catalog || '.' || :schema || '.v_playbook_archetype_rollup')",
-        "WHERE (:selected_playbook IS NULL OR :selected_playbook = '' OR playbook_name = :selected_playbook)",
-        "  AND (:selected_archetype IS NULL OR :selected_archetype = '' OR archetype_name = :selected_archetype)",
-        "  AND (:selected_risk_tier IS NULL OR :selected_risk_tier = '' OR risk_tier = :selected_risk_tier)",
-        "ORDER BY total_value_at_risk DESC"
+        "SELECT playbook_id, playbook_name, archetype_id, archetype_name, risk_tier, account_count, recommended_count, mean_churn_probability, total_value_at_risk FROM IDENTIFIER(concat(:catalog, '.', :schema, '.v_playbook_archetype_rollup')) WHERE (COALESCE(:selected_playbook, '') IN ('', 'None') OR playbook_name = :selected_playbook) AND (COALESCE(:selected_risk_tier, '') IN ('', 'None') OR risk_tier = :selected_risk_tier) ORDER BY total_value_at_risk DESC"
       ],
       "parameters": [
-        {"displayName": "catalog", "keyword": "catalog", "dataType": "STRING", "defaultSelection": {"values": {"dataType": "STRING", "values": [{"value": "churnkit"}]}}},
-        {"displayName": "schema", "keyword": "schema", "dataType": "STRING", "defaultSelection": {"values": {"dataType": "STRING", "values": [{"value": "analysis"}]}}},
-        {"displayName": "selected_playbook", "keyword": "selected_playbook", "dataType": "STRING", "defaultSelection": {"values": {"dataType": "STRING", "values": [{"value": ""}]}}},
-        {"displayName": "selected_archetype", "keyword": "selected_archetype", "dataType": "STRING", "defaultSelection": {"values": {"dataType": "STRING", "values": [{"value": ""}]}}},
-        {"displayName": "selected_risk_tier", "keyword": "selected_risk_tier", "dataType": "STRING", "defaultSelection": {"values": {"dataType": "STRING", "values": [{"value": ""}]}}}
+        {
+          "displayName": "catalog",
+          "keyword": "catalog",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "churnkit"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "schema",
+          "keyword": "schema",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "analysis"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "selected_playbook",
+          "keyword": "selected_playbook",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "selected_risk_tier",
+          "keyword": "selected_risk_tier",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": ""
+                }
+              ]
+            }
+          }
+        }
       ]
     },
     {
       "name": "ds_accounts",
       "displayName": "Accounts (L3)",
       "queryLines": [
-        "SELECT entity_id, playbook_name, archetype_name, risk_tier, churn_probability, value_at_risk, expected_loss, policy_rank_among_eligible, eligible_playbook_count, eligibility_evidence, recommended, is_holdout",
-        "FROM IDENTIFIER(:catalog || '.' || :schema || '.v_eligible_all_playbooks')",
-        "WHERE (:selected_playbook IS NULL OR :selected_playbook = '' OR playbook_name = :selected_playbook)",
-        "  AND (:selected_archetype IS NULL OR :selected_archetype = '' OR archetype_name = :selected_archetype)",
-        "  AND (:selected_risk_tier IS NULL OR :selected_risk_tier = '' OR risk_tier = :selected_risk_tier)",
-        "ORDER BY expected_loss DESC",
-        "LIMIT :top_n"
+        "SELECT entity_id, playbook_name, archetype_name, risk_tier, churn_probability, value_at_risk, expected_loss, policy_rank_among_eligible, eligible_playbook_count, eligibility_evidence, recommended, is_holdout FROM IDENTIFIER(concat(:catalog, '.', :schema, '.v_eligible_all_playbooks')) WHERE (COALESCE(:selected_playbook, '') IN ('', 'None') OR playbook_name = :selected_playbook) AND (COALESCE(:selected_archetype, '') IN ('', 'None') OR archetype_name = :selected_archetype) AND (COALESCE(:selected_risk_tier, '') IN ('', 'None') OR risk_tier = :selected_risk_tier) ORDER BY expected_loss DESC LIMIT 500"
       ],
       "parameters": [
-        {"displayName": "catalog", "keyword": "catalog", "dataType": "STRING", "defaultSelection": {"values": {"dataType": "STRING", "values": [{"value": "churnkit"}]}}},
-        {"displayName": "schema", "keyword": "schema", "dataType": "STRING", "defaultSelection": {"values": {"dataType": "STRING", "values": [{"value": "analysis"}]}}},
-        {"displayName": "selected_playbook", "keyword": "selected_playbook", "dataType": "STRING", "defaultSelection": {"values": {"dataType": "STRING", "values": [{"value": ""}]}}},
-        {"displayName": "selected_archetype", "keyword": "selected_archetype", "dataType": "STRING", "defaultSelection": {"values": {"dataType": "STRING", "values": [{"value": ""}]}}},
-        {"displayName": "selected_risk_tier", "keyword": "selected_risk_tier", "dataType": "STRING", "defaultSelection": {"values": {"dataType": "STRING", "values": [{"value": ""}]}}},
-        {"displayName": "top_n", "keyword": "top_n", "dataType": "INT", "defaultSelection": {"values": {"dataType": "INT", "values": [{"value": "100"}]}}}
+        {
+          "displayName": "catalog",
+          "keyword": "catalog",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "churnkit"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "schema",
+          "keyword": "schema",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "analysis"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "selected_playbook",
+          "keyword": "selected_playbook",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "selected_archetype",
+          "keyword": "selected_archetype",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "selected_risk_tier",
+          "keyword": "selected_risk_tier",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": ""
+                }
+              ]
+            }
+          }
+        }
       ]
     },
     {
       "name": "ds_account_detail",
       "displayName": "Account detail (L4)",
       "queryLines": [
-        "SELECT *",
-        "FROM IDENTIFIER(:catalog || '.' || :schema || '.v_account_explanation')",
-        "WHERE entity_id = :selected_entity",
-        "  AND (:selected_playbook IS NULL OR :selected_playbook = '' OR playbook_name = :selected_playbook)",
-        "LIMIT 10"
+        "SELECT entity_id, playbook_name, playbook_description, archetype_name, archetype_description, archetype_rationale, archetype_mean_churn_probability, archetype_cluster_size, CAST(archetype_feature_thresholds AS STRING) AS archetype_feature_thresholds, risk_tier, churn_probability, value_at_risk, expected_loss, eligibility_evidence, policy_rank_among_eligible, eligible_playbook_count, eligibility_rules_sql, expected_uplift_pct, policy_rationale, recommended, is_holdout FROM IDENTIFIER(concat(:catalog, '.', :schema, '.v_account_explanation')) WHERE (COALESCE(:selected_entity, '') IN ('', 'None') OR entity_id = :selected_entity) ORDER BY policy_rank_among_eligible ASC LIMIT 1"
       ],
       "parameters": [
-        {"displayName": "catalog", "keyword": "catalog", "dataType": "STRING", "defaultSelection": {"values": {"dataType": "STRING", "values": [{"value": "churnkit"}]}}},
-        {"displayName": "schema", "keyword": "schema", "dataType": "STRING", "defaultSelection": {"values": {"dataType": "STRING", "values": [{"value": "analysis"}]}}},
-        {"displayName": "selected_entity", "keyword": "selected_entity", "dataType": "STRING", "defaultSelection": {"values": {"dataType": "STRING", "values": [{"value": ""}]}}},
-        {"displayName": "selected_playbook", "keyword": "selected_playbook", "dataType": "STRING", "defaultSelection": {"values": {"dataType": "STRING", "values": [{"value": ""}]}}}
+        {
+          "displayName": "catalog",
+          "keyword": "catalog",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "churnkit"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "schema",
+          "keyword": "schema",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "analysis"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "selected_entity",
+          "keyword": "selected_entity",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": ""
+                }
+              ]
+            }
+          }
+        }
       ]
     },
     {
       "name": "ds_run_history",
       "displayName": "Scoring run history",
       "queryLines": [
-        "SELECT scoring_run_id, as_of_date, model_name, model_version, decision_policy_id, total_eligible_rows, distinct_entities, distinct_archetypes, distinct_playbooks, recommended_rows, holdout_rows, suppressed_rows, mean_churn_probability",
-        "FROM IDENTIFIER(:catalog || '.' || :schema || '.v_run_anchor_history')",
-        "ORDER BY as_of_date DESC"
+        "SELECT scoring_run_id, as_of_date, model_name, model_version, decision_policy_id, total_eligible_rows, distinct_entities, distinct_archetypes, distinct_playbooks, recommended_rows, holdout_rows, suppressed_rows, mean_churn_probability FROM IDENTIFIER(concat(:catalog, '.', :schema, '.v_run_anchor_history')) ORDER BY as_of_date DESC"
       ],
       "parameters": [
-        {"displayName": "catalog", "keyword": "catalog", "dataType": "STRING", "defaultSelection": {"values": {"dataType": "STRING", "values": [{"value": "churnkit"}]}}},
-        {"displayName": "schema", "keyword": "schema", "dataType": "STRING", "defaultSelection": {"values": {"dataType": "STRING", "values": [{"value": "analysis"}]}}}
+        {
+          "displayName": "catalog",
+          "keyword": "catalog",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "churnkit"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "schema",
+          "keyword": "schema",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "analysis"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "ds_filter_playbooks",
+      "displayName": "Filter source: playbook names",
+      "queryLines": [
+        "SELECT DISTINCT playbook_name FROM IDENTIFIER(concat(:catalog, '.', :schema, '.v_portfolio_risk_matrix')) WHERE playbook_name IS NOT NULL ORDER BY playbook_name"
+      ],
+      "parameters": [
+        {
+          "displayName": "catalog",
+          "keyword": "catalog",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "churnkit"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "schema",
+          "keyword": "schema",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "analysis"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "ds_filter_risk_tiers",
+      "displayName": "Filter source: risk tiers",
+      "queryLines": [
+        "SELECT DISTINCT risk_tier FROM IDENTIFIER(concat(:catalog, '.', :schema, '.v_portfolio_risk_matrix')) WHERE risk_tier IS NOT NULL ORDER BY CASE risk_tier WHEN 'High' THEN 1 WHEN 'Medium' THEN 2 WHEN 'Low' THEN 3 ELSE 4 END"
+      ],
+      "parameters": [
+        {
+          "displayName": "catalog",
+          "keyword": "catalog",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "churnkit"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "schema",
+          "keyword": "schema",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "analysis"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "ds_filter_archetypes",
+      "displayName": "Filter source: archetype names (cascading)",
+      "queryLines": [
+        "SELECT DISTINCT archetype_name FROM IDENTIFIER(concat(:catalog, '.', :schema, '.v_playbook_archetype_rollup')) WHERE archetype_name IS NOT NULL AND (COALESCE(:selected_playbook, '') IN ('', 'None') OR playbook_name = :selected_playbook) AND (COALESCE(:selected_risk_tier, '') IN ('', 'None') OR risk_tier = :selected_risk_tier) ORDER BY archetype_name"
+      ],
+      "parameters": [
+        {
+          "displayName": "catalog",
+          "keyword": "catalog",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "churnkit"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "schema",
+          "keyword": "schema",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "analysis"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "selected_playbook",
+          "keyword": "selected_playbook",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "selected_risk_tier",
+          "keyword": "selected_risk_tier",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": ""
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "ds_filter_entities",
+      "displayName": "Filter source: entity ids (cascading)",
+      "queryLines": [
+        "SELECT DISTINCT entity_id, expected_loss FROM IDENTIFIER(concat(:catalog, '.', :schema, '.v_eligible_all_playbooks')) WHERE entity_id IS NOT NULL AND (COALESCE(:selected_playbook, '') IN ('', 'None') OR playbook_name = :selected_playbook) AND (COALESCE(:selected_archetype, '') IN ('', 'None') OR archetype_name = :selected_archetype) AND (COALESCE(:selected_risk_tier, '') IN ('', 'None') OR risk_tier = :selected_risk_tier) ORDER BY expected_loss DESC LIMIT 1000"
+      ],
+      "parameters": [
+        {
+          "displayName": "catalog",
+          "keyword": "catalog",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "churnkit"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "schema",
+          "keyword": "schema",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "analysis"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "selected_playbook",
+          "keyword": "selected_playbook",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "selected_archetype",
+          "keyword": "selected_archetype",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "selected_risk_tier",
+          "keyword": "selected_risk_tier",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": ""
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "ds_account_narrative",
+      "displayName": "Account narrative (UNPIVOT for details panel)",
+      "queryLines": [
+        "WITH src AS (  SELECT * FROM IDENTIFIER(concat(:catalog, '.', :schema, '.v_account_explanation'))   WHERE (COALESCE(:selected_entity, '') IN ('', 'None') OR entity_id = :selected_entity)   ORDER BY policy_rank_among_eligible ASC LIMIT 1) SELECT label, content, sort_order FROM (  SELECT 'Playbook'                  AS label, CAST(playbook_name AS STRING)          AS content, 1 AS sort_order FROM src   UNION ALL SELECT 'Playbook description', CAST(playbook_description AS STRING),                 2 FROM src   UNION ALL SELECT 'Archetype',            CAST(archetype_name AS STRING),                       3 FROM src   UNION ALL SELECT 'Archetype description',CAST(archetype_description AS STRING),                4 FROM src   UNION ALL SELECT 'Archetype rationale',  CAST(archetype_rationale AS STRING),                  5 FROM src   UNION ALL SELECT 'Feature thresholds',   CAST(archetype_feature_thresholds AS STRING),         6 FROM src   UNION ALL SELECT 'Eligibility evidence', CAST(eligibility_evidence AS STRING),                 7 FROM src   UNION ALL SELECT 'Eligibility predicate (SQL)', CAST(eligibility_rules_sql AS STRING),         8 FROM src   UNION ALL SELECT 'Policy rationale',     CAST(policy_rationale AS STRING),                     9 FROM src) ORDER BY sort_order"
+      ],
+      "parameters": [
+        {
+          "displayName": "catalog",
+          "keyword": "catalog",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "churnkit"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "schema",
+          "keyword": "schema",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "analysis"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "selected_entity",
+          "keyword": "selected_entity",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": ""
+                }
+              ]
+            }
+          }
+        }
       ]
     }
   ],
   "pages": [
     {
-      "name": "page_portfolio",
-      "displayName": "1. Portfolio",
+      "name": "page_main",
+      "displayName": "Customer Retention",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1",
       "layout": [
         {
           "widget": {
-            "name": "kpi_total_eligible",
-            "queries": [{"name": "q", "query": {"datasetName": "ds_portfolio_totals", "fields": [{"name": "total_eligible", "expression": "`total_eligible`"}], "disaggregated": true}}],
+            "name": "w_scope_indicator",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_scope_indicator",
+                  "fields": [
+                    {
+                      "name": "scope_label",
+                      "expression": "`scope_label`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
             "spec": {
               "version": 2,
               "widgetType": "counter",
-              "encodings": {"value": {"fieldName": "total_eligible", "displayName": "Eligible accounts", "format": {"type": "number", "abbreviation": "compact", "decimalPlaces": {"type": "max", "places": 0}}}},
-              "frame": {"title": "Eligible accounts", "showTitle": true}
+              "encodings": {
+                "value": {
+                  "fieldName": "scope_label",
+                  "rowNumber": 1,
+                  "displayName": "Current scope"
+                }
+              },
+              "frame": {
+                "title": "Current scope (reflects filters below)",
+                "showTitle": true
+              }
             }
           },
-          "position": {"x": 0, "y": 0, "width": 1, "height": 2}
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 1
+          }
         },
         {
           "widget": {
-            "name": "kpi_total_recommended",
-            "queries": [{"name": "q", "query": {"datasetName": "ds_portfolio_totals", "fields": [{"name": "total_recommended", "expression": "`total_recommended`"}], "disaggregated": true}}],
+            "name": "h1_portfolio",
+            "textbox_spec": "# Portfolio \u2014 unfiltered overview of the whole book",
             "spec": {
-              "version": 2,
-              "widgetType": "counter",
-              "encodings": {"value": {"fieldName": "total_recommended", "displayName": "Recommended", "format": {"type": "number", "abbreviation": "compact", "decimalPlaces": {"type": "max", "places": 0}}}},
-              "frame": {"title": "Recommended", "showTitle": true}
+              "version": 1,
+              "widgetType": "text-box",
+              "encodings": {},
+              "frame": {
+                "showTitle": false
+              }
             }
           },
-          "position": {"x": 1, "y": 0, "width": 1, "height": 2}
+          "position": {
+            "x": 0,
+            "y": 1,
+            "width": 12,
+            "height": 1
+          }
         },
         {
           "widget": {
-            "name": "kpi_total_value",
-            "queries": [{"name": "q", "query": {"datasetName": "ds_portfolio_totals", "fields": [{"name": "total_value_at_risk", "expression": "`total_value_at_risk`"}], "disaggregated": true}}],
+            "name": "kpi_eligible",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_portfolio_totals",
+                  "fields": [
+                    {
+                      "name": "total_eligible",
+                      "expression": "`total_eligible`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
             "spec": {
               "version": 2,
               "widgetType": "counter",
-              "encodings": {"value": {"fieldName": "total_value_at_risk", "displayName": "Value at risk", "format": {"type": "number-currency", "currencyCode": "USD", "abbreviation": "compact", "decimalPlaces": {"type": "max", "places": 0}}}},
-              "frame": {"title": "Value at risk", "showTitle": true}
+              "encodings": {
+                "value": {
+                  "fieldName": "total_eligible",
+                  "rowNumber": 1,
+                  "displayName": "Eligible accounts",
+                  "format": {
+                    "type": "number",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "title": "Eligible accounts",
+                "showTitle": true
+              }
             }
           },
-          "position": {"x": 2, "y": 0, "width": 2, "height": 2}
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 3,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_recommended",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_portfolio_totals",
+                  "fields": [
+                    {
+                      "name": "total_recommended",
+                      "expression": "`total_recommended`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "total_recommended",
+                  "rowNumber": 1,
+                  "displayName": "Recommended",
+                  "format": {
+                    "type": "number",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "title": "Recommended",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 2,
+            "width": 3,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_value",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_portfolio_totals",
+                  "fields": [
+                    {
+                      "name": "total_value_at_risk",
+                      "expression": "`total_value_at_risk`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "total_value_at_risk",
+                  "rowNumber": 1,
+                  "displayName": "Value at risk",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "USD",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "title": "Value at risk",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 2,
+            "width": 3,
+            "height": 2
+          }
         },
         {
           "widget": {
             "name": "kpi_playbooks",
-            "queries": [{"name": "q", "query": {"datasetName": "ds_portfolio_totals", "fields": [{"name": "active_playbooks", "expression": "`active_playbooks`"}], "disaggregated": true}}],
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_portfolio_totals",
+                  "fields": [
+                    {
+                      "name": "active_playbooks",
+                      "expression": "`active_playbooks`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
             "spec": {
               "version": 2,
               "widgetType": "counter",
-              "encodings": {"value": {"fieldName": "active_playbooks", "displayName": "Playbooks", "format": {"type": "number", "decimalPlaces": {"type": "max", "places": 0}}}},
-              "frame": {"title": "Active playbooks", "showTitle": true}
-            }
-          },
-          "position": {"x": 4, "y": 0, "width": 1, "height": 2}
-        },
-        {
-          "widget": {
-            "name": "flt_playbook",
-            "queries": [{"name": "q", "query": {"datasetName": "ds_portfolio_matrix", "parameters": [{"name": "selected_playbook", "keyword": "selected_playbook"}], "disaggregated": true}}],
-            "spec": {
-              "version": 2,
-              "widgetType": "filter-single-select",
-              "encodings": {"fields": [{"parameterName": "selected_playbook", "queryName": "q"}]},
-              "frame": {"title": "Playbook (drill)", "showTitle": true}
-            }
-          },
-          "position": {"x": 0, "y": 2, "width": 2, "height": 1}
-        },
-        {
-          "widget": {
-            "name": "flt_risk_tier",
-            "queries": [{"name": "q", "query": {"datasetName": "ds_portfolio_matrix", "parameters": [{"name": "selected_risk_tier", "keyword": "selected_risk_tier"}], "disaggregated": true}}],
-            "spec": {
-              "version": 2,
-              "widgetType": "filter-single-select",
-              "encodings": {"fields": [{"parameterName": "selected_risk_tier", "queryName": "q"}]},
-              "frame": {"title": "Risk tier", "showTitle": true}
-            }
-          },
-          "position": {"x": 2, "y": 2, "width": 2, "height": 1}
-        },
-        {
-          "widget": {
-            "name": "w_risk_matrix",
-            "queries": [{
-              "name": "q",
-              "query": {
-                "datasetName": "ds_portfolio_matrix",
-                "fields": [
-                  {"name": "playbook_name", "expression": "`playbook_name`"},
-                  {"name": "risk_tier", "expression": "`risk_tier`"},
-                  {"name": "eligible_count", "expression": "SUM(`eligible_count`)"}
-                ],
-                "disaggregated": false
+              "encodings": {
+                "value": {
+                  "fieldName": "active_playbooks",
+                  "rowNumber": 1,
+                  "displayName": "Active playbooks"
+                }
+              },
+              "frame": {
+                "title": "Active playbooks",
+                "showTitle": true
               }
-            }],
+            }
+          },
+          "position": {
+            "x": 9,
+            "y": 2,
+            "width": 3,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "w_eligible_hbar",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_portfolio_matrix",
+                  "fields": [
+                    {
+                      "name": "risk_tier",
+                      "expression": "`risk_tier`"
+                    },
+                    {
+                      "name": "playbook_name",
+                      "expression": "`playbook_name`"
+                    },
+                    {
+                      "name": "sum(eligible_count)",
+                      "expression": "SUM(`eligible_count`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
             "spec": {
               "version": 3,
               "widgetType": "bar",
-              "encodings": {
-                "x": {"fieldName": "playbook_name", "scale": {"type": "categorical"}, "displayName": "Playbook"},
-                "y": {"fieldName": "eligible_count", "scale": {"type": "quantitative"}, "displayName": "Eligible accounts"},
-                "color": {"fieldName": "risk_tier", "scale": {"type": "categorical", "mappings": [{"value": "High", "color": "#D32F2F"}, {"value": "Medium", "color": "#F9A825"}, {"value": "Low", "color": "#388E3C"}]}, "displayName": "Risk tier"}
+              "frame": {
+                "title": "Eligible accounts by playbook \u00d7 risk tier",
+                "showTitle": true
               },
-              "mark": {"layout": "stack"},
-              "frame": {"title": "Eligible accounts by playbook × risk tier", "showTitle": true}
+              "encodings": {
+                "x": {
+                  "fieldName": "sum(eligible_count)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "fieldName": "playbook_name",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "color": {
+                  "fieldName": "risk_tier",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              }
             }
           },
-          "position": {"x": 0, "y": 3, "width": 4, "height": 6}
+          "position": {
+            "x": 0,
+            "y": 4,
+            "width": 6,
+            "height": 7
+          }
         },
         {
           "widget": {
-            "name": "w_value_bar",
-            "queries": [{
-              "name": "q",
-              "query": {
-                "datasetName": "ds_portfolio_matrix",
-                "fields": [
-                  {"name": "playbook_name", "expression": "`playbook_name`"},
-                  {"name": "risk_tier", "expression": "`risk_tier`"},
-                  {"name": "total_value_at_risk", "expression": "SUM(`total_value_at_risk`)"}
-                ],
-                "disaggregated": false
+            "name": "w_value_hbar",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_portfolio_matrix",
+                  "fields": [
+                    {
+                      "name": "risk_tier",
+                      "expression": "`risk_tier`"
+                    },
+                    {
+                      "name": "playbook_name",
+                      "expression": "`playbook_name`"
+                    },
+                    {
+                      "name": "sum(total_value_at_risk)",
+                      "expression": "SUM(`total_value_at_risk`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
               }
-            }],
+            ],
             "spec": {
               "version": 3,
               "widgetType": "bar",
-              "encodings": {
-                "x": {"fieldName": "playbook_name", "scale": {"type": "categorical"}, "displayName": "Playbook"},
-                "y": {"fieldName": "total_value_at_risk", "scale": {"type": "quantitative"}, "displayName": "Value at risk", "format": {"type": "number-currency", "currencyCode": "USD", "abbreviation": "compact"}},
-                "color": {"fieldName": "risk_tier", "scale": {"type": "categorical", "mappings": [{"value": "High", "color": "#D32F2F"}, {"value": "Medium", "color": "#F9A825"}, {"value": "Low", "color": "#388E3C"}]}, "displayName": "Risk tier"}
+              "frame": {
+                "title": "Value at risk by playbook \u00d7 risk tier",
+                "showTitle": true
               },
-              "mark": {"layout": "stack"},
-              "frame": {"title": "Value at risk by playbook × risk tier", "showTitle": true}
+              "encodings": {
+                "x": {
+                  "fieldName": "sum(total_value_at_risk)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "fieldName": "playbook_name",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "color": {
+                  "fieldName": "risk_tier",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              }
             }
           },
-          "position": {"x": 4, "y": 3, "width": 4, "height": 6}
+          "position": {
+            "x": 6,
+            "y": 4,
+            "width": 6,
+            "height": 7
+          }
         },
         {
           "widget": {
             "name": "w_matrix_table",
-            "queries": [{
-              "name": "q",
-              "query": {
-                "datasetName": "ds_portfolio_matrix",
-                "fields": [
-                  {"name": "playbook_name", "expression": "`playbook_name`"},
-                  {"name": "risk_tier", "expression": "`risk_tier`"},
-                  {"name": "eligible_count", "expression": "`eligible_count`"},
-                  {"name": "recommended_count", "expression": "`recommended_count`"},
-                  {"name": "holdout_count", "expression": "`holdout_count`"},
-                  {"name": "total_value_at_risk", "expression": "`total_value_at_risk`"},
-                  {"name": "mean_churn_probability", "expression": "`mean_churn_probability`"}
-                ],
-                "disaggregated": true
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_portfolio_matrix",
+                  "fields": [
+                    {
+                      "name": "playbook_name",
+                      "expression": "`playbook_name`"
+                    },
+                    {
+                      "name": "risk_tier",
+                      "expression": "`risk_tier`"
+                    },
+                    {
+                      "name": "eligible_count",
+                      "expression": "`eligible_count`"
+                    },
+                    {
+                      "name": "recommended_count",
+                      "expression": "`recommended_count`"
+                    },
+                    {
+                      "name": "holdout_count",
+                      "expression": "`holdout_count`"
+                    },
+                    {
+                      "name": "total_value_at_risk",
+                      "expression": "`total_value_at_risk`"
+                    },
+                    {
+                      "name": "mean_churn_probability",
+                      "expression": "`mean_churn_probability`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
               }
-            }],
+            ],
             "spec": {
-              "version": 1,
+              "version": 2,
               "widgetType": "table",
+              "frame": {
+                "title": "Playbook \u00d7 risk-tier matrix",
+                "showTitle": true
+              },
+              "rowsPerPage": 25,
               "encodings": {
                 "columns": [
-                  {"fieldName": "playbook_name", "displayName": "playbook_name", "type": "string", "displayAs": "string", "visible": true, "order": 0, "title": "Playbook", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "left", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "risk_tier", "displayName": "risk_tier", "type": "string", "displayAs": "string", "visible": true, "order": 1, "title": "Risk tier", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "left", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "eligible_count", "displayName": "eligible_count", "type": "integer", "displayAs": "number", "numberFormat": "0,0", "visible": true, "order": 2, "title": "Eligible", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "right", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "recommended_count", "displayName": "recommended_count", "type": "integer", "displayAs": "number", "numberFormat": "0,0", "visible": true, "order": 3, "title": "Recommended", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "right", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "holdout_count", "displayName": "holdout_count", "type": "integer", "displayAs": "number", "numberFormat": "0,0", "visible": true, "order": 4, "title": "Holdout", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "right", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "total_value_at_risk", "displayName": "total_value_at_risk", "type": "float", "displayAs": "number", "numberFormat": "$0,0.00", "visible": true, "order": 5, "title": "Value at risk", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "right", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "mean_churn_probability", "displayName": "mean_churn_probability", "type": "float", "displayAs": "number", "numberFormat": "0.000", "visible": true, "order": 6, "title": "Mean churn prob", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "right", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false}
+                  {
+                    "fieldName": "playbook_name",
+                    "displayName": "playbook_name"
+                  },
+                  {
+                    "fieldName": "risk_tier",
+                    "displayName": "risk_tier"
+                  },
+                  {
+                    "fieldName": "eligible_count",
+                    "displayName": "eligible_count"
+                  },
+                  {
+                    "fieldName": "recommended_count",
+                    "displayName": "recommended_count"
+                  },
+                  {
+                    "fieldName": "holdout_count",
+                    "displayName": "holdout_count"
+                  },
+                  {
+                    "fieldName": "total_value_at_risk",
+                    "displayName": "total_value_at_risk"
+                  },
+                  {
+                    "fieldName": "mean_churn_probability",
+                    "displayName": "mean_churn_probability"
+                  }
                 ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 11,
+            "width": 12,
+            "height": 5
+          }
+        },
+        {
+          "widget": {
+            "name": "h2_filters",
+            "textbox_spec": "## Narrow to one playbook / risk tier (filters apply to archetypes + accounts below; portfolio above stays unfiltered)",
+            "spec": {
+              "version": 1,
+              "widgetType": "text-box",
+              "encodings": {},
+              "frame": {
+                "showTitle": false
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 16,
+            "width": 12,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "flt_playbook",
+            "queries": [
+              {
+                "name": "vq_flt_playbook",
+                "query": {
+                  "datasetName": "ds_filter_playbooks",
+                  "fields": [
+                    {
+                      "name": "playbook_name",
+                      "expression": "`playbook_name`"
+                    },
+                    {
+                      "name": "playbook_name_associativity",
+                      "expression": "COUNT_IF(`associative_filter_predicate_group`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
               },
-              "invisibleColumns": [],
-              "allowHTMLByDefault": false,
-              "itemsPerPage": 25,
-              "paginationSize": "default",
-              "condensed": true,
-              "withRowNumber": false,
-              "frame": {"showTitle": true, "title": "Playbook × risk-tier matrix"}
-            }
-          },
-          "position": {"x": 0, "y": 9, "width": 8, "height": 6}
-        }
-      ]
-    },
-    {
-      "name": "page_playbook",
-      "displayName": "2. Playbook drill",
-      "layout": [
-        {
-          "widget": {
-            "name": "flt_playbook_p2",
-            "queries": [{"name": "q", "query": {"datasetName": "ds_playbook_archetypes", "parameters": [{"name": "selected_playbook", "keyword": "selected_playbook"}], "disaggregated": true}}],
+              {
+                "name": "pq_flt_playbook",
+                "query": {
+                  "datasetName": "ds_playbook_archetypes",
+                  "parameters": [
+                    {
+                      "name": "selected_playbook",
+                      "keyword": "selected_playbook"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
             "spec": {
               "version": 2,
               "widgetType": "filter-single-select",
-              "encodings": {"fields": [{"parameterName": "selected_playbook", "queryName": "q"}]},
-              "frame": {"title": "Playbook", "showTitle": true}
+              "frame": {
+                "title": "Playbook",
+                "showTitle": true
+              },
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "playbook_name",
+                    "queryName": "vq_flt_playbook"
+                  },
+                  {
+                    "parameterName": "selected_playbook",
+                    "queryName": "pq_flt_playbook"
+                  }
+                ]
+              }
             }
           },
-          "position": {"x": 0, "y": 0, "width": 2, "height": 1}
+          "position": {
+            "x": 0,
+            "y": 17,
+            "width": 6,
+            "height": 1
+          }
         },
         {
           "widget": {
-            "name": "flt_archetype_p2",
-            "queries": [{"name": "q", "query": {"datasetName": "ds_playbook_archetypes", "parameters": [{"name": "selected_archetype", "keyword": "selected_archetype"}], "disaggregated": true}}],
+            "name": "flt_risk_tier",
+            "queries": [
+              {
+                "name": "vq_flt_risk_tier",
+                "query": {
+                  "datasetName": "ds_filter_risk_tiers",
+                  "fields": [
+                    {
+                      "name": "risk_tier",
+                      "expression": "`risk_tier`"
+                    },
+                    {
+                      "name": "risk_tier_associativity",
+                      "expression": "COUNT_IF(`associative_filter_predicate_group`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "pq_flt_risk_tier",
+                "query": {
+                  "datasetName": "ds_playbook_archetypes",
+                  "parameters": [
+                    {
+                      "name": "selected_risk_tier",
+                      "keyword": "selected_risk_tier"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
             "spec": {
               "version": 2,
               "widgetType": "filter-single-select",
-              "encodings": {"fields": [{"parameterName": "selected_archetype", "queryName": "q"}]},
-              "frame": {"title": "Archetype (drill)", "showTitle": true}
+              "frame": {
+                "title": "Risk tier",
+                "showTitle": true
+              },
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "risk_tier",
+                    "queryName": "vq_flt_risk_tier"
+                  },
+                  {
+                    "parameterName": "selected_risk_tier",
+                    "queryName": "pq_flt_risk_tier"
+                  }
+                ]
+              }
             }
           },
-          "position": {"x": 2, "y": 0, "width": 2, "height": 1}
+          "position": {
+            "x": 6,
+            "y": 17,
+            "width": 6,
+            "height": 1
+          }
         },
         {
           "widget": {
-            "name": "flt_risk_tier_p2",
-            "queries": [{"name": "q", "query": {"datasetName": "ds_playbook_archetypes", "parameters": [{"name": "selected_risk_tier", "keyword": "selected_risk_tier"}], "disaggregated": true}}],
+            "name": "h3_archetypes",
+            "textbox_spec": "## Archetypes \u2014 scoped by filters above",
             "spec": {
-              "version": 2,
-              "widgetType": "filter-single-select",
-              "encodings": {"fields": [{"parameterName": "selected_risk_tier", "queryName": "q"}]},
-              "frame": {"title": "Risk tier", "showTitle": true}
+              "version": 1,
+              "widgetType": "text-box",
+              "encodings": {},
+              "frame": {
+                "showTitle": false
+              }
             }
           },
-          "position": {"x": 4, "y": 0, "width": 2, "height": 1}
+          "position": {
+            "x": 0,
+            "y": 18,
+            "width": 12,
+            "height": 1
+          }
         },
         {
           "widget": {
             "name": "w_archetype_bar",
-            "queries": [{
-              "name": "q",
-              "query": {
-                "datasetName": "ds_playbook_archetypes",
-                "fields": [
-                  {"name": "archetype_name", "expression": "`archetype_name`"},
-                  {"name": "risk_tier", "expression": "`risk_tier`"},
-                  {"name": "account_count", "expression": "SUM(`account_count`)"}
-                ],
-                "disaggregated": false
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_playbook_archetypes",
+                  "fields": [
+                    {
+                      "name": "risk_tier",
+                      "expression": "`risk_tier`"
+                    },
+                    {
+                      "name": "archetype_name",
+                      "expression": "`archetype_name`"
+                    },
+                    {
+                      "name": "sum(account_count)",
+                      "expression": "SUM(`account_count`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
               }
-            }],
+            ],
             "spec": {
               "version": 3,
               "widgetType": "bar",
-              "encodings": {
-                "x": {"fieldName": "archetype_name", "scale": {"type": "categorical"}, "displayName": "Archetype"},
-                "y": {"fieldName": "account_count", "scale": {"type": "quantitative"}, "displayName": "Accounts"},
-                "color": {"fieldName": "risk_tier", "scale": {"type": "categorical", "mappings": [{"value": "High", "color": "#D32F2F"}, {"value": "Medium", "color": "#F9A825"}, {"value": "Low", "color": "#388E3C"}]}, "displayName": "Risk tier"}
+              "frame": {
+                "title": "Archetype composition",
+                "showTitle": true
               },
-              "mark": {"layout": "stack"},
-              "frame": {"title": "Archetypes in selected playbook", "showTitle": true}
+              "encodings": {
+                "x": {
+                  "fieldName": "sum(account_count)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "fieldName": "archetype_name",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "color": {
+                  "fieldName": "risk_tier",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              }
             }
           },
-          "position": {"x": 0, "y": 1, "width": 6, "height": 6}
+          "position": {
+            "x": 0,
+            "y": 19,
+            "width": 6,
+            "height": 7
+          }
         },
         {
           "widget": {
-            "name": "w_archetype_rollup_table",
-            "queries": [{
-              "name": "q",
-              "query": {
-                "datasetName": "ds_playbook_archetypes",
-                "fields": [
-                  {"name": "archetype_name", "expression": "`archetype_name`"},
-                  {"name": "risk_tier", "expression": "`risk_tier`"},
-                  {"name": "account_count", "expression": "`account_count`"},
-                  {"name": "recommended_count", "expression": "`recommended_count`"},
-                  {"name": "mean_churn_probability", "expression": "`mean_churn_probability`"},
-                  {"name": "total_value_at_risk", "expression": "`total_value_at_risk`"}
-                ],
-                "disaggregated": true
+            "name": "w_archetype_rollup",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_playbook_archetypes",
+                  "fields": [
+                    {
+                      "name": "playbook_name",
+                      "expression": "`playbook_name`"
+                    },
+                    {
+                      "name": "archetype_name",
+                      "expression": "`archetype_name`"
+                    },
+                    {
+                      "name": "risk_tier",
+                      "expression": "`risk_tier`"
+                    },
+                    {
+                      "name": "account_count",
+                      "expression": "`account_count`"
+                    },
+                    {
+                      "name": "recommended_count",
+                      "expression": "`recommended_count`"
+                    },
+                    {
+                      "name": "mean_churn_probability",
+                      "expression": "`mean_churn_probability`"
+                    },
+                    {
+                      "name": "total_value_at_risk",
+                      "expression": "`total_value_at_risk`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
               }
-            }],
+            ],
             "spec": {
-              "version": 1,
+              "version": 2,
               "widgetType": "table",
+              "frame": {
+                "title": "Archetype rollup",
+                "showTitle": true
+              },
+              "rowsPerPage": 25,
               "encodings": {
                 "columns": [
-                  {"fieldName": "archetype_name", "displayName": "archetype_name", "type": "string", "displayAs": "string", "visible": true, "order": 0, "title": "Archetype", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "left", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "risk_tier", "displayName": "risk_tier", "type": "string", "displayAs": "string", "visible": true, "order": 1, "title": "Risk tier", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "left", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "account_count", "displayName": "account_count", "type": "integer", "displayAs": "number", "numberFormat": "0,0", "visible": true, "order": 2, "title": "# accounts", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "right", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "recommended_count", "displayName": "recommended_count", "type": "integer", "displayAs": "number", "numberFormat": "0,0", "visible": true, "order": 3, "title": "Recommended", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "right", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "mean_churn_probability", "displayName": "mean_churn_probability", "type": "float", "displayAs": "number", "numberFormat": "0.000", "visible": true, "order": 4, "title": "Mean churn prob", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "right", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "total_value_at_risk", "displayName": "total_value_at_risk", "type": "float", "displayAs": "number", "numberFormat": "$0,0.00", "visible": true, "order": 5, "title": "Value at risk", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "right", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false}
+                  {
+                    "fieldName": "playbook_name",
+                    "displayName": "playbook_name"
+                  },
+                  {
+                    "fieldName": "archetype_name",
+                    "displayName": "archetype_name"
+                  },
+                  {
+                    "fieldName": "risk_tier",
+                    "displayName": "risk_tier"
+                  },
+                  {
+                    "fieldName": "account_count",
+                    "displayName": "account_count"
+                  },
+                  {
+                    "fieldName": "recommended_count",
+                    "displayName": "recommended_count"
+                  },
+                  {
+                    "fieldName": "mean_churn_probability",
+                    "displayName": "mean_churn_probability"
+                  },
+                  {
+                    "fieldName": "total_value_at_risk",
+                    "displayName": "total_value_at_risk"
+                  }
                 ]
-              },
-              "invisibleColumns": [],
-              "allowHTMLByDefault": false,
-              "itemsPerPage": 25,
-              "paginationSize": "default",
-              "condensed": true,
-              "withRowNumber": false,
-              "frame": {"showTitle": true, "title": "Archetype rollup (current playbook)"}
+              }
             }
           },
-          "position": {"x": 0, "y": 7, "width": 6, "height": 6}
-        }
-      ]
-    },
-    {
-      "name": "page_accounts",
-      "displayName": "3. Accounts",
-      "layout": [
-        {
-          "widget": {
-            "name": "flt_playbook_p3",
-            "queries": [{"name": "q", "query": {"datasetName": "ds_accounts", "parameters": [{"name": "selected_playbook", "keyword": "selected_playbook"}], "disaggregated": true}}],
-            "spec": {"version": 2, "widgetType": "filter-single-select", "encodings": {"fields": [{"parameterName": "selected_playbook", "queryName": "q"}]}, "frame": {"title": "Playbook", "showTitle": true}}
-          },
-          "position": {"x": 0, "y": 0, "width": 2, "height": 1}
+          "position": {
+            "x": 6,
+            "y": 19,
+            "width": 6,
+            "height": 7
+          }
         },
         {
           "widget": {
-            "name": "flt_archetype_p3",
-            "queries": [{"name": "q", "query": {"datasetName": "ds_accounts", "parameters": [{"name": "selected_archetype", "keyword": "selected_archetype"}], "disaggregated": true}}],
-            "spec": {"version": 2, "widgetType": "filter-single-select", "encodings": {"fields": [{"parameterName": "selected_archetype", "queryName": "q"}]}, "frame": {"title": "Archetype", "showTitle": true}}
+            "name": "flt_archetype",
+            "queries": [
+              {
+                "name": "vq_flt_archetype",
+                "query": {
+                  "datasetName": "ds_filter_archetypes",
+                  "fields": [
+                    {
+                      "name": "archetype_name",
+                      "expression": "`archetype_name`"
+                    },
+                    {
+                      "name": "archetype_name_associativity",
+                      "expression": "COUNT_IF(`associative_filter_predicate_group`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "pq_flt_archetype",
+                "query": {
+                  "datasetName": "ds_accounts",
+                  "parameters": [
+                    {
+                      "name": "selected_archetype",
+                      "keyword": "selected_archetype"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-single-select",
+              "frame": {
+                "title": "Archetype",
+                "showTitle": true
+              },
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "archetype_name",
+                    "queryName": "vq_flt_archetype"
+                  },
+                  {
+                    "parameterName": "selected_archetype",
+                    "queryName": "pq_flt_archetype"
+                  }
+                ]
+              }
+            }
           },
-          "position": {"x": 2, "y": 0, "width": 2, "height": 1}
+          "position": {
+            "x": 0,
+            "y": 26,
+            "width": 12,
+            "height": 1
+          }
         },
         {
           "widget": {
-            "name": "flt_risk_tier_p3",
-            "queries": [{"name": "q", "query": {"datasetName": "ds_accounts", "parameters": [{"name": "selected_risk_tier", "keyword": "selected_risk_tier"}], "disaggregated": true}}],
-            "spec": {"version": 2, "widgetType": "filter-single-select", "encodings": {"fields": [{"parameterName": "selected_risk_tier", "queryName": "q"}]}, "frame": {"title": "Risk tier", "showTitle": true}}
+            "name": "h4_accounts",
+            "textbox_spec": "## Accounts ranked by expected loss \u2014 scoped by filters above",
+            "spec": {
+              "version": 1,
+              "widgetType": "text-box",
+              "encodings": {},
+              "frame": {
+                "showTitle": false
+              }
+            }
           },
-          "position": {"x": 4, "y": 0, "width": 2, "height": 1}
-        },
-        {
-          "widget": {
-            "name": "flt_top_n_p3",
-            "queries": [{"name": "q", "query": {"datasetName": "ds_accounts", "parameters": [{"name": "top_n", "keyword": "top_n"}], "disaggregated": true}}],
-            "spec": {"version": 2, "widgetType": "filter-single-select", "encodings": {"fields": [{"parameterName": "top_n", "queryName": "q"}]}, "frame": {"title": "Top N", "showTitle": true}}
-          },
-          "position": {"x": 6, "y": 0, "width": 2, "height": 1}
-        },
-        {
-          "widget": {
-            "name": "flt_entity_p3",
-            "queries": [{"name": "q", "query": {"datasetName": "ds_accounts", "parameters": [{"name": "selected_entity", "keyword": "selected_entity"}], "disaggregated": true}}],
-            "spec": {"version": 2, "widgetType": "filter-single-select", "encodings": {"fields": [{"parameterName": "selected_entity", "queryName": "q"}]}, "frame": {"title": "Entity (pick for detail)", "showTitle": true}}
-          },
-          "position": {"x": 0, "y": 1, "width": 4, "height": 1}
+          "position": {
+            "x": 0,
+            "y": 27,
+            "width": 12,
+            "height": 1
+          }
         },
         {
           "widget": {
             "name": "w_accounts_table",
-            "queries": [{
-              "name": "q",
-              "query": {
-                "datasetName": "ds_accounts",
-                "fields": [
-                  {"name": "entity_id", "expression": "`entity_id`"},
-                  {"name": "playbook_name", "expression": "`playbook_name`"},
-                  {"name": "archetype_name", "expression": "`archetype_name`"},
-                  {"name": "risk_tier", "expression": "`risk_tier`"},
-                  {"name": "churn_probability", "expression": "`churn_probability`"},
-                  {"name": "value_at_risk", "expression": "`value_at_risk`"},
-                  {"name": "expected_loss", "expression": "`expected_loss`"},
-                  {"name": "policy_rank_among_eligible", "expression": "`policy_rank_among_eligible`"},
-                  {"name": "eligible_playbook_count", "expression": "`eligible_playbook_count`"},
-                  {"name": "recommended", "expression": "`recommended`"},
-                  {"name": "is_holdout", "expression": "`is_holdout`"},
-                  {"name": "eligibility_evidence", "expression": "`eligibility_evidence`"}
-                ],
-                "disaggregated": true
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_accounts",
+                  "fields": [
+                    {
+                      "name": "entity_id",
+                      "expression": "`entity_id`"
+                    },
+                    {
+                      "name": "playbook_name",
+                      "expression": "`playbook_name`"
+                    },
+                    {
+                      "name": "archetype_name",
+                      "expression": "`archetype_name`"
+                    },
+                    {
+                      "name": "risk_tier",
+                      "expression": "`risk_tier`"
+                    },
+                    {
+                      "name": "churn_probability",
+                      "expression": "`churn_probability`"
+                    },
+                    {
+                      "name": "value_at_risk",
+                      "expression": "`value_at_risk`"
+                    },
+                    {
+                      "name": "expected_loss",
+                      "expression": "`expected_loss`"
+                    },
+                    {
+                      "name": "policy_rank_among_eligible",
+                      "expression": "`policy_rank_among_eligible`"
+                    },
+                    {
+                      "name": "eligible_playbook_count",
+                      "expression": "`eligible_playbook_count`"
+                    },
+                    {
+                      "name": "recommended",
+                      "expression": "`recommended`"
+                    },
+                    {
+                      "name": "is_holdout",
+                      "expression": "`is_holdout`"
+                    },
+                    {
+                      "name": "eligibility_evidence",
+                      "expression": "`eligibility_evidence`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
               }
-            }],
+            ],
             "spec": {
-              "version": 1,
+              "version": 2,
               "widgetType": "table",
+              "frame": {
+                "title": "Top-500 accounts in the current filter scope",
+                "showTitle": true
+              },
+              "rowsPerPage": 50,
               "encodings": {
                 "columns": [
-                  {"fieldName": "entity_id", "displayName": "entity_id", "type": "string", "displayAs": "string", "visible": true, "order": 0, "title": "Entity", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "left", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": true, "preserveWhitespace": false},
-                  {"fieldName": "playbook_name", "displayName": "playbook_name", "type": "string", "displayAs": "string", "visible": true, "order": 1, "title": "Playbook", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "left", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "archetype_name", "displayName": "archetype_name", "type": "string", "displayAs": "string", "visible": true, "order": 2, "title": "Archetype", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "left", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "risk_tier", "displayName": "risk_tier", "type": "string", "displayAs": "string", "visible": true, "order": 3, "title": "Risk tier", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "left", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "churn_probability", "displayName": "churn_probability", "type": "float", "displayAs": "number", "numberFormat": "0.000", "visible": true, "order": 4, "title": "Churn prob", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "right", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "value_at_risk", "displayName": "value_at_risk", "type": "float", "displayAs": "number", "numberFormat": "$0,0.00", "visible": true, "order": 5, "title": "Value at risk", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "right", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "expected_loss", "displayName": "expected_loss", "type": "float", "displayAs": "number", "numberFormat": "$0,0.00", "visible": true, "order": 6, "title": "Expected loss", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "right", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "policy_rank_among_eligible", "displayName": "policy_rank_among_eligible", "type": "integer", "displayAs": "number", "numberFormat": "0", "visible": true, "order": 7, "title": "Rank", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "right", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "eligible_playbook_count", "displayName": "eligible_playbook_count", "type": "integer", "displayAs": "number", "numberFormat": "0", "visible": true, "order": 8, "title": "# elig. plays", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "right", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "recommended", "displayName": "recommended", "type": "boolean", "displayAs": "boolean", "visible": true, "order": 9, "title": "Recommended", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "center", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "is_holdout", "displayName": "is_holdout", "type": "boolean", "displayAs": "boolean", "visible": true, "order": 10, "title": "Holdout", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "center", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "eligibility_evidence", "displayName": "eligibility_evidence", "type": "string", "displayAs": "string", "visible": true, "order": 11, "title": "Evidence", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": true}, "alignContent": "left", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": true}
+                  {
+                    "fieldName": "entity_id",
+                    "displayName": "entity_id"
+                  },
+                  {
+                    "fieldName": "playbook_name",
+                    "displayName": "playbook_name"
+                  },
+                  {
+                    "fieldName": "archetype_name",
+                    "displayName": "archetype_name"
+                  },
+                  {
+                    "fieldName": "risk_tier",
+                    "displayName": "risk_tier"
+                  },
+                  {
+                    "fieldName": "churn_probability",
+                    "displayName": "churn_probability"
+                  },
+                  {
+                    "fieldName": "value_at_risk",
+                    "displayName": "value_at_risk"
+                  },
+                  {
+                    "fieldName": "expected_loss",
+                    "displayName": "expected_loss"
+                  },
+                  {
+                    "fieldName": "policy_rank_among_eligible",
+                    "displayName": "policy_rank_among_eligible"
+                  },
+                  {
+                    "fieldName": "eligible_playbook_count",
+                    "displayName": "eligible_playbook_count"
+                  },
+                  {
+                    "fieldName": "recommended",
+                    "displayName": "recommended"
+                  },
+                  {
+                    "fieldName": "is_holdout",
+                    "displayName": "is_holdout"
+                  },
+                  {
+                    "fieldName": "eligibility_evidence",
+                    "displayName": "eligibility_evidence"
+                  }
                 ]
-              },
-              "invisibleColumns": [],
-              "allowHTMLByDefault": false,
-              "itemsPerPage": 50,
-              "paginationSize": "default",
-              "condensed": true,
-              "withRowNumber": false,
-              "frame": {"showTitle": true, "title": "Accounts ranked by expected loss (capped per slice)"}
+              }
             }
           },
-          "position": {"x": 0, "y": 2, "width": 8, "height": 10}
-        }
-      ]
-    },
-    {
-      "name": "page_account_detail",
-      "displayName": "4. Account detail",
-      "layout": [
-        {
-          "widget": {
-            "name": "flt_entity_p4",
-            "queries": [{"name": "q", "query": {"datasetName": "ds_account_detail", "parameters": [{"name": "selected_entity", "keyword": "selected_entity"}], "disaggregated": true}}],
-            "spec": {"version": 2, "widgetType": "filter-single-select", "encodings": {"fields": [{"parameterName": "selected_entity", "queryName": "q"}]}, "frame": {"title": "Entity", "showTitle": true}}
-          },
-          "position": {"x": 0, "y": 0, "width": 3, "height": 1}
+          "position": {
+            "x": 0,
+            "y": 28,
+            "width": 12,
+            "height": 10
+          }
         },
         {
           "widget": {
-            "name": "w_account_facts",
-            "queries": [{
-              "name": "q",
-              "query": {
-                "datasetName": "ds_account_detail",
-                "fields": [
-                  {"name": "entity_id", "expression": "`entity_id`"},
-                  {"name": "playbook_name", "expression": "`playbook_name`"},
-                  {"name": "risk_tier", "expression": "`risk_tier`"},
-                  {"name": "churn_probability", "expression": "`churn_probability`"},
-                  {"name": "value_at_risk", "expression": "`value_at_risk`"},
-                  {"name": "expected_loss", "expression": "`expected_loss`"},
-                  {"name": "policy_rank_among_eligible", "expression": "`policy_rank_among_eligible`"},
-                  {"name": "eligible_playbook_count", "expression": "`eligible_playbook_count`"},
-                  {"name": "recommended", "expression": "`recommended`"},
-                  {"name": "is_holdout", "expression": "`is_holdout`"},
-                  {"name": "eligibility_evidence", "expression": "`eligibility_evidence`"}
-                ],
-                "disaggregated": true
-              }
-            }],
+            "name": "h6_runs",
+            "textbox_spec": "### Scoring run history (audit)",
             "spec": {
               "version": 1,
-              "widgetType": "table",
-              "encodings": {
-                "columns": [
-                  {"fieldName": "entity_id", "displayName": "entity_id", "type": "string", "displayAs": "string", "visible": true, "order": 0, "title": "Entity", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "left", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": true, "preserveWhitespace": false},
-                  {"fieldName": "playbook_name", "displayName": "playbook_name", "type": "string", "displayAs": "string", "visible": true, "order": 1, "title": "Playbook", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "left", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "risk_tier", "displayName": "risk_tier", "type": "string", "displayAs": "string", "visible": true, "order": 2, "title": "Risk tier", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "left", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "churn_probability", "displayName": "churn_probability", "type": "float", "displayAs": "number", "numberFormat": "0.000", "visible": true, "order": 3, "title": "Churn prob", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "right", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "value_at_risk", "displayName": "value_at_risk", "type": "float", "displayAs": "number", "numberFormat": "$0,0.00", "visible": true, "order": 4, "title": "Value at risk", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "right", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "expected_loss", "displayName": "expected_loss", "type": "float", "displayAs": "number", "numberFormat": "$0,0.00", "visible": true, "order": 5, "title": "Expected loss", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "right", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "policy_rank_among_eligible", "displayName": "policy_rank_among_eligible", "type": "integer", "displayAs": "number", "numberFormat": "0", "visible": true, "order": 6, "title": "Rank", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "right", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "eligible_playbook_count", "displayName": "eligible_playbook_count", "type": "integer", "displayAs": "number", "numberFormat": "0", "visible": true, "order": 7, "title": "# elig. plays", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "right", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "recommended", "displayName": "recommended", "type": "boolean", "displayAs": "boolean", "visible": true, "order": 8, "title": "Recommended", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "center", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "is_holdout", "displayName": "is_holdout", "type": "boolean", "displayAs": "boolean", "visible": true, "order": 9, "title": "Holdout", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "center", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "eligibility_evidence", "displayName": "eligibility_evidence", "type": "string", "displayAs": "string", "visible": true, "order": 10, "title": "Evidence", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": true}, "alignContent": "left", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": true}
-                ]
-              },
-              "invisibleColumns": [],
-              "allowHTMLByDefault": false,
-              "itemsPerPage": 10,
-              "paginationSize": "default",
-              "condensed": true,
-              "withRowNumber": false,
-              "frame": {"showTitle": true, "title": "Account facts"}
+              "widgetType": "text-box",
+              "encodings": {},
+              "frame": {
+                "showTitle": false
+              }
             }
           },
-          "position": {"x": 0, "y": 1, "width": 8, "height": 4}
+          "position": {
+            "x": 0,
+            "y": 52,
+            "width": 12,
+            "height": 1
+          }
         },
-        {
-          "widget": {
-            "name": "w_archetype_context",
-            "queries": [{
-              "name": "q",
-              "query": {
-                "datasetName": "ds_account_detail",
-                "fields": [
-                  {"name": "archetype_name", "expression": "`archetype_name`"},
-                  {"name": "archetype_description", "expression": "`archetype_description`"},
-                  {"name": "archetype_rationale", "expression": "`archetype_rationale`"},
-                  {"name": "archetype_feature_thresholds", "expression": "CAST(`archetype_feature_thresholds` AS STRING)"},
-                  {"name": "archetype_mean_churn_probability", "expression": "`archetype_mean_churn_probability`"},
-                  {"name": "archetype_cluster_size", "expression": "`archetype_cluster_size`"},
-                  {"name": "expected_uplift_pct", "expression": "`expected_uplift_pct`"},
-                  {"name": "eligibility_rules_sql", "expression": "`eligibility_rules_sql`"}
-                ],
-                "disaggregated": true
-              }
-            }],
-            "spec": {
-              "version": 1,
-              "widgetType": "table",
-              "encodings": {
-                "columns": [
-                  {"fieldName": "archetype_name", "displayName": "archetype_name", "type": "string", "displayAs": "string", "visible": true, "order": 0, "title": "Archetype", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "left", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "archetype_description", "displayName": "archetype_description", "type": "string", "displayAs": "string", "visible": true, "order": 1, "title": "Description", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": true}, "alignContent": "left", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": true},
-                  {"fieldName": "archetype_rationale", "displayName": "archetype_rationale", "type": "string", "displayAs": "string", "visible": true, "order": 2, "title": "Rationale", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": true}, "alignContent": "left", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": true},
-                  {"fieldName": "archetype_feature_thresholds", "displayName": "archetype_feature_thresholds", "type": "string", "displayAs": "string", "visible": true, "order": 3, "title": "Feature thresholds", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": true}, "alignContent": "left", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": true, "preserveWhitespace": true},
-                  {"fieldName": "archetype_mean_churn_probability", "displayName": "archetype_mean_churn_probability", "type": "float", "displayAs": "number", "numberFormat": "0.000", "visible": true, "order": 4, "title": "Archetype mean prob", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "right", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "archetype_cluster_size", "displayName": "archetype_cluster_size", "type": "integer", "displayAs": "number", "numberFormat": "0,0", "visible": true, "order": 5, "title": "Cluster size", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "right", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "expected_uplift_pct", "displayName": "expected_uplift_pct", "type": "float", "displayAs": "number", "numberFormat": "0.00%", "visible": true, "order": 6, "title": "Expected uplift", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "right", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "eligibility_rules_sql", "displayName": "eligibility_rules_sql", "type": "string", "displayAs": "string", "visible": true, "order": 7, "title": "Eligibility SQL", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": true}, "alignContent": "left", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": true, "preserveWhitespace": true}
-                ]
-              },
-              "invisibleColumns": [],
-              "allowHTMLByDefault": false,
-              "itemsPerPage": 10,
-              "paginationSize": "default",
-              "condensed": true,
-              "withRowNumber": false,
-              "frame": {"showTitle": true, "title": "Archetype interpretation (why this risk score)"}
-            }
-          },
-          "position": {"x": 0, "y": 5, "width": 8, "height": 6}
-        }
-      ]
-    },
-    {
-      "name": "page_run_history",
-      "displayName": "5. Run history",
-      "layout": [
         {
           "widget": {
             "name": "w_run_history",
-            "queries": [{
-              "name": "q",
-              "query": {
-                "datasetName": "ds_run_history",
-                "fields": [
-                  {"name": "scoring_run_id", "expression": "`scoring_run_id`"},
-                  {"name": "as_of_date", "expression": "`as_of_date`"},
-                  {"name": "model_name", "expression": "`model_name`"},
-                  {"name": "model_version", "expression": "`model_version`"},
-                  {"name": "total_eligible_rows", "expression": "`total_eligible_rows`"},
-                  {"name": "recommended_rows", "expression": "`recommended_rows`"},
-                  {"name": "holdout_rows", "expression": "`holdout_rows`"},
-                  {"name": "suppressed_rows", "expression": "`suppressed_rows`"},
-                  {"name": "mean_churn_probability", "expression": "`mean_churn_probability`"}
-                ],
-                "disaggregated": true
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_run_history",
+                  "fields": [
+                    {
+                      "name": "scoring_run_id",
+                      "expression": "`scoring_run_id`"
+                    },
+                    {
+                      "name": "as_of_date",
+                      "expression": "`as_of_date`"
+                    },
+                    {
+                      "name": "model_name",
+                      "expression": "`model_name`"
+                    },
+                    {
+                      "name": "model_version",
+                      "expression": "`model_version`"
+                    },
+                    {
+                      "name": "total_eligible_rows",
+                      "expression": "`total_eligible_rows`"
+                    },
+                    {
+                      "name": "recommended_rows",
+                      "expression": "`recommended_rows`"
+                    },
+                    {
+                      "name": "holdout_rows",
+                      "expression": "`holdout_rows`"
+                    },
+                    {
+                      "name": "suppressed_rows",
+                      "expression": "`suppressed_rows`"
+                    },
+                    {
+                      "name": "mean_churn_probability",
+                      "expression": "`mean_churn_probability`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
               }
-            }],
+            ],
             "spec": {
-              "version": 1,
+              "version": 2,
               "widgetType": "table",
+              "frame": {
+                "title": "Runs",
+                "showTitle": true
+              },
+              "rowsPerPage": 25,
               "encodings": {
                 "columns": [
-                  {"fieldName": "scoring_run_id", "displayName": "scoring_run_id", "type": "string", "displayAs": "string", "visible": true, "order": 0, "title": "Run", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "left", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": true, "preserveWhitespace": false},
-                  {"fieldName": "as_of_date", "displayName": "as_of_date", "type": "datetime", "displayAs": "datetime", "dateTimeFormat": "YYYY-MM-DD HH:mm", "visible": true, "order": 1, "title": "As-of", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "right", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "model_name", "displayName": "model_name", "type": "string", "displayAs": "string", "visible": true, "order": 2, "title": "Model", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "left", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "model_version", "displayName": "model_version", "type": "string", "displayAs": "string", "visible": true, "order": 3, "title": "Version", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "left", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "total_eligible_rows", "displayName": "total_eligible_rows", "type": "integer", "displayAs": "number", "numberFormat": "0,0", "visible": true, "order": 4, "title": "Eligible", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "right", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "recommended_rows", "displayName": "recommended_rows", "type": "integer", "displayAs": "number", "numberFormat": "0,0", "visible": true, "order": 5, "title": "Recommended", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "right", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "holdout_rows", "displayName": "holdout_rows", "type": "integer", "displayAs": "number", "numberFormat": "0,0", "visible": true, "order": 6, "title": "Holdout", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "right", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "suppressed_rows", "displayName": "suppressed_rows", "type": "integer", "displayAs": "number", "numberFormat": "0,0", "visible": true, "order": 7, "title": "Suppressed", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "right", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false},
-                  {"fieldName": "mean_churn_probability", "displayName": "mean_churn_probability", "type": "float", "displayAs": "number", "numberFormat": "0.000", "visible": true, "order": 8, "title": "Mean churn prob", "booleanValues": ["false", "true"], "imageUrlTemplate": "{{ @ }}", "imageTitleTemplate": "{{ @ }}", "imageWidth": "", "imageHeight": "", "linkUrlTemplate": "{{ @ }}", "linkTextTemplate": "{{ @ }}", "linkTitleTemplate": "{{ @ }}", "linkOpenInNewTab": true, "cellFormat": {"wrapText": false}, "alignContent": "right", "allowHTML": false, "highlightLinks": false, "useMonospaceFont": false, "preserveWhitespace": false}
+                  {
+                    "fieldName": "scoring_run_id",
+                    "displayName": "scoring_run_id"
+                  },
+                  {
+                    "fieldName": "as_of_date",
+                    "displayName": "as_of_date"
+                  },
+                  {
+                    "fieldName": "model_name",
+                    "displayName": "model_name"
+                  },
+                  {
+                    "fieldName": "model_version",
+                    "displayName": "model_version"
+                  },
+                  {
+                    "fieldName": "total_eligible_rows",
+                    "displayName": "total_eligible_rows"
+                  },
+                  {
+                    "fieldName": "recommended_rows",
+                    "displayName": "recommended_rows"
+                  },
+                  {
+                    "fieldName": "holdout_rows",
+                    "displayName": "holdout_rows"
+                  },
+                  {
+                    "fieldName": "suppressed_rows",
+                    "displayName": "suppressed_rows"
+                  },
+                  {
+                    "fieldName": "mean_churn_probability",
+                    "displayName": "mean_churn_probability"
+                  }
                 ]
-              },
-              "invisibleColumns": [],
-              "allowHTMLByDefault": false,
-              "itemsPerPage": 25,
-              "paginationSize": "default",
-              "condensed": true,
-              "withRowNumber": false,
-              "frame": {"showTitle": true, "title": "Scoring run history"}
+              }
             }
           },
-          "position": {"x": 0, "y": 0, "width": 8, "height": 8}
+          "position": {
+            "x": 0,
+            "y": 53,
+            "width": 12,
+            "height": 5
+          }
+        },
+        {
+          "widget": {
+            "name": "h5_profile",
+            "textbox_spec": "## Customer profile \u2014 pick an Entity below to populate this section",
+            "spec": {
+              "version": 1,
+              "widgetType": "text-box",
+              "encodings": {},
+              "frame": {
+                "showTitle": false
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 38,
+            "width": 12,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "flt_entity",
+            "queries": [
+              {
+                "name": "vq_flt_entity",
+                "query": {
+                  "datasetName": "ds_filter_entities",
+                  "fields": [
+                    {
+                      "name": "entity_id",
+                      "expression": "`entity_id`"
+                    },
+                    {
+                      "name": "entity_id_associativity",
+                      "expression": "COUNT_IF(`associative_filter_predicate_group`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "pq_flt_entity",
+                "query": {
+                  "datasetName": "ds_account_detail",
+                  "parameters": [
+                    {
+                      "name": "selected_entity",
+                      "keyword": "selected_entity"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-single-select",
+              "frame": {
+                "title": "Entity",
+                "showTitle": true
+              },
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "entity_id",
+                    "queryName": "vq_flt_entity"
+                  },
+                  {
+                    "parameterName": "selected_entity",
+                    "queryName": "pq_flt_entity"
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 39,
+            "width": 12,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "c_entity",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_account_detail",
+                  "fields": [
+                    {
+                      "name": "entity_id",
+                      "expression": "`entity_id`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "entity_id",
+                  "rowNumber": 1,
+                  "displayName": "Entity"
+                }
+              },
+              "frame": {
+                "title": "Entity",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 40,
+            "width": 3,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "c_churn",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_account_detail",
+                  "fields": [
+                    {
+                      "name": "churn_probability",
+                      "expression": "`churn_probability`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "churn_probability",
+                  "rowNumber": 1,
+                  "displayName": "Churn probability",
+                  "format": {
+                    "type": "number",
+                    "abbreviation": "none",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 3
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "title": "Churn probability",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 40,
+            "width": 3,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "c_value",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_account_detail",
+                  "fields": [
+                    {
+                      "name": "value_at_risk",
+                      "expression": "`value_at_risk`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "value_at_risk",
+                  "rowNumber": 1,
+                  "displayName": "Value at risk",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "USD",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "title": "Value at risk",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 40,
+            "width": 3,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "c_tier",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_account_detail",
+                  "fields": [
+                    {
+                      "name": "risk_tier",
+                      "expression": "`risk_tier`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "risk_tier",
+                  "rowNumber": 1,
+                  "displayName": "Risk tier"
+                }
+              },
+              "frame": {
+                "title": "Risk tier",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 9,
+            "y": 40,
+            "width": 3,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "c_rank",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_account_detail",
+                  "fields": [
+                    {
+                      "name": "policy_rank_among_eligible",
+                      "expression": "`policy_rank_among_eligible`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "policy_rank_among_eligible",
+                  "rowNumber": 1,
+                  "displayName": "Policy rank",
+                  "format": {
+                    "type": "number",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "title": "Policy rank",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 42,
+            "width": 3,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "c_elig_count",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_account_detail",
+                  "fields": [
+                    {
+                      "name": "eligible_playbook_count",
+                      "expression": "`eligible_playbook_count`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "eligible_playbook_count",
+                  "rowNumber": 1,
+                  "displayName": "# eligible plays",
+                  "format": {
+                    "type": "number",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "title": "# eligible plays",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 42,
+            "width": 3,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "c_recommended",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_account_detail",
+                  "fields": [
+                    {
+                      "name": "recommended",
+                      "expression": "`recommended`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "recommended",
+                  "rowNumber": 1,
+                  "displayName": "Recommended"
+                }
+              },
+              "frame": {
+                "title": "Recommended",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 42,
+            "width": 3,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "c_holdout",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_account_detail",
+                  "fields": [
+                    {
+                      "name": "is_holdout",
+                      "expression": "`is_holdout`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "is_holdout",
+                  "rowNumber": 1,
+                  "displayName": "Holdout"
+                }
+              },
+              "frame": {
+                "title": "Holdout",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 9,
+            "y": 42,
+            "width": 3,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "c_playbook",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_account_detail",
+                  "fields": [
+                    {
+                      "name": "playbook_name",
+                      "expression": "`playbook_name`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "playbook_name",
+                  "rowNumber": 1,
+                  "displayName": "Top-ranked playbook"
+                }
+              },
+              "frame": {
+                "title": "Top-ranked playbook",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 44,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "c_archetype",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_account_detail",
+                  "fields": [
+                    {
+                      "name": "archetype_name",
+                      "expression": "`archetype_name`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "archetype_name",
+                  "rowNumber": 1,
+                  "displayName": "Archetype"
+                }
+              },
+              "frame": {
+                "title": "Archetype",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 44,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "c_expected_loss",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_account_detail",
+                  "fields": [
+                    {
+                      "name": "expected_loss",
+                      "expression": "`expected_loss`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "expected_loss",
+                  "rowNumber": 1,
+                  "displayName": "Expected loss",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "USD",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "title": "Expected loss",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 46,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "c_uplift",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_account_detail",
+                  "fields": [
+                    {
+                      "name": "expected_uplift_pct",
+                      "expression": "`expected_uplift_pct`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "expected_uplift_pct",
+                  "rowNumber": 1,
+                  "displayName": "Expected uplift (%)",
+                  "format": {
+                    "type": "number",
+                    "abbreviation": "none",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "title": "Expected uplift (%)",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 46,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "w_account_details_list",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_account_narrative",
+                  "fields": [
+                    {
+                      "name": "label",
+                      "expression": "`label`"
+                    },
+                    {
+                      "name": "content",
+                      "expression": "`content`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "frame": {
+                "title": "Customer profile",
+                "showTitle": true
+              },
+              "rowsPerPage": 20,
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "label",
+                    "displayName": "label"
+                  },
+                  {
+                    "fieldName": "content",
+                    "displayName": "content"
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 48,
+            "width": 12,
+            "height": 12
+          }
         }
       ]
     }
-  ]
+  ],
+  "uiSettings": {
+    "theme": {
+      "widgetHeaderAlignment": "ALIGNMENT_UNSPECIFIED"
+    },
+    "applyModeEnabled": false
+  }
 }

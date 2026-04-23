@@ -1,0 +1,449 @@
+/* ==========================================================================
+   Customer Retention — pastel editorial theme
+   Progressive-disclosure UI with a blue/yellow/green pastel palette.
+   ========================================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400;1,9..144,500&family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  /* Paper & ink --------------------------------------------------------- */
+  --paper:       #faf9f4;
+  --paper-deep:  #f3f1e8;
+  --paper-edge:  #ece9dc;
+  --line:        #e0ddce;
+  --line-soft:   #eeebdd;
+
+  --ink:         #1b2230;
+  --ink-2:       #3a4352;
+  --ink-soft:    #5b6574;
+  --muted:       #98a0ac;
+  --whisper:     #c4c9d0;
+
+  /* Blues — brand + high tier ------------------------------------------- */
+  --blue-50:     #eef5fb;
+  --blue-100:    #dbe8f2;
+  --blue-200:    #b6d0e4;
+  --blue-300:    #8bb5d3;
+  --blue-500:    #4b7ea5;
+  --blue-700:    #234b70;
+
+  /* Yellows — medium tier / accents ------------------------------------- */
+  --yellow-50:   #fffaea;
+  --yellow-100:  #fbf1c8;
+  --yellow-200:  #f6e299;
+  --yellow-400:  #e8c259;
+  --yellow-600:  #9d7b1d;
+  --yellow-800:  #614a0e;
+
+  /* Greens — low tier / safe -------------------------------------------- */
+  --green-50:    #eff7f1;
+  --green-100:   #dceee1;
+  --green-200:   #b9ddc0;
+  --green-400:   #6bac7a;
+  --green-600:   #3d7f4f;
+  --green-800:   #1e4d2d;
+
+  /* Typography ---------------------------------------------------------- */
+  --font-serif: 'Fraunces', 'Iowan Old Style', Georgia, serif;
+  --font-sans:  'Geist', -apple-system, system-ui, sans-serif;
+  --font-mono:  'JetBrains Mono', ui-monospace, Menlo, monospace;
+}
+
+/* --------------------------------------------------------------------------
+   Streamlit chrome teardown
+   -------------------------------------------------------------------------- */
+#MainMenu,
+header[data-testid="stHeader"],
+footer,
+.stDeployButton,
+[data-testid="stToolbar"] { display: none !important; }
+
+.stApp {
+  background: var(--paper);
+  background-image:
+    radial-gradient(ellipse 70% 40% at 85% 0%, var(--yellow-50) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 60% at 0% 100%, var(--blue-50) 0%, transparent 60%);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-feature-settings: "ss01" 1, "cv11" 1, "cv03" 1, "cv06" 1;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.block-container {
+  max-width: 1120px !important;
+  padding-top: 2rem !important;
+  padding-bottom: 8rem !important;
+  padding-left: 2rem !important;
+  padding-right: 2rem !important;
+}
+
+/* Kill section label gaps Streamlit injects */
+.element-container { margin-bottom: 0 !important; }
+hr, [data-testid="stHorizontalBlock"] + div { border: none; }
+
+/* --------------------------------------------------------------------------
+   Masthead
+   -------------------------------------------------------------------------- */
+.masthead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 2rem;
+  padding: 0.5rem 0 1.5rem 0;
+  margin-bottom: 2.5rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.masthead-brand {
+  display: flex;
+  align-items: baseline;
+  gap: 0.9rem;
+}
+
+.brand-mark {
+  display: inline-block;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: var(--yellow-400);
+  box-shadow: 0 0 0 4px var(--yellow-100), 0 0 0 5px var(--yellow-200);
+  transform: translateY(1px);
+  flex-shrink: 0;
+}
+
+.brand-title {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-weight: 400;
+  font-size: 1.45rem;
+  letter-spacing: -0.015em;
+  color: var(--ink);
+  font-variation-settings: "opsz" 48;
+}
+
+.brand-sub {
+  font-family: var(--font-sans);
+  font-size: 0.7rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding-left: 0.8rem;
+  margin-left: 0.2rem;
+  border-left: 1px solid var(--line);
+  font-weight: 500;
+}
+
+.masthead-trail {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.crumb {
+  font-size: 0.78rem;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  padding: 0.22rem 0.7rem;
+  border-radius: 999px;
+  color: var(--ink-2);
+  background: var(--paper-deep);
+  border: 1px solid var(--paper-edge);
+  transition: all 0.15s ease;
+}
+.crumb-portfolio { background: transparent; border-color: transparent; color: var(--muted); font-weight: 500; }
+.crumb-playbook  { background: var(--blue-100);   color: var(--blue-700);   border-color: var(--blue-200); }
+.crumb-archetype { background: var(--yellow-100); color: var(--yellow-800); border-color: var(--yellow-200); }
+.crumb-entity    { background: var(--green-100);  color: var(--green-800);  border-color: var(--green-200); font-family: var(--font-mono); font-size: 0.72rem; font-weight: 500; letter-spacing: 0.02em; }
+
+.crumb-sep {
+  color: var(--whisper);
+  font-size: 0.9rem;
+  line-height: 1;
+  margin: 0 -0.1rem;
+  user-select: none;
+}
+
+/* --------------------------------------------------------------------------
+   Level sections
+   -------------------------------------------------------------------------- */
+.level {
+  margin: 4.5rem 0 1.5rem 0;
+  padding-top: 2.5rem;
+  position: relative;
+}
+.level:first-of-type { margin-top: 0.5rem; padding-top: 0; }
+
+/* Subtle separator between levels */
+.level:not(:first-of-type)::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 40px;
+  height: 1px;
+  background: var(--ink-soft);
+}
+
+.level-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 500;
+  margin-bottom: 0.9rem;
+}
+.level-eyebrow .dot {
+  display: inline-block;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  margin-right: 0.5rem;
+  transform: translateY(-1px);
+  vertical-align: middle;
+}
+.level-1 .level-eyebrow .dot { background: var(--ink); box-shadow: 0 0 0 3px var(--paper-deep); }
+.level-2 .level-eyebrow .dot { background: var(--blue-500); box-shadow: 0 0 0 3px var(--blue-100); }
+.level-3 .level-eyebrow .dot { background: var(--yellow-400); box-shadow: 0 0 0 3px var(--yellow-100); }
+.level-4 .level-eyebrow .dot { background: var(--green-400); box-shadow: 0 0 0 3px var(--green-100); }
+
+.level-title {
+  font-family: var(--font-serif);
+  font-weight: 400;
+  line-height: 1.04;
+  letter-spacing: -0.028em;
+  color: var(--ink);
+  margin: 0 0 1rem 0;
+  font-variation-settings: "opsz" 144;
+}
+.level-1 .level-title {
+  font-size: clamp(2.6rem, 5vw, 3.6rem);
+  font-style: italic;
+  font-weight: 400;
+  font-variation-settings: "opsz" 144;
+}
+.level-1 .level-title em {
+  font-style: normal;
+  color: var(--blue-700);
+  background: linear-gradient(180deg, transparent 60%, var(--yellow-100) 60%, var(--yellow-100) 92%, transparent 92%);
+  padding: 0 0.08em;
+}
+.level-2 .level-title,
+.level-3 .level-title,
+.level-4 .level-title {
+  font-size: clamp(1.7rem, 3vw, 2.2rem);
+  font-style: normal;
+  font-weight: 500;
+  font-variation-settings: "opsz" 72;
+}
+.level-4 .level-title {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 1.35rem;
+  letter-spacing: 0.01em;
+  color: var(--green-800);
+}
+
+.level-lead {
+  font-size: 1.02rem;
+  line-height: 1.65;
+  color: var(--ink-soft);
+  max-width: 62ch;
+  margin: 0 0 2.25rem 0;
+  font-weight: 400;
+}
+
+/* --------------------------------------------------------------------------
+   Stat row (portfolio totals)
+   -------------------------------------------------------------------------- */
+.stat-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0;
+  margin: 0 0 3rem 0;
+  padding: 2rem 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  position: relative;
+}
+.stat-row::before {
+  content: "figures";
+  position: absolute;
+  top: -0.55rem;
+  left: 0;
+  background: var(--paper);
+  padding: 0 0.6rem 0 0;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--whisper);
+}
+
+.stat {
+  padding: 0 1.8rem;
+  border-right: 1px dashed var(--paper-edge);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 0.3rem;
+}
+.stat:first-child { padding-left: 0; }
+.stat:last-child  { padding-right: 0; border-right: none; }
+
+.stat-label {
+  font-family: var(--font-sans);
+  font-size: 0.74rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.stat-value {
+  font-family: var(--font-serif);
+  font-weight: 400;
+  font-size: clamp(2rem, 3.5vw, 2.6rem);
+  line-height: 1;
+  color: var(--ink);
+  letter-spacing: -0.028em;
+  font-variation-settings: "opsz" 144;
+  display: flex;
+  align-items: baseline;
+  gap: 0.3rem;
+}
+.stat-value em {
+  font-style: italic;
+  color: var(--blue-500);
+  font-weight: 500;
+}
+.stat-unit {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--muted);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+/* --------------------------------------------------------------------------
+   Hint / aside
+   -------------------------------------------------------------------------- */
+.hint {
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+  margin: 1rem 0 0 0;
+  font-style: italic;
+  padding-left: 1.2rem;
+  border-left: 2px solid var(--yellow-200);
+  font-family: var(--font-serif);
+  font-variation-settings: "opsz" 14;
+}
+.hint strong {
+  color: var(--ink-2);
+  font-style: normal;
+  font-weight: 500;
+  font-family: var(--font-sans);
+}
+
+/* --------------------------------------------------------------------------
+   Tables (Streamlit stDataFrame) — soft editorial
+   -------------------------------------------------------------------------- */
+[data-testid="stDataFrame"] {
+  border: 1px solid var(--line) !important;
+  border-radius: 10px !important;
+  overflow: hidden !important;
+  background: var(--paper) !important;
+  box-shadow: 0 1px 0 var(--paper-edge);
+}
+
+[data-testid="stDataFrame"] [data-baseweb="table"] {
+  background: var(--paper) !important;
+}
+
+[data-testid="stDataFrame"] [role="columnheader"] {
+  background: var(--paper-deep) !important;
+  border-bottom: 1px solid var(--line) !important;
+  font-family: var(--font-sans) !important;
+  font-weight: 500 !important;
+  font-size: 0.72rem !important;
+  letter-spacing: 0.06em !important;
+  color: var(--ink-soft) !important;
+  text-transform: uppercase;
+  padding: 0.75rem 0.85rem !important;
+}
+
+[data-testid="stDataFrame"] [role="gridcell"] {
+  font-family: var(--font-sans) !important;
+  font-size: 0.88rem !important;
+  color: var(--ink) !important;
+  padding: 0.65rem 0.85rem !important;
+  border-bottom: 1px solid var(--line-soft) !important;
+}
+
+/* --------------------------------------------------------------------------
+   Buttons (soft secondary)
+   -------------------------------------------------------------------------- */
+.stButton > button {
+  background: var(--paper) !important;
+  border: 1px solid var(--line) !important;
+  color: var(--ink-soft) !important;
+  font-family: var(--font-sans) !important;
+  font-size: 0.78rem !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.02em !important;
+  border-radius: 6px !important;
+  padding: 0.35rem 1rem !important;
+  transition: all 0.15s ease !important;
+  box-shadow: none !important;
+}
+.stButton > button:hover {
+  background: var(--blue-50) !important;
+  border-color: var(--blue-200) !important;
+  color: var(--blue-700) !important;
+}
+.stButton > button:focus:not(:active) {
+  border-color: var(--blue-300) !important;
+  box-shadow: 0 0 0 3px var(--blue-100) !important;
+}
+
+/* --------------------------------------------------------------------------
+   Plotly containers — strip default chrome
+   -------------------------------------------------------------------------- */
+.js-plotly-plot, .plot-container { background: transparent !important; }
+.js-plotly-plot .plotly .modebar { display: none !important; }
+
+/* Chart caption */
+.chart-caption {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--muted);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin: 0.6rem 0 0 0;
+  font-weight: 500;
+}
+.chart-caption .accent-green  { color: var(--green-600); }
+.chart-caption .accent-yellow { color: var(--yellow-600); }
+.chart-caption .accent-blue   { color: var(--blue-500); }
+
+/* --------------------------------------------------------------------------
+   Streamlit alerts — pastel override
+   -------------------------------------------------------------------------- */
+[data-testid="stAlert"] {
+  background: var(--yellow-50) !important;
+  border: 1px solid var(--yellow-200) !important;
+  border-radius: 8px !important;
+  color: var(--yellow-800) !important;
+  font-family: var(--font-sans) !important;
+  font-size: 0.9rem !important;
+}
+
+/* --------------------------------------------------------------------------
+   HTML card renderer — Streamlit st.html iframe wrapper
+   -------------------------------------------------------------------------- */
+.element-container iframe {
+  border: none !important;
+  background: transparent !important;
+}

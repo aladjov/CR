@@ -1,0 +1,347 @@
+/* ==========================================================================
+   Customer profile card — pastel editorial
+   Pairs with the app-level theme.css (same font imports and palette tokens).
+   Styles live on their own so the template can be embedded via st.html and
+   still look coherent inside its own iframe.
+   ========================================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  --paper:       #faf9f4;
+  --paper-deep:  #f3f1e8;
+  --line:        #e0ddce;
+  --line-soft:   #eeebdd;
+  --ink:         #1b2230;
+  --ink-2:       #3a4352;
+  --ink-soft:    #5b6574;
+  --muted:       #98a0ac;
+  --whisper:     #c4c9d0;
+
+  --blue-50: #eef5fb; --blue-100: #dbe8f2; --blue-200: #b6d0e4;
+  --blue-300: #8bb5d3; --blue-500: #4b7ea5; --blue-700: #234b70;
+
+  --yellow-50: #fffaea; --yellow-100: #fbf1c8; --yellow-200: #f6e299;
+  --yellow-400: #e8c259; --yellow-600: #9d7b1d; --yellow-800: #614a0e;
+
+  --green-50: #eff7f1; --green-100: #dceee1; --green-200: #b9ddc0;
+  --green-400: #6bac7a; --green-600: #3d7f4f; --green-800: #1e4d2d;
+
+  --font-serif: 'Fraunces', 'Iowan Old Style', Georgia, serif;
+  --font-sans:  'Geist', -apple-system, system-ui, sans-serif;
+  --font-mono:  'JetBrains Mono', ui-monospace, Menlo, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+}
+
+/* --------------------------------------------------------------------------
+   Card shell
+   -------------------------------------------------------------------------- */
+.cr-card {
+  font-family: var(--font-sans);
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow:
+    0 1px 0 var(--line-soft),
+    0 8px 24px -16px rgba(27, 34, 48, 0.12);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "ss01" 1, "cv11" 1;
+}
+
+/* --------------------------------------------------------------------------
+   Hero — tier-coloured wash, not a gradient slab
+   -------------------------------------------------------------------------- */
+.cr-hero {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2rem;
+  padding: 2rem 2.25rem 1.75rem 2.25rem;
+  position: relative;
+  overflow: hidden;
+}
+.cr-hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0.85;
+  z-index: 0;
+  pointer-events: none;
+}
+.cr-tier-risk-high   .cr-hero::before { background: linear-gradient(135deg, var(--blue-50) 0%, var(--blue-100) 60%, var(--paper) 100%); }
+.cr-tier-risk-medium .cr-hero::before { background: linear-gradient(135deg, var(--yellow-50) 0%, var(--yellow-100) 60%, var(--paper) 100%); }
+.cr-tier-risk-low    .cr-hero::before { background: linear-gradient(135deg, var(--green-50) 0%, var(--green-100) 60%, var(--paper) 100%); }
+.cr-tier-risk-unknown .cr-hero::before { background: linear-gradient(135deg, var(--paper-deep) 0%, var(--paper) 100%); }
+
+.cr-hero > * { position: relative; z-index: 1; }
+
+.cr-hero-eyebrow {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 0.5rem;
+}
+.cr-hero-entity {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 1.8rem;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+  margin: 0 0 0.8rem 0;
+  line-height: 1;
+}
+.cr-hero-tier {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--font-sans);
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--ink-2);
+  padding: 0.3rem 0.8rem;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+}
+.cr-dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px rgba(255,255,255,0.9);
+}
+.cr-tier-risk-high   .cr-dot { background: var(--blue-500); }
+.cr-tier-risk-medium .cr-dot { background: var(--yellow-400); }
+.cr-tier-risk-low    .cr-dot { background: var(--green-400); }
+.cr-tier-risk-unknown .cr-dot { background: var(--muted); }
+
+.cr-hero-prob {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  text-align: right;
+}
+.cr-prob-value {
+  font-family: var(--font-serif);
+  font-weight: 400;
+  font-style: italic;
+  font-size: 3.2rem;
+  line-height: 0.9;
+  letter-spacing: -0.035em;
+  color: var(--ink);
+  font-variation-settings: "opsz" 144;
+}
+.cr-tier-risk-high   .cr-prob-value { color: var(--blue-700); }
+.cr-tier-risk-medium .cr-prob-value { color: var(--yellow-800); }
+.cr-tier-risk-low    .cr-prob-value { color: var(--green-800); }
+
+.cr-prob-label {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-top: 0.6rem;
+  font-weight: 500;
+}
+
+/* --------------------------------------------------------------------------
+   KPI strip — four tiles, divider rule
+   -------------------------------------------------------------------------- */
+.cr-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  padding: 1.3rem 2.25rem;
+  background: var(--paper-deep);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.cr-kpi {
+  padding: 0 1.25rem;
+  border-right: 1px dashed var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.cr-kpi:first-child { padding-left: 0; }
+.cr-kpi:last-child  { padding-right: 0; border-right: none; }
+.cr-kpi-label {
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.cr-kpi-value {
+  font-family: var(--font-serif);
+  font-weight: 400;
+  font-size: 1.45rem;
+  color: var(--ink);
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  font-variation-settings: "opsz" 96;
+}
+.cr-kpi-emph .cr-kpi-value {
+  color: var(--blue-700);
+  font-style: italic;
+  font-weight: 500;
+}
+
+/* --------------------------------------------------------------------------
+   Callout — recommendation / holdout
+   -------------------------------------------------------------------------- */
+.cr-callout {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  margin: 1.5rem 2.25rem 0 2.25rem;
+  padding: 1rem 1.2rem;
+  border-radius: 10px;
+  font-family: var(--font-sans);
+}
+.cr-callout-ok   { background: var(--green-50); border: 1px solid var(--green-200); color: var(--green-800); }
+.cr-callout-warn { background: var(--yellow-50); border: 1px solid var(--yellow-200); color: var(--yellow-800); }
+
+.cr-callout-glyph {
+  flex-shrink: 0;
+  width: 34px; height: 34px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.1rem;
+  font-weight: 500;
+}
+.cr-callout-ok .cr-callout-glyph   { background: var(--green-100);  color: var(--green-600); }
+.cr-callout-warn .cr-callout-glyph { background: var(--yellow-100); color: var(--yellow-600); }
+
+.cr-callout-body { display: flex; flex-direction: column; gap: 0.15rem; }
+.cr-callout-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  opacity: 0.7;
+  font-weight: 500;
+}
+.cr-callout-title {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: 0.98rem;
+}
+.cr-callout-meta {
+  font-size: 0.82rem;
+  opacity: 0.85;
+  font-weight: 400;
+}
+
+/* --------------------------------------------------------------------------
+   Chapters — narrative sections
+   -------------------------------------------------------------------------- */
+.cr-chapter {
+  padding: 2rem 2.25rem 1.75rem 2.25rem;
+  border-top: 1px solid var(--line);
+}
+.cr-chapter-head {
+  margin-bottom: 0.9rem;
+}
+.cr-chapter-eyebrow {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 500;
+  margin-bottom: 0.4rem;
+}
+.cr-chapter-title {
+  font-family: var(--font-serif);
+  font-weight: 500;
+  font-size: 1.4rem;
+  line-height: 1.2;
+  color: var(--ink);
+  margin: 0;
+  letter-spacing: -0.02em;
+  font-variation-settings: "opsz" 72;
+}
+.cr-chapter-lead {
+  font-size: 0.95rem;
+  color: var(--ink-soft);
+  max-width: 64ch;
+  margin: 0.4rem 0 1rem 0;
+  line-height: 1.55;
+}
+.cr-chapter-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1.3rem;
+}
+
+.cr-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.cr-block-label {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.cr-prose {
+  font-size: 0.94rem;
+  line-height: 1.65;
+  color: var(--ink-2);
+  padding: 0.8rem 1rem;
+  background: var(--paper-deep);
+  border-left: 3px solid var(--line);
+  border-radius: 4px;
+  white-space: pre-wrap;
+}
+
+.cr-mono {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.55;
+  color: var(--ink-soft);
+  background: #f6f4ea;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.85rem 1rem;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  margin: 0;
+}
+
+/* Variant colourings — keep the card visually tied to its risk tier */
+.cr-tier-risk-high   .cr-prose { border-left-color: var(--blue-200); }
+.cr-tier-risk-medium .cr-prose { border-left-color: var(--yellow-200); }
+.cr-tier-risk-low    .cr-prose { border-left-color: var(--green-200); }
+
+/* --------------------------------------------------------------------------
+   Small screens
+   -------------------------------------------------------------------------- */
+@media (max-width: 720px) {
+  .cr-hero { grid-template-columns: 1fr; }
+  .cr-hero-prob { align-items: flex-start; text-align: left; }
+  .cr-kpis { grid-template-columns: repeat(2, 1fr); row-gap: 1rem; }
+  .cr-kpi { border-right: none; padding: 0; }
+  .cr-kpi:nth-child(odd) { border-right: 1px dashed var(--line); padding-right: 1rem; }
+}

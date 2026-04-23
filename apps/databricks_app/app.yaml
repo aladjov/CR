@@ -1,0 +1,20 @@
+name: customer_retention_app
+display_name: Customer Retention — CSM Triage
+description: Progressive-disclosure customer retention dashboard, driven by the causal-track Unity Catalog views.
+command: ["streamlit", "run", "app.py", "--server.port", "8000", "--server.address", "0.0.0.0"]
+
+env:
+  - name: CR_CATALOG
+    value: churnkit
+  - name: CR_SCHEMA
+    value: analysis
+  - name: CR_WAREHOUSE_ID
+    # Override at deploy time: `databricks apps update ... --env CR_WAREHOUSE_ID=<id>`
+    # Point at any SQL Warehouse that can read v_portfolio_risk_matrix, v_playbook_archetype_rollup,
+    # v_eligible_all_playbooks, v_account_explanation in CR_CATALOG.CR_SCHEMA.
+    value: ""
+  - name: CR_PROFILE_TEMPLATE_PATH
+    # Optional: path to a YAML template that shapes the customer-profile panel.
+    # Example: /Volumes/churnkit/analysis/app_config/customer_profile_template.yaml
+    # When empty the profile falls back to a pivoted row of v_account_explanation.
+    value: ""

@@ -1,0 +1,80 @@
+---
+# Example custom profile template — copy to a Unity Catalog Volume, edit,
+# and point CR_PROFILE_TEMPLATE_PATH at the file to activate.
+#
+# The `data:` block declares tables to join against the selected entity.
+# Every top-level key becomes a nested variable in the template
+# (so `{{account.mrr}}` pulls from the `account` data source).
+data:
+  account:
+    source: gold_features_cust_emai_aggr__26e8271     # your gold table
+    join_key: account_id
+  latest_email:
+    source: bronze_event_email_events
+    join_key: account_id
+    order_by: event_timestamp DESC
+    limit: 1
+
+# Template-specific CSS (appended to the default stylesheet).
+css: |
+  .mrr { color: #047857; font-weight: 700; font-size: 1.4rem; }
+  .last-seen { color: #6b7280; font-style: italic; }
+---
+<div class="cr-card">
+  <header class="cr-hero cr-tier-{{risk_tier_class risk_tier}}">
+    <div class="cr-hero-id">
+      <span class="cr-hero-label">Account</span>
+      <h1>{{entity_id}}</h1>
+    </div>
+    <div class="cr-hero-meta">
+      <div class="cr-pill">{{risk_tier}} risk</div>
+      <div class="cr-hero-prob">{{fmt_pct churn_probability}}</div>
+      <div class="cr-hero-prob-label">churn probability</div>
+    </div>
+  </header>
+
+  <section class="cr-kpis">
+    <div class="cr-kpi"><label>MRR</label><b class="mrr">{{fmt_currency account.mrr}}</b></div>
+    <div class="cr-kpi"><label>Seats</label><b>{{fmt_int account.seat_count}}</b></div>
+    <div class="cr-kpi"><label>Contract start</label><b>{{fmt_date account.contract_start}}</b></div>
+    <div class="cr-kpi"><label>Last email open</label><b class="last-seen">{{fmt_datetime latest_email.event_timestamp}}</b></div>
+  </section>
+
+  {{#if recommended}}
+    <div class="cr-callout cr-callout-ok">
+      ✅ Recommended playbook: <b>{{playbook_name}}</b>
+      {{#if expected_uplift_pct}} — expected uplift <b>{{fmt_pct expected_uplift_pct}}</b>{{/if}}
+    </div>
+  {{/if}}
+
+  <section class="cr-section">
+    <h2>Archetype &mdash; {{archetype_name}}</h2>
+    <p class="cr-desc">{{archetype_description}}</p>
+    {{#if archetype_rationale}}
+      <div class="cr-block">
+        <label>Why this cluster exists</label>
+        <div class="cr-text">{{archetype_rationale}}</div>
+      </div>
+    {{/if}}
+    {{#if archetype_feature_thresholds}}
+      <div class="cr-block">
+        <label>Feature thresholds</label>
+        <pre class="cr-mono">{{archetype_feature_thresholds}}</pre>
+      </div>
+    {{/if}}
+  </section>
+
+  <section class="cr-section">
+    <h2>Why this customer matched</h2>
+    {{#if eligibility_evidence}}
+      <div class="cr-block">
+        <label>Evidence</label>
+        <div class="cr-text">{{eligibility_evidence}}</div>
+      </div>
+    {{/if}}
+    <div class="cr-block">
+      <label>Eligibility predicate</label>
+      <pre class="cr-mono">{{eligibility_rules_sql}}</pre>
+    </div>
+  </section>
+</div>

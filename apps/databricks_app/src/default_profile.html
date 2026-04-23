@@ -1,0 +1,111 @@
+---
+# Default customer-profile template.
+# Copy to a Volume, edit, and point CR_PROFILE_TEMPLATE_PATH at it to customize.
+# The `data:` block (empty here) lets you declare additional tables to join
+# against the selected entity so you can reference e.g. {{account.mrr}}.
+data: {}
+---
+<article class="cr-card cr-tier-{{risk_tier_class risk_tier}}">
+  <header class="cr-hero">
+    <div class="cr-hero-id">
+      <span class="cr-hero-eyebrow">Customer</span>
+      <h1 class="cr-hero-entity">{{entity_id}}</h1>
+      <div class="cr-hero-tier">
+        <span class="cr-dot"></span>
+        <span>{{risk_tier}} risk tier</span>
+      </div>
+    </div>
+    <div class="cr-hero-prob">
+      <span class="cr-prob-value">{{fmt_pct churn_probability}}</span>
+      <span class="cr-prob-label">churn probability</span>
+    </div>
+  </header>
+
+  <section class="cr-kpis">
+    <div class="cr-kpi">
+      <span class="cr-kpi-label">Value at risk</span>
+      <span class="cr-kpi-value">{{fmt_currency value_at_risk}}</span>
+    </div>
+    <div class="cr-kpi cr-kpi-emph">
+      <span class="cr-kpi-label">Expected loss</span>
+      <span class="cr-kpi-value">{{fmt_currency expected_loss}}</span>
+    </div>
+    <div class="cr-kpi">
+      <span class="cr-kpi-label">Policy rank</span>
+      <span class="cr-kpi-value">{{fmt_int policy_rank_among_eligible}}</span>
+    </div>
+    <div class="cr-kpi">
+      <span class="cr-kpi-label">Eligible plays</span>
+      <span class="cr-kpi-value">{{fmt_int eligible_playbook_count}}</span>
+    </div>
+  </section>
+
+  {{#if recommended}}
+    <aside class="cr-callout cr-callout-ok">
+      <span class="cr-callout-glyph">✓</span>
+      <div class="cr-callout-body">
+        <span class="cr-callout-eyebrow">Recommended action</span>
+        <span class="cr-callout-title">{{playbook_name}}</span>
+        {{#if expected_uplift_pct}}<span class="cr-callout-meta">Expected uplift · {{fmt_pct expected_uplift_pct}}</span>{{/if}}
+      </div>
+    </aside>
+  {{else}}
+    <aside class="cr-callout cr-callout-warn">
+      <span class="cr-callout-glyph">◎</span>
+      <div class="cr-callout-body">
+        <span class="cr-callout-eyebrow">{{#if is_holdout}}Holdout{{else}}Not recommended{{/if}}</span>
+        <span class="cr-callout-title">{{playbook_name}}</span>
+        <span class="cr-callout-meta">{{#if is_holdout}}Reserved for uplift measurement this cycle{{else}}Top-ranked candidate but below decision threshold{{/if}}</span>
+      </div>
+    </aside>
+  {{/if}}
+
+  <section class="cr-chapter">
+    <header class="cr-chapter-head">
+      <span class="cr-chapter-eyebrow">Archetype</span>
+      <h2 class="cr-chapter-title">{{archetype_name}}</h2>
+    </header>
+    {{#if archetype_description}}<p class="cr-chapter-lead">{{archetype_description}}</p>{{/if}}
+    <div class="cr-chapter-body">
+      {{#if archetype_rationale}}
+        <div class="cr-block">
+          <span class="cr-block-label">Why the cluster exists</span>
+          <div class="cr-prose">{{archetype_rationale}}</div>
+        </div>
+      {{/if}}
+      {{#if archetype_feature_thresholds}}
+        <div class="cr-block">
+          <span class="cr-block-label">Feature thresholds</span>
+          <pre class="cr-mono">{{archetype_feature_thresholds}}</pre>
+        </div>
+      {{/if}}
+    </div>
+  </section>
+
+  <section class="cr-chapter">
+    <header class="cr-chapter-head">
+      <span class="cr-chapter-eyebrow">Match</span>
+      <h2 class="cr-chapter-title">Why this customer qualified</h2>
+    </header>
+    <div class="cr-chapter-body">
+      {{#if eligibility_evidence}}
+        <div class="cr-block">
+          <span class="cr-block-label">Evidence</span>
+          <div class="cr-prose">{{eligibility_evidence}}</div>
+        </div>
+      {{/if}}
+      {{#if eligibility_rules_sql}}
+        <div class="cr-block">
+          <span class="cr-block-label">Eligibility predicate · SQL</span>
+          <pre class="cr-mono">{{eligibility_rules_sql}}</pre>
+        </div>
+      {{/if}}
+      {{#if policy_rationale}}
+        <div class="cr-block">
+          <span class="cr-block-label">Policy rationale</span>
+          <div class="cr-prose">{{policy_rationale}}</div>
+        </div>
+      {{/if}}
+    </div>
+  </section>
+</article>
