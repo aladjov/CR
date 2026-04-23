@@ -255,7 +255,7 @@ class FindingsParser:
         self._build_discovered_landing_configs(config, discovered_events, multi_dataset)
         self._build_bronze_event_configs(config, multi_dataset, source_findings, discovered_events)
         if self._feature_spec is not None:
-            self._reconcile_config_with_spec(config)
+            self._reconcile_config_with_spec(config, recommendations_registry)
         if recommendations_registry:
             self._apply_recommendations_to_config(config, recommendations_registry, multi_dataset, source_findings)
             self._apply_event_recommendations(config, recommendations_registry)
@@ -1353,7 +1353,10 @@ class FindingsParser:
                     name, ", ".join(dropped),
                 )
 
-    def _reconcile_config_with_spec(self, config: "PipelineConfig") -> None:
+    def _reconcile_config_with_spec(
+        self, config: "PipelineConfig",
+        recommendations_registry: Optional["RecommendationRegistry"] = None,
+    ) -> None:
         """Treat ``FeatureSpec.selected_features`` as the authoritative oracle.
 
         NB08 has already selected features from NB01d's full emission, so any
@@ -1362,20 +1365,58 @@ class FindingsParser:
         selected feature from reaching gold is a parity bug. This pass walks
         each ``BronzeEventConfig`` and lifts just the config knobs required to
         produce the selected columns.
+
+        A selected silver composite/ratio/interaction feature transitively
+        depends on its source columns; those sources must also survive any
+        heuristic block. ``effective_required`` expands the spec's selected
+        set with those transitive sources so ``_reconcile_blocked_aggregate_funcs_with_spec``
+        can unblock the aggregation funcs the silver rec needs.
         """
         spec = self._feature_spec
         if spec is None:
             return
+        selected = set(spec.selected_features)
+        transitive = self._transitive_required_from_silver_derived(spec, recommendations_registry)
+        effective_required = selected | transitive
         for event_cfg in config.bronze_event.values():
-            self._reconcile_event_config_with_spec(event_cfg, spec)
+            self._reconcile_event_config_with_spec(
+                event_cfg, spec, effective_required=effective_required,
+            )
+
+    @staticmethod
+    def _transitive_required_from_silver_derived(
+        spec: FeatureSpec,
+        registry: Optional["RecommendationRegistry"],
+    ) -> Set[str]:
+        if registry is None or getattr(registry, "silver", None) is None:
+            return set()
+        selected = set(spec.selected_features)
+        transitive: Set[str] = set()
+        for rec in getattr(registry.silver, "derived_columns", []) or []:
+            target = getattr(rec, "target_column", None)
+            if target is None or target not in selected:
+                continue
+            params = dict(getattr(rec, "parameters", {}) or {})
+            action = getattr(rec, "action", "")
+            if action == "ratio":
+                transitive.update(
+                    c for c in (params.get("numerator", ""), params.get("denominator", "")) if c
+                )
+            elif action == "interaction":
+                transitive.update(c for c in params.get("features", []) or [] if c)
+            elif action == "composite":
+                transitive.update(c for c in params.get("columns", []) or [] if c)
+        return transitive
 
     @staticmethod
     def _reconcile_event_config_with_spec(
         event_cfg: "BronzeEventConfig", spec: FeatureSpec,
+        *, effective_required: Optional[Set[str]] = None,
     ) -> None:
         selected = set(spec.selected_features)
-        FindingsParser._reconcile_aggregation_windows_with_spec(event_cfg, selected)
-        FindingsParser._reconcile_blocked_aggregate_funcs_with_spec(event_cfg, selected)
+        required = selected if effective_required is None else effective_required
+        FindingsParser._reconcile_aggregation_windows_with_spec(event_cfg, required)
+        FindingsParser._reconcile_blocked_aggregate_funcs_with_spec(event_cfg, required)
         FindingsParser._reconcile_lifecycle_with_spec(event_cfg, selected)
         FindingsParser._reconcile_temporal_features_with_spec(event_cfg, selected)
 

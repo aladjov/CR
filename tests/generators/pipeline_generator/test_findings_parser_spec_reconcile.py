@@ -124,6 +124,89 @@ class TestReconcileSparseAggregatePrune:
         FindingsParser._reconcile_event_config_with_spec(event_cfg, spec)
         assert "max" not in event_cfg.aggregation.column_blocked_funcs.get("amount", [])
 
+    def test_silver_composite_source_unblocks_agg_func(self):
+        """FIX SPS-2 — when a selected silver composite / ratio /
+        interaction rec references `{col}_{func}_{window}` as a SOURCE,
+        the same unblock logic must fire even though the source name
+        itself isn't in ``selected_features``. Without this, the sparse-
+        prune guard shadows silver composites' inputs and the whole
+        composite gets filtered out, which the FeatureSpec parity gate
+        then surfaces as a generic parity failure."""
+        from customer_retention.analysis.auto_explorer import RecommendationRegistry
+
+        blocked = {"amount": ["max"]}
+        event_cfg = BronzeEventConfig(
+            source=_event_source(), entity_column="ACCOUNT_ID",
+            time_column="CREATED_DATE", aggregation=self._agg(blocked),
+        )
+        # NB08 picked `service_score` (a composite) but its `amount_max_30d`
+        # source is not itself in the selected set.
+        spec = _build_spec(["service_score"])
+        registry = RecommendationRegistry()
+        registry.init_silver("entity_id")
+        registry.add_silver_composite(
+            "service_score", columns=["amount_max_30d", "amount_sum_30d"],
+            rationale="", source_notebook="05",
+        )
+        transitive = FindingsParser._transitive_required_from_silver_derived(spec, registry)
+        assert "amount_max_30d" in transitive
+
+        FindingsParser._reconcile_event_config_with_spec(
+            event_cfg, spec, effective_required=set(spec.selected_features) | transitive,
+        )
+        assert "max" not in event_cfg.aggregation.column_blocked_funcs.get("amount", [])
+
+    def test_silver_ratio_source_unblocks_agg_func(self):
+        from customer_retention.analysis.auto_explorer import RecommendationRegistry
+
+        blocked = {"duration": ["mean"]}
+        event_cfg = BronzeEventConfig(
+            source=_event_source(), entity_column="ACCOUNT_ID",
+            time_column="CREATED_DATE", aggregation=self._agg(blocked),
+        )
+        spec = _build_spec(["engagement_ratio"])
+        registry = RecommendationRegistry()
+        registry.init_silver("entity_id")
+        registry.add_silver_ratio(
+            "engagement_ratio", numerator="duration_mean_90d",
+            denominator="event_count_all_time",
+            rationale="", source_notebook="05",
+        )
+        transitive = FindingsParser._transitive_required_from_silver_derived(spec, registry)
+        assert "duration_mean_90d" in transitive
+
+        FindingsParser._reconcile_event_config_with_spec(
+            event_cfg, spec, effective_required=set(spec.selected_features) | transitive,
+        )
+        assert "mean" not in event_cfg.aggregation.column_blocked_funcs.get("duration", [])
+
+    def test_silver_rec_whose_target_is_not_selected_leaves_blocks_alone(self):
+        """Only TRANSITIVE dependencies of SELECTED features should unblock.
+        A silver rec whose target NB08 deselected must not unblock funcs
+        for its sources (those features didn't earn their keep)."""
+        from customer_retention.analysis.auto_explorer import RecommendationRegistry
+
+        blocked = {"amount": ["max", "mean"]}
+        event_cfg = BronzeEventConfig(
+            source=_event_source(), entity_column="ACCOUNT_ID",
+            time_column="CREATED_DATE", aggregation=self._agg(blocked),
+        )
+        spec = _build_spec(["something_else_30d"])  # composite NOT selected
+        registry = RecommendationRegistry()
+        registry.init_silver("entity_id")
+        registry.add_silver_composite(
+            "orphan_score", columns=["amount_max_30d"],
+            rationale="", source_notebook="05",
+        )
+        transitive = FindingsParser._transitive_required_from_silver_derived(spec, registry)
+        assert transitive == set()
+        FindingsParser._reconcile_event_config_with_spec(
+            event_cfg, spec, effective_required=set(spec.selected_features) | transitive,
+        )
+        # Original blocks preserved (neither func was touched).
+        remaining = set(event_cfg.aggregation.column_blocked_funcs.get("amount", []))
+        assert remaining == {"max", "mean"}
+
 
 class TestReconcileAggregationWindows:
     """event_count_365d / event_count_all_time failures trace to windows the
