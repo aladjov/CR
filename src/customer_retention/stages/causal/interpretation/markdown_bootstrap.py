@@ -20,9 +20,10 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import TYPE_CHECKING, Iterable, List, Optional
 
-from customer_retention.stages.causal.column_descriptions_writer import ColumnDescriptionRow
+if TYPE_CHECKING:  # pragma: no cover
+    from customer_retention.stages.causal.column_descriptions_writer import ColumnDescriptionRow
 
 _FQN_HEADER_RE = re.compile(r"^([a-z][\w]*\.[a-z][\w]*\.[a-z][\w]*):\s*$")
 _FQN_IN_PROSE_RE = re.compile(r"\b([a-z][\w]*\.[a-z][\w]*\.[a-z][\w]*)\b")
@@ -30,12 +31,12 @@ _COLUMN_PAREN_RE = re.compile(r"^([A-Za-z][\w]*)\s*\(([^)]+)\):\s*(.+)$")
 _COLUMN_DASH_RE = re.compile(r"^([A-Za-z][\w]*):\s*([\w(),\s]+?)\s+[—\-]\s+(.+)$")
 
 
-def parse_table_descriptions_md(path: Path | str) -> List[ColumnDescriptionRow]:
+def parse_table_descriptions_md(path: Path | str) -> List["ColumnDescriptionRow"]:
     """Parse the SPS tables markdown into column-description seed rows."""
     return list(_iter_rows(Path(path).read_text().splitlines()))
 
 
-def _iter_rows(lines: Iterable[str]) -> Iterable[ColumnDescriptionRow]:
+def _iter_rows(lines: Iterable[str]) -> Iterable["ColumnDescriptionRow"]:
     current_fqn: Optional[str] = None
     for raw in lines:
         line = raw.strip()
@@ -50,6 +51,10 @@ def _iter_rows(lines: Iterable[str]) -> Iterable[ColumnDescriptionRow]:
         parsed = _parse_column_line(line)
         if parsed is None:
             continue
+        from customer_retention.stages.causal.column_descriptions_writer import (
+            ColumnDescriptionRow,
+        )
+
         column_name, _dtype, description = parsed
         catalog, schema, table = current_fqn.split(".")
         yield ColumnDescriptionRow(

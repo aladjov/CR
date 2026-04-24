@@ -21,10 +21,11 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Iterable, List, Mapping, Optional
+from typing import TYPE_CHECKING, Iterable, List, Mapping, Optional
 
-from customer_retention.stages.causal.column_descriptions_writer import ColumnDescriptionRow
-from customer_retention.stages.causal.feature_meta_writer import FeatureMetaRow
+if TYPE_CHECKING:  # pragma: no cover
+    from customer_retention.stages.causal.column_descriptions_writer import ColumnDescriptionRow
+    from customer_retention.stages.causal.feature_meta_writer import FeatureMetaRow
 
 _AGG_FUNC_ALIASES = {
     "sum": "sum",
@@ -135,9 +136,11 @@ def build_feature_meta_rows(
     composite_name: str,
     lineages: Iterable[FeatureLineage],
     *,
-    column_descriptions: Optional[Mapping[str, ColumnDescriptionRow]] = None,
-) -> List[FeatureMetaRow]:
+    column_descriptions: Optional[Mapping[str, "ColumnDescriptionRow"]] = None,
+) -> List["FeatureMetaRow"]:
     """Convert lineages into ``FeatureMetaRow``s with rendered phrases."""
+    from customer_retention.stages.causal.feature_meta_writer import FeatureMetaRow
+
     rows: List[FeatureMetaRow] = []
     for lineage in lineages:
         base = FeatureMetaRow(
@@ -158,7 +161,7 @@ def build_feature_meta_rows(
 
 def _resolve_business_name(
     lineage: FeatureLineage,
-    column_descriptions: Optional[Mapping[str, ColumnDescriptionRow]],
+    column_descriptions: Optional[Mapping[str, "ColumnDescriptionRow"]],
 ) -> Optional[str]:
     if not column_descriptions or not lineage.source_columns:
         return None
