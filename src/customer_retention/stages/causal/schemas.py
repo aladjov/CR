@@ -696,6 +696,48 @@ def run_context_schema() -> "StructType":
     )
 
 
+def feature_meta_schema() -> "StructType":
+    """Per-feature lineage and business-interpretation metadata.
+
+    One row per ``(run_id, composite_name, feature_name)``. Written at gold
+    materialization time from the pipeline-generation lineage. Readers (LLM
+    namer, predicate prose renderer, dashboard "why surfaced") resolve a
+    feature to its business phrase via this table instead of guessing from
+    the raw column name. Optional fields stay nullable so the writer can
+    emit partial rows when upstream lineage is incomplete.
+    """
+    t = _types()
+    return t["StructType"](
+        [
+            t["StructField"]("run_id", t["StringType"](), False),
+            t["StructField"]("composite_name", t["StringType"](), False),
+            t["StructField"]("feature_name", t["StringType"](), False),
+            # Upstream raw columns this gold feature derives from.
+            t["StructField"]("source_columns", t["ArrayType"](t["StringType"]()), True),
+            t["StructField"]("source_table", t["StringType"](), True),
+            # ``count`` / ``count_distinct`` / ``sum`` / ``avg`` / ``max`` / ``min`` /
+            # ``last`` / ``first`` / ``ratio`` / ``recency_days`` / ``derived_datetime`` /
+            # ``passthrough``. String instead of enum — Delta has no native enum type.
+            t["StructField"]("aggregation_kind", t["StringType"](), True),
+            # Aggregation window in days (30 / 90 / 365). NULL for snapshot features.
+            t["StructField"]("window_days", t["IntegerType"](), True),
+            # Precomputed human phrase: "last 30 days", "lifetime", "this quarter".
+            t["StructField"]("window_phrase", t["StringType"](), True),
+            # TRUE if the feature is derived from the prediction target —
+            # flagged for leakage review by the causal-track approval gate.
+            t["StructField"]("target_dependency", t["BooleanType"](), True),
+            # Mirrors the landing ``mask_future_columns`` config for audit.
+            t["StructField"]("mask_future", t["BooleanType"](), True),
+            # ``high_is_good`` / ``high_is_bad`` / ``neutral`` / ``unknown`` —
+            # inherited from the dominant source column when unambiguous.
+            t["StructField"]("polarity", t["StringType"](), True),
+            # Deterministic render: "{aggregation} of {source.business_name} over {window_phrase}".
+            t["StructField"]("business_phrase", t["StringType"](), True),
+            t["StructField"]("written_at", t["TimestampType"](), False),
+        ]
+    )
+
+
 def top_shap_drivers_schema() -> "StructType":
     """Per-account cache of top SHAP drivers from the training cohort.
 
@@ -747,6 +789,7 @@ ALL_SCHEMAS: Dict[str, Callable[[], "StructType"]] = {
     "shap_background": shap_background_schema,
     "top_shap_drivers": top_shap_drivers_schema,
     "run_context": run_context_schema,
+    "feature_meta": feature_meta_schema,
 }
 
 

@@ -27,6 +27,7 @@ EXPECTED_TABLES = {
     "shap_background",
     "top_shap_drivers",
     "run_context",
+    "feature_meta",
 }
 
 
