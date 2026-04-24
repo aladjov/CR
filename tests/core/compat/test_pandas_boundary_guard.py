@@ -135,6 +135,11 @@ COLLECT_BOUNDARY_FILES = {
     #     hundred policies, 1 decision_policy) plus a 1-row .agg().head() for
     #     summary counts and a per-risk-tier groupBy().count().collect() (3 rows).
     #     The snapshot DataFrame itself is MERGE'd via DeltaTable.merge(...)
+    #   population_stats: per-feature top-K categorical counts via
+    #     groupBy(value).count().orderBy(count desc).limit(_TOP_CATEGORIES).collect()
+    #     — bounded by _TOP_CATEGORIES (small constant, default 25), one collect
+    #     per categorical feature; result feeds the population-stats Delta write.
+    "stages/causal/population_stats.py",
     #     directly — never collected to the driver.
     "stages/causal/snapshot_writer.py",
     # Lifecycle enrichment — .agg().collect()[0] for corrupt-row counts (1 row,
