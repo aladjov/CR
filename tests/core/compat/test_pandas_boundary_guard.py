@@ -140,6 +140,12 @@ COLLECT_BOUNDARY_FILES = {
     #     — bounded by _TOP_CATEGORIES (small constant, default 25), one collect
     #     per categorical feature; result feeds the population-stats Delta write.
     "stages/causal/population_stats.py",
+    # TimeWindowAggregator Spark dispatch: distinct-value collect for
+    # value_counts is bounded by _VALUE_COUNTS_MAX_CARDINALITY=200 via
+    # .limit(N+1).collect() (raises if exceeded); reference-date resolution
+    # uses .first() on a 1-row .agg(F.max(time)). Both are bounded aggregated
+    # collects, the documented pattern for this allowlist.
+    "stages/profiling/time_window_aggregator.py",
     #     directly — never collected to the driver.
     "stages/causal/snapshot_writer.py",
     # Lifecycle enrichment — .agg().collect()[0] for corrupt-row counts (1 row,
