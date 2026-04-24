@@ -16,6 +16,9 @@ from customer_retention.stages.causal.interpretation.business_phrase import (
     render_business_phrase,
     render_window_phrase,
 )
+from customer_retention.stages.causal.interpretation.enrichment_pipeline import (
+    enrich_archetype_from_namespace,
+)
 from customer_retention.stages.causal.interpretation.feature_meta_builder import (
     FeatureLineage,
     build_feature_meta_rows,
@@ -34,6 +37,14 @@ from customer_retention.stages.causal.interpretation.quantile_phrasing import (
     PopulationStats,
     quantile_phrase,
 )
+from customer_retention.stages.causal.interpretation.sidecars import (
+    load_column_descriptions_sidecar,
+    load_feature_meta_sidecar,
+    load_population_stats_sidecar,
+    write_column_descriptions_sidecar,
+    write_feature_meta_sidecar,
+    write_population_stats_sidecar,
+)
 
 __all__ = [
     "render_business_phrase",
@@ -51,4 +62,11 @@ __all__ = [
     "build_enriched_context",
     "build_enriched_prompt_messages",
     "compile_predicate_prose",
+    "enrich_archetype_from_namespace",
+    "write_feature_meta_sidecar",
+    "load_feature_meta_sidecar",
+    "write_population_stats_sidecar",
+    "load_population_stats_sidecar",
+    "write_column_descriptions_sidecar",
+    "load_column_descriptions_sidecar",
 ]
