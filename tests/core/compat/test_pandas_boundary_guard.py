@@ -76,6 +76,9 @@ TOPANDAS_BOUNDARY_FILES = {
     # Distinct-value collect inside `_aggregate_spark` is bounded by
     # `_VALUE_COUNTS_MAX_CARDINALITY = 200` (raises if exceeded).
     "stages/profiling/time_window_aggregator.py",
+    # Column describer — bounded LLM prompt sample (≤10 rows) collected via
+    # `.limit(10).toPandas()` for grounding the column-description prompt.
+    "analysis/auto_explorer/column_describer.py",
 }
 
 # ── .collect() allowlist ────────────────────────────────────────────────
