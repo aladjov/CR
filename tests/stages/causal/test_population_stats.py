@@ -105,6 +105,18 @@ class TestComputeFeaturePopulationStats:
         result = compute_feature_population_stats(MagicMock(), run_id="r1")
         assert result == []
 
+    def test_unwraps_pyspark_pandas_via_to_spark(self):
+        from customer_retention.stages.causal.population_stats import _as_native_spark
+
+        native_like = MagicMock()
+        assert _as_native_spark(native_like) is native_like
+
+        class _FakePysparkPandasDF:
+            def to_spark(self):
+                return "native"
+        _FakePysparkPandasDF.__module__ = "pyspark.pandas.frame"
+        assert _as_native_spark(_FakePysparkPandasDF()) == "native"
+
     def test_numeric_batched_agg_invocation(self):
         train = MagicMock()
         head_row = {

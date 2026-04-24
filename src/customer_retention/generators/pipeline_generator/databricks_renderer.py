@@ -1741,6 +1741,30 @@ if _NAMESPACE is not None:
     }
     _NAMESPACE.gold_metadata_path.parent.mkdir(parents=True, exist_ok=True)
     _NAMESPACE.gold_metadata_path.write_text(json.dumps(_gold_meta))
+    try:
+        from customer_retention.stages.causal.interpretation import (
+            FeatureLineage as _FeatureLineage,
+            build_feature_meta_rows as _build_feature_meta_rows,
+            load_column_descriptions_sidecar as _load_column_descriptions_sidecar,
+            parse_aggregation_feature_name as _parse_aggregation_feature_name,
+            write_feature_meta_sidecar as _write_feature_meta_sidecar,
+        )
+        _fm_lineages = []
+        for _col in result.columns:
+            if _col in _meta_cols:
+                continue
+            _lineage = _parse_aggregation_feature_name(_col)
+            if _lineage is None:
+                _lineage = _FeatureLineage(feature_name=_col)
+            _fm_lineages.append(_lineage)
+        _fm_rows = _build_feature_meta_rows(
+            composite_name=COMPOSITE_NAME,
+            lineages=_fm_lineages,
+            column_descriptions=_load_column_descriptions_sidecar(_NAMESPACE),
+        )
+        _write_feature_meta_sidecar(_NAMESPACE, COMPOSITE_NAME, _fm_rows)
+    except Exception as _fm_exc:
+        print(f"feature_meta sidecar aborted: {type(_fm_exc).__name__}: {_fm_exc}")
 
 display(result.limit(1000))
 dbutils.notebook.exit(_summary)

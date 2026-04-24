@@ -142,6 +142,7 @@ class DerivationConfig:
     min_purity: float = DEFAULT_MIN_PURITY
     llm_endpoint_name: Optional[str] = None
     llm_namer: Optional[LLMNamer] = None
+    enrichment_builder: Optional[Any] = None
     write: bool = True
     attribution: Optional[ShapAttribution] = None
     fit_thresholds: FitThresholds = field(default_factory=FitThresholds)
@@ -314,6 +315,7 @@ def derive_archetypes_and_policies(config: DerivationConfig) -> DerivationResult
         playbooks=config.playbooks,
         gold_feature_names=config.gold_feature_names,
         llm_namer=namer,
+        enrichment_builder=config.enrichment_builder,
     )
 
     timestamp = datetime.now(timezone.utc)
@@ -757,6 +759,7 @@ def _policy_row(
         "derivation_method": mapping.derivation_method,
         "eligibility_rules": json.dumps(rule.predicate_json),
         "eligibility_rules_sql": rule.predicate_sql,
+        "eligibility_rules_prose": _render_predicate_prose_safely(rule.predicate_json),
         "requires_features": list(rule.used_features),
         "expected_uplift_pct": _safe_float(playbook.get("expected_uplift_pct_default")),
         "fit_score": fit_score,
@@ -769,6 +772,29 @@ def _policy_row(
         "valid_from": None,
         "valid_to": None,
     }
+
+
+def _render_predicate_prose_safely(predicate_json: Dict[str, Any]) -> Optional[str]:
+    """Best-effort prose render — any failure degrades to None (dashboard falls back to SQL)."""
+    try:
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+        from customer_retention.core.config.experiments import get_experiments_dir
+        from customer_retention.stages.causal.interpretation import (
+            compile_predicate_prose,
+            load_column_descriptions_sidecar,
+            load_feature_meta_sidecar,
+            load_population_stats_sidecar,
+        )
+
+        namespace = RunNamespace.from_env_or_latest(get_experiments_dir())
+        return compile_predicate_prose(
+            predicate_json,
+            feature_meta=load_feature_meta_sidecar(namespace),
+            population_stats=load_population_stats_sidecar(namespace),
+            column_descriptions=load_column_descriptions_sidecar(namespace),
+        )
+    except Exception:  # noqa: BLE001 — best-effort; None is acceptable
+        return None
 
 
 def _validate_policy_coverage(

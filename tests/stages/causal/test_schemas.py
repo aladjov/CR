@@ -110,6 +110,12 @@ class TestEligibilityPolicySchema:
         names = {f.name for f in struct.fields}
         assert "eligibility_rules" in names  # JSON predicate tree
         assert "eligibility_rules_sql" in names  # rendered for the dashboard
+        assert "eligibility_rules_prose" in names  # narrated rendering via interpretation layer
+
+    def test_prose_column_is_nullable(self):
+        struct = schemas.eligibility_policy_schema()
+        nullability = {f.name: f.nullable for f in struct.fields}
+        assert nullability["eligibility_rules_prose"] is True
 
 
 class TestDecisionPolicySchema:

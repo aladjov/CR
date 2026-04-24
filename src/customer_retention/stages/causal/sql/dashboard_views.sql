@@ -122,6 +122,7 @@ SELECT
     e.archetype_ids,
     e.requires_features,
     e.eligibility_rules_sql,
+    COALESCE(e.eligibility_rules_prose, e.eligibility_rules_sql) AS eligibility_rules_prose,
     e.expected_uplift_pct,
     e.rationale,
     e.llm_model_id,

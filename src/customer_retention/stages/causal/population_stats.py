@@ -73,7 +73,7 @@ class PopulationStatsConfig:
 
 
 def compute_feature_population_stats(
-    train_df: "SparkDF",
+    train_df: Any,
     *,
     run_id: str,
     numeric_features: Sequence[str] = (),
@@ -82,19 +82,32 @@ def compute_feature_population_stats(
 ) -> List[PopulationStatsRow]:
     """Compute population summaries for numeric and categorical features.
 
-    Numeric: batched ``.agg()`` of count / mean / stddev / percentile_approx
-    (7 quantiles) over 100 columns per Spark job. Categorical: top-10 via
-    ``groupBy(col).count()`` per column — one Spark job per categorical,
-    acceptable since categorical features are typically few.
+    Accepts a native Spark DataFrame or a ``pyspark.pandas`` DataFrame —
+    pyspark.pandas is unwrapped via ``as_spark_df`` so batched ``.agg()``
+    operates on the native Spark engine (Catalyst plan O(100²) per batch).
+    Numeric: 7 quantiles via ``percentile_approx`` in 100-col batches.
+    Categorical: ``groupBy(col).count()`` per column — one Spark job per
+    categorical, acceptable since categorical features are typically few.
     """
+    spark_df = _as_native_spark(train_df)
     rows: List[PopulationStatsRow] = []
     if numeric_features:
-        rows.extend(
-            _numeric_stats(train_df, run_id, numeric_features, approx_relative_error)
-        )
+        rows.extend(_numeric_stats(spark_df, run_id, numeric_features, approx_relative_error))
     if categorical_features:
-        rows.extend(_categorical_stats(train_df, run_id, categorical_features))
+        rows.extend(_categorical_stats(spark_df, run_id, categorical_features))
     return rows
+
+
+def _as_native_spark(df: Any) -> Any:
+    """Return ``df`` as a native Spark DataFrame, unwrapping pyspark.pandas.
+
+    Only ``pyspark.pandas.DataFrame`` exposes ``.to_spark()``; a native
+    ``pyspark.sql.DataFrame`` is already Spark and anything else is
+    passed through (unit-test mocks, injected stubs).
+    """
+    if type(df).__module__.startswith("pyspark.pandas"):
+        return df.to_spark()
+    return df
 
 
 def _numeric_stats(

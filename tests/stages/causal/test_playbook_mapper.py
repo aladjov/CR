@@ -224,6 +224,72 @@ class TestMapArchetypesToPlaybooksCustomNamer:
         assert ctx.top_negative_drivers
 
 
+class _EnrichedStubNamer:
+    """Stub namer that records whether enrichment was passed through."""
+
+    model_id = "stub-enriched"
+
+    def __init__(self):
+        self.enriched_calls = []
+
+    def name_archetype(self, context, enriched=None):
+        self.enriched_calls.append(enriched)
+        return ArchetypeNaming(
+            archetype_name=f"A{context.cluster_index}",
+            archetype_description="stub",
+            playbooks=[PlaybookFitDecision(playbook_id=c["playbook_id"], fit_score=0.5,
+                                            rationale="r") for c in context.candidate_playbooks],
+            confidence=0.5, llm_model_id=self.model_id,
+        )
+
+
+class TestMapArchetypesToPlaybooksEnrichmentBuilder:
+    def test_enrichment_builder_result_passed_to_namer(self):
+        from customer_retention.stages.causal.interpretation import EnrichedArchetypeContext
+
+        namer = _EnrichedStubNamer()
+        archetypes = [_make_archetype(1, ["nps_score"])]
+        playbooks = [_make_playbook("low_nps", "Recover low nps_score accounts")]
+        expected = EnrichedArchetypeContext(
+            cluster_index=1, cluster_size=100, cluster_mean_churn_probability=0.5,
+        )
+        map_archetypes_to_playbooks(
+            archetypes, playbooks, GOLD_FEATURES,
+            llm_namer=namer,
+            enrichment_builder=lambda arch, ctx: expected,
+        )
+        assert namer.enriched_calls == [expected]
+
+    def test_enrichment_builder_exception_falls_through_without_crash(self):
+        namer = _EnrichedStubNamer()
+        archetypes = [_make_archetype(1, ["nps_score"])]
+        playbooks = [_make_playbook("low_nps", "Recover low nps_score accounts")]
+
+        def _failing_builder(arch, ctx):
+            raise RuntimeError("lookup failed")
+
+        mappings = map_archetypes_to_playbooks(
+            archetypes, playbooks, GOLD_FEATURES,
+            llm_namer=namer,
+            enrichment_builder=_failing_builder,
+        )
+        assert namer.enriched_calls == [None]
+        assert mappings  # mapping still produced
+
+    def test_builder_returning_none_yields_mapping_without_enrichment(self):
+        namer = _EnrichedStubNamer()
+        archetypes = [_make_archetype(1, ["nps_score"])]
+        playbooks = [_make_playbook("low_nps", "low nps_score outreach")]
+        mappings = map_archetypes_to_playbooks(
+            archetypes, playbooks, GOLD_FEATURES,
+            llm_namer=namer,
+            enrichment_builder=lambda arch, ctx: None,
+        )
+        # builder returned None → stub's default `enriched=None` path exercised
+        assert namer.enriched_calls == [None]
+        assert mappings[0].archetype_name == "A1"
+
+
 # ---------------------------------------------------------------------------
 # Prose-overlap scoring (no feature column coupling)
 # ---------------------------------------------------------------------------

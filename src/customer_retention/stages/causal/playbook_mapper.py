@@ -32,7 +32,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .llm_namer import (
     ArchetypeContext,
@@ -42,6 +42,11 @@ from .llm_namer import (
     ProseOverlapMatcher,
     is_llm_fallback_id,
 )
+
+if TYPE_CHECKING:  # pragma: no cover
+    from customer_retention.stages.causal.interpretation.archetype_context import (
+        EnrichedArchetypeContext,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +122,9 @@ def map_archetypes_to_playbooks(
     playbooks: Sequence[Dict[str, Any]],
     gold_feature_names: Sequence[str],  # retained for signature stability; unused
     llm_namer: Optional[LLMNamer] = None,
+    enrichment_builder: Optional[
+        Callable[[ArchetypeSummary, ArchetypeContext], Optional["EnrichedArchetypeContext"]]
+    ] = None,
 ) -> List[ArchetypeMapping]:
     """Match archetypes to playbooks by prose (never by feature columns).
 
@@ -152,9 +160,26 @@ def map_archetypes_to_playbooks(
     for archetype in archetypes:
         candidates = _all_playbooks_as_candidates(playbooks)
         context = _build_context(archetype, candidates)
-        naming = namer.name_archetype(context)
+        enriched = _safely_enrich(enrichment_builder, archetype, context)
+        naming = namer.name_archetype(context, enriched=enriched) if enriched is not None \
+            else namer.name_archetype(context)
         mappings.append(_assemble_mapping(archetype, candidates, naming))
     return mappings
+
+
+def _safely_enrich(
+    builder: Optional[Callable],
+    archetype: ArchetypeSummary,
+    context: ArchetypeContext,
+) -> Optional["EnrichedArchetypeContext"]:
+    """Call ``builder`` defensively — enrichment failure must not block mapping."""
+    if builder is None:
+        return None
+    try:
+        return builder(archetype, context)
+    except Exception as exc:  # noqa: BLE001 — best-effort; fall through to raw path
+        logger.warning("enrichment_builder failed; continuing without enrichment: %s", exc)
+        return None
 
 
 def prose_overlap_score(

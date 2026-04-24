@@ -308,6 +308,11 @@ def eligibility_policy_schema() -> "StructType":
             t["StructField"]("derivation_method", t["StringType"](), True),
             t["StructField"]("eligibility_rules", t["StringType"](), True),  # JSON predicate tree
             t["StructField"]("eligibility_rules_sql", t["StringType"](), True),  # rendered SQL for dashboard
+            # Human-readable prose rendering of the predicate via the
+            # interpretation layer (feature_meta + population_stats + column_descriptions).
+            # Nullable so existing rows read back as NULL and the dashboard falls
+            # back to `eligibility_rules_sql` via COALESCE.
+            t["StructField"]("eligibility_rules_prose", t["StringType"](), True),
             t["StructField"]("requires_features", t["ArrayType"](t["StringType"]()), True),
             t["StructField"]("expected_uplift_pct", t["DoubleType"](), True),
             # Archetype↔playbook prose/LLM match score in [0, 1]. Review tier

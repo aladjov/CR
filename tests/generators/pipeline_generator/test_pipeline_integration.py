@@ -290,6 +290,7 @@ class TestMultiDatasetGeneration:
             "from customer_retention.stages.modeling.feature_profile",
             "from customer_retention.analysis.auto_explorer.run_namespace",
             "from customer_retention.analysis.auto_explorer.layered_recommendations",
+            "from customer_retention.stages.causal.interpretation",
         }
         for f in generated_output.rglob("*.py"):
             if f.stat().st_size > 0:
