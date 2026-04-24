@@ -41,7 +41,27 @@ _AGG_FUNC_ALIASES = {
 
 _WINDOW_SUFFIX_RE = re.compile(r"^(?P<body>.+?)_(?P<window>\d+)d$")
 _EVENT_COUNT_RE = re.compile(r"^event_count_(?P<window>\d+)d$")
+_EVENT_COUNT_ALL_TIME_RE = re.compile(r"^event_count_all_time$")
 _DAYS_SINCE_RE = re.compile(r"^days_since_(last|first)_event$")
+_INTER_EVENT_GAP_RE = re.compile(r"^inter_event_gap_(?P<stat>mean|std|min|max|median)$")
+
+# Engagement / lifecycle framework-derived features: fixed vocabulary with
+# known semantics. Maps name → (aggregation_kind, source_columns).
+# These are emitted by the temporal-feature-engineering pipeline and don't
+# follow the ``{col}_{func}_{window}d`` shape. Keyed by exact feature name.
+_DERIVED_FEATURE_TAXONOMY: dict[str, tuple[str, list[str]]] = {
+    "active_span_days": ("derived_datetime", ["event"]),
+    "event_frequency": ("ratio", ["event"]),
+    "regularity_score": ("passthrough", ["event"]),
+    "event_count_all_time": ("count", ["event"]),
+}
+
+# Prefix-based matches for lifecycle / recency one-hots produced by the
+# aggregator (``lifecycle_quadrant_intense_brief_lifecycle`` etc.).
+_DERIVED_PREFIX_TAXONOMY: tuple[tuple[str, str, list[str]], ...] = (
+    ("lifecycle_quadrant_", "passthrough", ["lifecycle"]),
+    ("recency_bucket_", "passthrough", ["recency"]),
+)
 
 
 @dataclass
@@ -79,7 +99,7 @@ def parse_aggregation_feature_name(
     if event_count:
         return FeatureLineage(
             feature_name=feature_name,
-            source_columns=[],
+            source_columns=["event"],
             source_table=source_table,
             aggregation_kind="count",
             window_days=int(event_count.group("window")),
@@ -88,10 +108,35 @@ def parse_aggregation_feature_name(
     if days_since:
         return FeatureLineage(
             feature_name=feature_name,
-            source_columns=[],
+            source_columns=["event"],
             source_table=source_table,
             aggregation_kind="recency_days",
         )
+    gap = _INTER_EVENT_GAP_RE.match(feature_name)
+    if gap:
+        return FeatureLineage(
+            feature_name=feature_name,
+            source_columns=["event_gap"],
+            source_table=source_table,
+            aggregation_kind=_AGG_FUNC_ALIASES.get(gap.group("stat"), gap.group("stat")),
+        )
+    fixed = _DERIVED_FEATURE_TAXONOMY.get(feature_name)
+    if fixed is not None:
+        kind, source_columns = fixed
+        return FeatureLineage(
+            feature_name=feature_name,
+            source_columns=list(source_columns),
+            source_table=source_table,
+            aggregation_kind=kind,
+        )
+    for prefix, kind, source_columns in _DERIVED_PREFIX_TAXONOMY:
+        if feature_name.startswith(prefix):
+            return FeatureLineage(
+                feature_name=feature_name,
+                source_columns=list(source_columns),
+                source_table=source_table,
+                aggregation_kind=kind,
+            )
     windowed = _WINDOW_SUFFIX_RE.match(feature_name)
     if not windowed:
         return None

@@ -38,14 +38,59 @@ class TestParseAggregationFeatureName:
         assert lineage is not None
         assert lineage.aggregation_kind == "count"
         assert lineage.window_days == 30
-        assert lineage.source_columns == []
+        assert lineage.source_columns == ["event"]
+
+    def test_event_count_all_time_taxonomy(self):
+        lineage = parse_aggregation_feature_name("event_count_all_time")
+        assert lineage is not None
+        assert lineage.aggregation_kind == "count"
+        assert lineage.source_columns == ["event"]
+        assert lineage.window_days is None
+
+    def test_active_span_days_taxonomy(self):
+        lineage = parse_aggregation_feature_name("active_span_days")
+        assert lineage is not None
+        assert lineage.aggregation_kind == "derived_datetime"
+        assert lineage.source_columns == ["event"]
+
+    def test_event_frequency_taxonomy(self):
+        lineage = parse_aggregation_feature_name("event_frequency")
+        assert lineage is not None
+        assert lineage.aggregation_kind == "ratio"
+
+    def test_regularity_score_taxonomy(self):
+        lineage = parse_aggregation_feature_name("regularity_score")
+        assert lineage is not None
+        assert lineage.aggregation_kind == "passthrough"
+
+    def test_inter_event_gap_mean_taxonomy(self):
+        lineage = parse_aggregation_feature_name("inter_event_gap_mean")
+        assert lineage is not None
+        assert lineage.aggregation_kind == "avg"
+        assert lineage.source_columns == ["event_gap"]
+
+    def test_inter_event_gap_max_taxonomy(self):
+        lineage = parse_aggregation_feature_name("inter_event_gap_max")
+        assert lineage is not None
+        assert lineage.aggregation_kind == "max"
+
+    def test_lifecycle_quadrant_prefix_taxonomy(self):
+        lineage = parse_aggregation_feature_name("lifecycle_quadrant_intense_brief_lifecycle")
+        assert lineage is not None
+        assert lineage.aggregation_kind == "passthrough"
+        assert lineage.source_columns == ["lifecycle"]
+
+    def test_recency_bucket_prefix_taxonomy(self):
+        lineage = parse_aggregation_feature_name("recency_bucket_31_90d")
+        assert lineage is not None
+        assert lineage.source_columns == ["recency"]
 
     def test_days_since_last_event_special(self):
         lineage = parse_aggregation_feature_name("days_since_last_event")
         assert lineage is not None
         assert lineage.aggregation_kind == "recency_days"
         assert lineage.window_days is None
-        assert lineage.source_columns == []
+        assert lineage.source_columns == ["event"]
 
     def test_days_since_first_event_special(self):
         lineage = parse_aggregation_feature_name("days_since_first_event")

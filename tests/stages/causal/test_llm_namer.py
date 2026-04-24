@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -161,28 +160,31 @@ class TestProseOverlapMatcher:
 # ---------------------------------------------------------------------------
 
 
-class _FakeOpenAIResponse:
-    def __init__(self, content: str) -> None:
-        message = MagicMock()
-        message.content = content
-        choice = MagicMock()
-        choice.message = message
-        self.choices = [choice]
+class _FakeDeployClient:
+    """Stand-in for ``mlflow.deployments.get_deploy_client('databricks')``.
 
+    Its ``predict(endpoint, inputs)`` signature + ``{"choices": [{"message":
+    {"content": ...}}]}`` response shape matches the real Databricks
+    Mosaic AI serving-endpoint response, so the namer's response parsing
+    is exercised end-to-end without network.
+    """
 
-class _FakeOpenAIClient:
     def __init__(self, content: str = "", raise_exc: Exception | None = None) -> None:
         self.content = content
         self.raise_exc = raise_exc
+        self.last_endpoint: str | None = None
+        self.last_inputs: dict | None = None
+        # Tests that predate the deploy-client switch still read
+        # ``last_kwargs["messages"]``; keep the compat alias.
         self.last_kwargs: dict | None = None
-        self.chat = self
-        self.completions = self
 
-    def create(self, **kwargs):
-        self.last_kwargs = kwargs
+    def predict(self, endpoint: str, inputs: dict):
+        self.last_endpoint = endpoint
+        self.last_inputs = inputs
+        self.last_kwargs = inputs
         if self.raise_exc is not None:
             raise self.raise_exc
-        return _FakeOpenAIResponse(self.content)
+        return {"choices": [{"message": {"content": self.content}}]}
 
 
 class TestDatabricksFoundationModelNamer:
@@ -194,18 +196,21 @@ class TestDatabricksFoundationModelNamer:
         )
         assert namer.model_id == "databricks-claude-sonnet-4-6"
 
-    def test_no_workspace_url_falls_back_to_template(self):
+    def test_client_unavailable_falls_back_to_template(self, monkeypatch):
+        """When `mlflow.deployments` can't create a deploy client (off-cluster,
+        missing SDK), the namer falls back to `ProseOverlapMatcher` with the
+        `:fallback` suffix on the model id."""
+        import sys
+        monkeypatch.setitem(sys.modules, "mlflow.deployments", None)
         namer = DatabricksFoundationModelNamer(
             endpoint_name="databricks-claude-sonnet-4-6",
-            workspace_url="",
-            workspace_token="",
         )
         result = namer.name_archetype(_make_context())
         assert result.llm_model_id == "databricks-claude-sonnet-4-6:fallback"
         assert "tenure_days" in result.archetype_name
 
     def test_successful_response_parses_json(self):
-        client = _FakeOpenAIClient(
+        client = _FakeDeployClient(
             content=json.dumps(
                 {
                     "archetype_name": "High-Risk Tenured",
@@ -234,7 +239,7 @@ class TestDatabricksFoundationModelNamer:
         assert result.llm_model_id == "databricks-claude-sonnet-4-6"
 
     def test_malformed_json_falls_back(self):
-        client = _FakeOpenAIClient(content="not even close to json")
+        client = _FakeDeployClient(content="not even close to json")
         namer = DatabricksFoundationModelNamer(
             endpoint_name="databricks-claude-sonnet-4-6",
             workspace_url="https://example.com",
@@ -246,7 +251,7 @@ class TestDatabricksFoundationModelNamer:
         assert "tenure_days" in result.archetype_name
 
     def test_network_exception_falls_back(self):
-        client = _FakeOpenAIClient(raise_exc=ConnectionError("network down"))
+        client = _FakeDeployClient(raise_exc=ConnectionError("network down"))
         namer = DatabricksFoundationModelNamer(
             endpoint_name="databricks-claude-sonnet-4-6",
             workspace_url="https://example.com",
@@ -257,7 +262,7 @@ class TestDatabricksFoundationModelNamer:
         assert result.llm_model_id == "databricks-claude-sonnet-4-6:fallback"
 
     def test_json_in_code_fence_is_extracted(self):
-        client = _FakeOpenAIClient(
+        client = _FakeDeployClient(
             content="```json\n"
             + json.dumps(
                 {
@@ -279,7 +284,7 @@ class TestDatabricksFoundationModelNamer:
         assert result.archetype_name == "Wrapped"
 
     def test_json_with_leading_text_is_extracted(self):
-        client = _FakeOpenAIClient(
+        client = _FakeDeployClient(
             content="here you go: "
             + json.dumps(
                 {
@@ -300,7 +305,7 @@ class TestDatabricksFoundationModelNamer:
         assert result.archetype_name == "Extracted"
 
     def test_prompt_includes_archetype_context(self):
-        client = _FakeOpenAIClient(
+        client = _FakeDeployClient(
             content=json.dumps(
                 {"archetype_name": "X", "archetype_description": "x", "playbooks": []}
             )
@@ -323,7 +328,7 @@ class TestDatabricksFoundationModelNamer:
             EnrichedDriver,
             EnrichedPlaybook,
         )
-        client = _FakeOpenAIClient(
+        client = _FakeDeployClient(
             content=json.dumps(
                 {"archetype_name": "Low Tenure Risk", "archetype_description": "x",
                  "playbooks": [{"playbook_id": "nps_followup", "fit_score": 0.9, "rationale": "r"}],
@@ -357,7 +362,7 @@ class TestDatabricksFoundationModelNamer:
         assert "tenure is low AND NPS is low" in user_content
 
     def test_legacy_path_uses_raw_prompt_when_no_enriched(self):
-        client = _FakeOpenAIClient(
+        client = _FakeDeployClient(
             content=json.dumps(
                 {"archetype_name": "X", "archetype_description": "x", "playbooks": []}
             )
@@ -397,15 +402,32 @@ class TestDatabricksFoundationModelNamer:
         assert "tenure in days" in result.archetype_description
         assert "tenure is low" in result.archetype_description
 
-    def test_get_client_returns_none_without_openai(self, monkeypatch):
+    def test_get_client_returns_none_without_mlflow_deployments(self, monkeypatch):
         namer = DatabricksFoundationModelNamer(
             endpoint_name="databricks-claude-sonnet-4-6",
-            workspace_url="https://example.com",
-            workspace_token="token",
         )
-        # Force the import path to fail
         import sys
-
-        monkeypatch.setitem(sys.modules, "openai", None)
+        monkeypatch.setitem(sys.modules, "mlflow.deployments", None)
         client = namer._get_client()
         assert client is None
+
+    def test_predict_payload_matches_deploy_client_contract(self):
+        """Namer calls `client.predict(endpoint=..., inputs={...})` with
+        messages, max_tokens, temperature packed into ``inputs`` — matches
+        the real `DatabricksDeploymentClient` signature."""
+        client = _FakeDeployClient(
+            content=json.dumps(
+                {"archetype_name": "X", "archetype_description": "x", "playbooks": [],
+                 "confidence": 0.0}
+            )
+        )
+        namer = DatabricksFoundationModelNamer(
+            endpoint_name="databricks-claude-sonnet-4-6",
+            max_tokens=1234, temperature=0.25,
+        )
+        namer._client = client
+        namer.name_archetype(_make_context())
+        assert client.last_endpoint == "databricks-claude-sonnet-4-6"
+        assert "messages" in client.last_inputs
+        assert client.last_inputs["max_tokens"] == 1234
+        assert client.last_inputs["temperature"] == 0.25
