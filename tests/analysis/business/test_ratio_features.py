@@ -186,6 +186,56 @@ def test_existing_columns_preserved_and_not_overwritten_silently():
         assert col in out.columns
 
 
+def test_bare_names_are_accepted_when_prefixed_columns_absent():
+    # When contract is the first-merged dataset, TemporalMerger._resolve_conflicts
+    # leaves its columns unprefixed. The helper must accept the bare names.
+    panel = _panel([
+        {
+            "event_type_terminate_count_7d": 4,
+            "event_type_start_count_7d": 3,
+        },
+    ])
+    out, emitted = derive_contract_ratio_features(panel, windows=("7d",))
+    assert emitted == ["contract_terminate_to_start_ratio_7d"]
+    # 4 / (3 + 1) = 1.0
+    assert float(out["contract_terminate_to_start_ratio_7d"].iloc[0]) == 1.0
+
+
+def test_prefixed_wins_over_bare_when_both_present():
+    # Only the prefixed column should drive the ratio when both exist.
+    panel = _panel([
+        {
+            "contract__event_type_terminate_count_7d": 10,
+            "contract__event_type_start_count_7d": 4,
+            "event_type_terminate_count_7d": 999,   # must be ignored
+            "event_type_start_count_7d": 999,
+        },
+    ])
+    out, _ = derive_contract_ratio_features(panel, windows=("7d",))
+    # 10 / (4 + 1) = 2.0
+    assert float(out["contract_terminate_to_start_ratio_7d"].iloc[0]) == 2.0
+
+
+def test_mixed_prefixed_and_bare_across_windows():
+    # 7d prefixed, 90d bare — both windows should emit.
+    panel = _panel([
+        {
+            "contract__event_type_terminate_count_7d": 1,
+            "contract__event_type_start_count_7d": 1,
+            "event_type_terminate_count_90d": 3,
+            "event_type_start_count_90d": 2,
+        },
+    ])
+    out, emitted = derive_contract_ratio_features(panel, windows=("7d", "90d"))
+    assert emitted == [
+        "contract_terminate_to_start_ratio_7d",
+        "contract_terminate_to_start_ratio_90d",
+    ]
+    assert float(out["contract_terminate_to_start_ratio_7d"].iloc[0]) == 0.5
+    # 3 / (2 + 1) = 1.0
+    assert float(out["contract_terminate_to_start_ratio_90d"].iloc[0]) == 1.0
+
+
 def test_regression_churned_lift_at_90d_exceeds_1_5x():
     # Synthetic shape reproducing the engagement's run artifact structure:
     # accounts with churned=1 have materially higher term/start ratio at

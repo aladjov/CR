@@ -13,13 +13,24 @@ Contract (Cycle 005, closes G7):
 
     For every W in `windows` where BOTH of the inputs
 
-        contract__event_type_terminate_count_{W}
+        contract__event_type_terminate_count_{W}   (preferred — dataset-prefixed)
         contract__event_type_start_count_{W}
+
+    — OR the bare-name fallback —
+
+        event_type_terminate_count_{W}
+        event_type_start_count_{W}
 
     are present on `df`, the helper adds
 
         contract_terminate_to_start_ratio_{W} =
             term.fillna(0) / (start.fillna(0) + 1)
+
+    The prefixed name is preferred; the bare name is used only when the
+    prefixed column is absent. This mirrors `TemporalMerger._resolve_conflicts`,
+    which only prepends `{dataset}__` on collision — so contract's columns
+    land prefixed only when another dataset also emitted the same name, and
+    bare otherwise (depending on sort-order at merge time).
 
     Raises `ValueError` if `windows` is empty, or if none of the
     requested windows have both term+start columns (fail-fast — the cell
@@ -38,17 +49,34 @@ DEFAULT_RATIO_WINDOWS: tuple[str, ...] = (
     "7d", "30d", "90d", "180d", "365d", "all_time",
 )
 
-_TERMINATE_COL = "contract__event_type_terminate_count_{window}"
-_START_COL = "contract__event_type_start_count_{window}"
+_TERMINATE_PREFIXED = "contract__event_type_terminate_count_{window}"
+_START_PREFIXED = "contract__event_type_start_count_{window}"
+_TERMINATE_BARE = "event_type_terminate_count_{window}"
+_START_BARE = "event_type_start_count_{window}"
 _RATIO_COL = "contract_terminate_to_start_ratio_{window}"
 
 
-def _pairs(windows: Iterable[str]) -> list[tuple[str, str, str, str]]:
-    return [
-        (w, _TERMINATE_COL.format(window=w), _START_COL.format(window=w),
-         _RATIO_COL.format(window=w))
-        for w in windows
-    ]
+def _resolve_input_col(df_columns, prefixed: str, bare: str) -> str | None:
+    if prefixed in df_columns:
+        return prefixed
+    if bare in df_columns:
+        return bare
+    return None
+
+
+def _pairs(
+    df_columns, windows: Iterable[str]
+) -> list[tuple[str, str | None, str | None, str]]:
+    resolved = []
+    for w in windows:
+        term = _resolve_input_col(
+            df_columns, _TERMINATE_PREFIXED.format(window=w), _TERMINATE_BARE.format(window=w),
+        )
+        start = _resolve_input_col(
+            df_columns, _START_PREFIXED.format(window=w), _START_BARE.format(window=w),
+        )
+        resolved.append((w, term, start, _RATIO_COL.format(window=w)))
+    return resolved
 
 
 def derive_contract_ratio_features(
@@ -59,14 +87,18 @@ def derive_contract_ratio_features(
     if not windows:
         raise ValueError("derive_contract_ratio_features requires a non-empty windows sequence")
 
-    plan = _pairs(windows)
+    plan = _pairs(df.columns, windows)
     usable = [
         (w, term, start, ratio)
         for (w, term, start, ratio) in plan
-        if term in df.columns and start in df.columns
+        if term is not None and start is not None
     ]
     if not usable:
-        missing = [f"({t}, {s})" for (_, t, s, _) in plan]
+        missing = [
+            f"({_TERMINATE_PREFIXED.format(window=w)} | {_TERMINATE_BARE.format(window=w)}, "
+            f"{_START_PREFIXED.format(window=w)} | {_START_BARE.format(window=w)})"
+            for (w, _, _, _) in plan
+        ]
         raise ValueError(
             "derive_contract_ratio_features: no requested windows have both "
             f"term+start inputs on the panel. Looked for: {missing}. "
