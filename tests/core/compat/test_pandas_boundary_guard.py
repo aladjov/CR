@@ -68,6 +68,14 @@ TOPANDAS_BOUNDARY_FILES = {
     "analysis/auto_explorer/dataset_fingerprinter.py",
     # sklearn interface — bounded sample (≤50K rows) for KMeans segment detection
     "stages/profiling/segment_aware_outlier.py",
+    # TimeWindowAggregator: legacy pandas-only path retained for non-Spark
+    # inputs and for unsupported agg funcs (mode/entropy/mode_ratio/etc.)
+    # which fall back via `to_pandas(df)`. Spark inputs with the supported
+    # agg-func set route to `_aggregate_spark` and stay distributed —
+    # see `_SPARK_SUPPORTED_AGG_FUNCS` and the dispatch in `aggregate()`.
+    # Distinct-value collect inside `_aggregate_spark` is bounded by
+    # `_VALUE_COUNTS_MAX_CARDINALITY = 200` (raises if exceeded).
+    "stages/profiling/time_window_aggregator.py",
 }
 
 # ── .collect() allowlist ────────────────────────────────────────────────

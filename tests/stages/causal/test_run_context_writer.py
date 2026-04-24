@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+
 from customer_retention.stages.causal.run_context_writer import (
     RunContextConfig,
     _enum_value,
@@ -144,9 +146,11 @@ class TestSchemaToDdl:
             assert required in ddl, f"missing {required!r} in DDL: {ddl}"
 
     def test_field_type_ddl_handles_array_of_string(self):
+        pytest.importorskip("pyspark")
         from pyspark.sql.types import ArrayType, StringType
         assert _field_type_ddl(ArrayType(StringType())) == "ARRAY<STRING>"
 
     def test_field_type_ddl_handles_int(self):
+        pytest.importorskip("pyspark")
         from pyspark.sql.types import IntegerType
         assert _field_type_ddl(IntegerType()) == "INT"
