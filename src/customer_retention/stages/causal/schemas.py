@@ -696,6 +696,39 @@ def run_context_schema() -> "StructType":
     )
 
 
+def column_descriptions_schema() -> "StructType":
+    """Source-column business definitions, slowly-changing.
+
+    One row per ``(catalog, schema, table, column_name)``. Bootstrapped
+    from ``docs/sps_table_descriptions.md`` and maintained manually. Read
+    by ``feature_meta`` rendering to lift raw column names into business
+    phrases without hitting the LLM.
+    """
+    t = _types()
+    return t["StructType"](
+        [
+            t["StructField"]("catalog", t["StringType"](), True),
+            t["StructField"]("schema", t["StringType"](), True),
+            t["StructField"]("table", t["StringType"](), False),
+            t["StructField"]("column_name", t["StringType"](), False),
+            t["StructField"]("business_name", t["StringType"](), True),
+            t["StructField"]("business_definition", t["StringType"](), True),
+            # ``currency_usd`` / ``days`` / ``count`` / ``score_0_10`` /
+            # ``boolean`` / ``categorical`` / NULL.
+            t["StructField"]("unit", t["StringType"](), True),
+            # ``high_is_good`` / ``high_is_bad`` / ``neutral`` / ``unknown``.
+            t["StructField"]("polarity", t["StringType"](), True),
+            # ``none`` / ``direct`` / ``quasi`` / ``sensitive``.
+            t["StructField"]("pii_class", t["StringType"](), True),
+            t["StructField"]("value_examples", t["StringType"](), True),
+            t["StructField"]("last_verified_at", t["TimestampType"](), True),
+            # ``manual`` / ``llm_proposed`` / ``imported_from_md``.
+            t["StructField"]("source", t["StringType"](), True),
+            t["StructField"]("written_at", t["TimestampType"](), False),
+        ]
+    )
+
+
 def feature_meta_schema() -> "StructType":
     """Per-feature lineage and business-interpretation metadata.
 
@@ -790,6 +823,7 @@ ALL_SCHEMAS: Dict[str, Callable[[], "StructType"]] = {
     "top_shap_drivers": top_shap_drivers_schema,
     "run_context": run_context_schema,
     "feature_meta": feature_meta_schema,
+    "column_descriptions": column_descriptions_schema,
 }
 
 

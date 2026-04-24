@@ -28,6 +28,7 @@ EXPECTED_TABLES = {
     "top_shap_drivers",
     "run_context",
     "feature_meta",
+    "column_descriptions",
 }
 
 
