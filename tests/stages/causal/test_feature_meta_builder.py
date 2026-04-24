@@ -151,3 +151,39 @@ class TestBuildFeatureMetaRows:
 
     def test_empty_lineages_returns_empty_list(self):
         assert build_feature_meta_rows(composite_name="cn1", lineages=[]) == []
+
+    def test_polarity_inherited_from_column_descriptions(self):
+        lineage = FeatureLineage(
+            feature_name="nps_mean_90d",
+            source_columns=["nps"],
+            aggregation_kind="avg",
+            window_days=90,
+        )
+        descriptions = {
+            "nps": ColumnDescriptionRow(
+                table="account", column_name="nps",
+                business_name="NPS score", polarity="high_is_good",
+            )
+        }
+        rows = build_feature_meta_rows(
+            composite_name="cn1", lineages=[lineage], column_descriptions=descriptions,
+        )
+        assert rows[0].polarity == "high_is_good"
+
+    def test_explicit_lineage_polarity_wins_over_descriptions(self):
+        lineage = FeatureLineage(
+            feature_name="nps_mean_90d",
+            source_columns=["nps"],
+            aggregation_kind="avg",
+            window_days=90,
+            polarity="high_is_bad",  # explicit override
+        )
+        descriptions = {
+            "nps": ColumnDescriptionRow(
+                table="account", column_name="nps", polarity="high_is_good",
+            )
+        }
+        rows = build_feature_meta_rows(
+            composite_name="cn1", lineages=[lineage], column_descriptions=descriptions,
+        )
+        assert rows[0].polarity == "high_is_bad"

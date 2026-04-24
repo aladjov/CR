@@ -149,10 +149,10 @@ class TestComputeFeaturePopulationStats:
 
     def test_categorical_top_k(self):
         train = MagicMock()
-        train.count.return_value = 1000
+        non_null = train.filter.return_value
+        non_null.count.return_value = 1000
 
-        counts_df = MagicMock()
-        train.filter.return_value.groupBy.return_value.agg.return_value.orderBy.return_value.limit.return_value = counts_df
+        counts_df = non_null.groupBy.return_value.agg.return_value.orderBy.return_value.limit.return_value
         counts_df.collect.return_value = [
             {"value": "A", "count": 600},
             {"value": "B", "count": 400},
@@ -168,10 +168,23 @@ class TestComputeFeaturePopulationStats:
         assert rows[0].top_categories[0].share == pytest.approx(0.6)
         assert rows[0].top_categories[1].share == pytest.approx(0.4)
 
-    def test_categorical_with_zero_total_returns_zero_share(self):
+    def test_categorical_share_uses_nonnull_denominator(self):
         train = MagicMock()
-        train.count.return_value = 0
-        train.filter.return_value.groupBy.return_value.agg.return_value.orderBy.return_value.limit.return_value.collect.return_value = []
+        non_null = train.filter.return_value
+        non_null.count.return_value = 500  # only 500 non-null even if train has more
+        counts_df = non_null.groupBy.return_value.agg.return_value.orderBy.return_value.limit.return_value
+        counts_df.collect.return_value = [{"value": "A", "count": 500}]
+        rows = compute_feature_population_stats(
+            train, run_id="r1", categorical_features=["segment"],
+        )
+        assert rows[0].count_nonnull == 500
+        assert rows[0].top_categories[0].share == pytest.approx(1.0)
+
+    def test_categorical_with_zero_nonnull_returns_empty_top(self):
+        train = MagicMock()
+        non_null = train.filter.return_value
+        non_null.count.return_value = 0
+        non_null.groupBy.return_value.agg.return_value.orderBy.return_value.limit.return_value.collect.return_value = []
         rows = compute_feature_population_stats(
             train, run_id="r1", categorical_features=["segment"],
         )

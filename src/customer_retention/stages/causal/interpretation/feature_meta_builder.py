@@ -143,6 +143,7 @@ def build_feature_meta_rows(
 
     rows: List[FeatureMetaRow] = []
     for lineage in lineages:
+        polarity = lineage.polarity or _resolve_polarity(lineage, column_descriptions)
         base = FeatureMetaRow(
             composite_name=composite_name,
             feature_name=lineage.feature_name,
@@ -152,7 +153,7 @@ def build_feature_meta_rows(
             window_days=lineage.window_days,
             target_dependency=lineage.target_dependency,
             mask_future=lineage.mask_future,
-            polarity=lineage.polarity,
+            polarity=polarity,
         )
         source_business_name = _resolve_business_name(lineage, column_descriptions)
         rows.append(base.with_rendered_phrases(source_business_name))
@@ -169,4 +170,18 @@ def _resolve_business_name(
         entry = column_descriptions.get(candidate)
         if entry and entry.business_name:
             return entry.business_name
+    return None
+
+
+def _resolve_polarity(
+    lineage: FeatureLineage,
+    column_descriptions: Optional[Mapping[str, "ColumnDescriptionRow"]],
+) -> Optional[str]:
+    """Inherit polarity from the dominant source column per plan §1.2."""
+    if not column_descriptions or not lineage.source_columns:
+        return None
+    for candidate in lineage.source_columns:
+        entry = column_descriptions.get(candidate)
+        if entry and entry.polarity:
+            return entry.polarity
     return None

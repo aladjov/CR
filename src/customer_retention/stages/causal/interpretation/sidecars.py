@@ -27,7 +27,7 @@ import logging
 from dataclasses import asdict, fields
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Sequence, Union
 
 from customer_retention.stages.causal.interpretation.quantile_phrasing import PopulationStats
 
@@ -212,7 +212,7 @@ def _write_json(path: "PathLike", payload: Dict[str, Any]) -> None:
 def _read_json(path: "PathLike") -> Optional[Dict[str, Any]]:
     try:
         text = path.read_text()
-    except (FileNotFoundError, OSError):
+    except FileNotFoundError:
         return None
     try:
         parsed = json.loads(text)
@@ -232,6 +232,3 @@ __all__ = [
     "write_column_descriptions_sidecar",
     "load_column_descriptions_sidecar",
 ]
-
-
-_ = List  # silence unused import when type-checking is disabled

@@ -149,9 +149,9 @@ def _categorical_stats(
     from pyspark.sql import functions as F  # noqa: N812
 
     out: List[PopulationStatsRow] = []
-    total_rows = train_df.count()
     for col in features:
         non_null = train_df.filter(F.col(col).isNotNull())
+        non_null_count = non_null.count()
         counts_df = (
             non_null.groupBy(F.col(col).cast("string").alias("value"))
             .agg(F.count(F.lit(1)).alias("count"))
@@ -159,7 +159,7 @@ def _categorical_stats(
             .limit(_TOP_CATEGORIES)
         )
         rows = counts_df.collect()
-        denominator = float(total_rows) if total_rows else 0.0
+        denominator = float(non_null_count) if non_null_count else 0.0
         top = [
             TopCategory(
                 value=r["value"],
@@ -173,7 +173,7 @@ def _categorical_stats(
                 run_id=run_id,
                 feature_name=col,
                 dtype="categorical",
-                count_nonnull=int(sum(t.count for t in top)) if top else 0,
+                count_nonnull=non_null_count,
                 top_categories=top or None,
             )
         )
