@@ -660,6 +660,42 @@ def shap_background_schema() -> "StructType":
     )
 
 
+def run_context_schema() -> "StructType":
+    """One-row-per-``scoring_run_id`` projection of project context + model metadata.
+
+    Populated at c05 publish time alongside the ``eligibility_snapshot`` build.
+    Feeds the Databricks App masthead (horizon, model type, objective, posture)
+    without forcing the app to read YAML artifacts — everything is one SQL query
+    against ``v_run_context``. All context fields are nullable so the writer can
+    emit a row even when ``ProjectContext`` isn't reachable from the runtime.
+    """
+    t = _types()
+    return t["StructType"](
+        [
+            t["StructField"]("scoring_run_id", t["StringType"](), False),
+            t["StructField"]("as_of_date", t["TimestampType"](), False),
+            t["StructField"]("model_name", t["StringType"](), False),
+            t["StructField"]("model_version", t["StringType"](), False),
+            # Flavor surfaced by MLflow (e.g. "xgboost", "lightgbm", "sklearn").
+            t["StructField"]("model_type", t["StringType"](), True),
+            # Primary horizon (first entry of ``IntentConfig.prediction_horizons``);
+            # the full list is retained in ``prediction_horizons`` for secondary UIs.
+            t["StructField"]("horizon_days", t["IntegerType"](), True),
+            t["StructField"]("prediction_horizons", t["ArrayType"](t["IntegerType"]()), True),
+            # ``PredictionObjective`` as string: "immediate_risk" / "renewal_risk" / "disengagement".
+            t["StructField"]("primary_objective", t["StringType"](), True),
+            # ``TemporalPosture`` as string: "long_memory" / "short_memory".
+            t["StructField"]("temporal_posture", t["StringType"](), True),
+            t["StructField"]("project_name", t["StringType"](), True),
+            t["StructField"]("project_run_id", t["StringType"](), True),
+            t["StructField"]("target_dataset", t["StringType"](), True),
+            t["StructField"]("entity_column", t["StringType"](), True),
+            t["StructField"]("dataset_names", t["ArrayType"](t["StringType"]()), True),
+            t["StructField"]("written_at", t["TimestampType"](), False),
+        ]
+    )
+
+
 def top_shap_drivers_schema() -> "StructType":
     """Per-account cache of top SHAP drivers from the training cohort.
 
@@ -710,6 +746,7 @@ ALL_SCHEMAS: Dict[str, Callable[[], "StructType"]] = {
     # Derived helper tables
     "shap_background": shap_background_schema,
     "top_shap_drivers": top_shap_drivers_schema,
+    "run_context": run_context_schema,
 }
 
 

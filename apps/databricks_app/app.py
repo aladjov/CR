@@ -13,6 +13,7 @@ from __future__ import annotations
 from html import escape
 from pathlib import Path
 
+import pandas as pd
 import streamlit as st
 
 from src import accounts_view, archetype_view, customer_profile, data, state, treemap
@@ -20,8 +21,76 @@ from src import accounts_view, archetype_view, customer_profile, data, state, tr
 # ---------------------------------------------------------------------------
 # Page config
 # ---------------------------------------------------------------------------
+_OBJECTIVE_LABELS = {
+    "immediate_risk":   "Immediate risk",
+    "renewal_risk":     "Renewal risk",
+    "disengagement":    "Disengagement",
+}
+_POSTURE_LABELS = {
+    "long_memory":      "Stable posture",
+    "short_memory":     "Reactive posture",
+}
+_MODEL_TYPE_LABELS = {
+    "xgboost":          "XGBoost",
+    "lightgbm":         "LightGBM",
+    "catboost":         "CatBoost",
+    "sklearn":          "scikit-learn",
+    "pytorch":          "PyTorch",
+    "tensorflow":       "TensorFlow",
+}
+
+
+def _load_run_context() -> dict:
+    """Return a dict with the masthead fields; empty on any failure."""
+    try:
+        df = data.run_context()
+    except Exception:
+        return {}
+    if df is None or df.empty:
+        return {}
+    row = df.iloc[0]
+
+    def _get(col):
+        if col not in df.columns:
+            return None
+        v = row[col]
+        return None if pd.isna(v) else v
+
+    return {
+        "horizon_days":       _get("horizon_days"),
+        "primary_objective":  _get("primary_objective"),
+        "temporal_posture":   _get("temporal_posture"),
+        "model_type":         _get("model_type"),
+        "model_name":         _get("model_name"),
+    }
+
+
+def _masthead_title(ctx: dict) -> tuple[str, list[str]]:
+    """Return (main_title, [subtitle segments]) for the masthead."""
+    horizon = ctx.get("horizon_days")
+    if horizon is None:
+        title = "Churn Risk"
+    else:
+        try:
+            title = f"Churn Risk in {int(horizon)} days"
+        except (TypeError, ValueError):
+            title = "Churn Risk"
+
+    segments: list[str] = []
+    model_type = ctx.get("model_type")
+    if model_type:
+        segments.append(_MODEL_TYPE_LABELS.get(model_type, str(model_type).title()))
+    objective = ctx.get("primary_objective")
+    if objective:
+        segments.append(_OBJECTIVE_LABELS.get(objective, str(objective).replace("_", " ").title()))
+    posture = ctx.get("temporal_posture")
+    if posture:
+        segments.append(_POSTURE_LABELS.get(posture, str(posture).replace("_", " ").title()))
+    return title, segments
+
+
 st.set_page_config(
-    page_title="Customer Retention · CSM Triage",
+    page_title="Churn Risk · CSM Triage",
     page_icon="·",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -39,7 +108,7 @@ st.markdown(f"<style>{_theme_path.read_text()}</style>", unsafe_allow_html=True)
 # ---------------------------------------------------------------------------
 # Masthead with inline breadcrumb
 # ---------------------------------------------------------------------------
-def _render_masthead() -> None:
+def _render_masthead(ctx: dict) -> None:
     parts = state.breadcrumb_parts()
     crumbs: list[str] = []
     for i, (label, level) in enumerate(parts):
@@ -49,13 +118,20 @@ def _render_masthead() -> None:
             f'<span class="crumb crumb-{level}">{escape(str(label))}</span>'
         )
     trail_html = "".join(crumbs) if crumbs else ""
+
+    title, segments = _masthead_title(ctx)
+    sub_html = (
+        " &middot; ".join(escape(s) for s in segments)
+        if segments
+        else "CSM Triage"
+    )
     st.markdown(
         f"""
         <header class="masthead">
           <div class="masthead-brand">
             <span class="brand-mark"></span>
-            <span class="brand-title">Customer Retention</span>
-            <span class="brand-sub">CSM Triage</span>
+            <span class="brand-title">{escape(title)}</span>
+            <span class="brand-sub">{sub_html}</span>
           </div>
           <nav class="masthead-trail">{trail_html}</nav>
         </header>
@@ -159,7 +235,8 @@ def _render_stat_row() -> None:
 # ===========================================================================
 # Render
 # ===========================================================================
-_render_masthead()
+_ctx = _load_run_context()
+_render_masthead(_ctx)
 _render_reset_bar()
 
 # --- Level 1 · Portfolio ----------------------------------------------------

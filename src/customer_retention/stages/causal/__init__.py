@@ -77,6 +77,11 @@ from .predicate_compiler import (
     predicate_to_sql,
 )
 from .rule_extractor import ExtractedRule, extract_eligibility_rules
+from .run_context_writer import (
+    RunContextConfig,
+    from_project_context,
+    write_run_context,
+)
 from .shap_runner import (
     ShapRunResult,
     compute_shap_distributed,
@@ -116,6 +121,7 @@ __all__ = [
     "ExtractedRule",
     "LLMNamer",
     "PlaybookFitDecision",
+    "RunContextConfig",
     "ShapRunResult",
     "SnapshotConfig",
     "SnapshotResult",
@@ -142,11 +148,13 @@ __all__ = [
     "evaluate_eligibility",
     "extract_eligibility_rules",
     "extract_features_from_text",
+    "from_project_context",
     "list_pending_review",
     "map_archetypes_to_playbooks",
     "predicate_to_sql",
     "prose_overlap_score",
     "select_top_shap_features",
     "unwrap_tree_model",
+    "write_run_context",
     "write_snapshot",
 ]

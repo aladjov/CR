@@ -526,3 +526,39 @@ LEFT JOIN active_archetypes a ON s.archetype_id = a.archetype_id
 LEFT JOIN active_playbooks p ON s.playbook_id = p.playbook_id
 LEFT JOIN active_policies pol ON s.playbook_id = pol.playbook_id
 WHERE COALESCE(s.is_dashboard_visible, TRUE) = TRUE;
+
+-- ============================================================================
+-- 11. v_run_context (app masthead — project-context projection)
+-- ----------------------------------------------------------------------------
+-- Single-row view exposing the pieces of ``ProjectContext`` the Databricks App
+-- needs to build the title bar (horizon, model type, objective, posture) plus
+-- the anchor tuple of the latest scoring run. Written to the ``run_context``
+-- Delta table by c05 alongside the snapshot build — here we simply pick the row
+-- with the most recent ``as_of_date`` so consumers never need to know about
+-- history. Fields are nullable — if the writer ran without a ``ProjectContext``
+-- to source, the app falls back to a minimal title.
+-- ============================================================================
+CREATE OR REPLACE VIEW {catalog}.{schema}.v_run_context AS
+WITH latest AS (
+    SELECT * FROM {catalog}.{schema}.run_context
+    WHERE as_of_date = (SELECT MAX(as_of_date) FROM {catalog}.{schema}.run_context)
+)
+SELECT
+    scoring_run_id,
+    as_of_date,
+    model_name,
+    model_version,
+    model_type,
+    horizon_days,
+    prediction_horizons,
+    primary_objective,
+    temporal_posture,
+    project_name,
+    project_run_id,
+    target_dataset,
+    entity_column,
+    dataset_names,
+    written_at
+FROM latest
+ORDER BY written_at DESC
+LIMIT 1;

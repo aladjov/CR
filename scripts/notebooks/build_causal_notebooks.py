@@ -781,6 +781,83 @@ else:
 '''
 
 
+_C05_WRITE_RUN_CONTEXT_BODY = '''from customer_retention.stages.causal import (
+    from_project_context,
+    write_run_context,
+)
+
+RUN_CONTEXT_FQN = f"{CATALOG}.{SCHEMA}.run_context"
+
+
+def _load_project_context():
+    """Best-effort ProjectContext load. Returns None when YAML is unreachable so
+    the writer still emits a row with model metadata only."""
+    try:
+        from customer_retention.analysis.auto_explorer.project_context import ProjectContext
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+    except ImportError:
+        return None
+    try:
+        _ns = RunNamespace.from_env_or_latest()
+    except Exception:
+        _ns = None
+    if _ns is None:
+        return None
+    _path = _ns.project_context_path
+    if not _path.exists():
+        return None
+    try:
+        return ProjectContext.load(_path)
+    except Exception:
+        return None
+
+
+def _resolve_model_type():
+    """Try to pull the MLflow flavor off the registered model (e.g. "xgboost")."""
+    try:
+        import mlflow  # noqa: F401
+        if MODEL_URI is None:
+            return None
+        from mlflow.models import Model as _MlflowModel
+        _info = _MlflowModel.load(MODEL_URI)
+        _flavors = list((_info.flavors or {}).keys())
+        for preferred in ("xgboost", "lightgbm", "catboost", "pytorch", "tensorflow", "sklearn"):
+            if preferred in _flavors:
+                return preferred
+        _flavors = [f for f in _flavors if f != "python_function"]
+        return _flavors[0] if _flavors else None
+    except Exception:
+        return None
+
+
+if spark is None:
+    print("SKIPPED: no Spark session (Databricks-only cell)")
+elif snapshot_result is None:
+    print("SKIPPED: snapshot_result is None — 5.1 did not produce a run")
+else:
+    _ctx = _load_project_context()
+    _cfg = from_project_context(
+        project_context=_ctx,
+        spark=spark,
+        table_fqn=RUN_CONTEXT_FQN,
+        scoring_run_id=snapshot_result.scoring_run_id,
+        as_of_date=snapshot_result.as_of_date,
+        model_name=MODEL_NAME,
+        model_version=MODEL_VERSION,
+        model_type=_resolve_model_type(),
+    )
+    write_run_context(_cfg)
+    print(f"Wrote run_context row for scoring_run_id={snapshot_result.scoring_run_id}")
+    if _ctx is None:
+        print("  (project_context.yaml not reachable — context fields are NULL)")
+    else:
+        print(f"  horizon_days:       {_cfg.horizon_days}")
+        print(f"  primary_objective:  {_cfg.primary_objective}")
+        print(f"  temporal_posture:   {_cfg.temporal_posture}")
+        print(f"  model_type:         {_cfg.model_type or '(unresolved)'}")
+'''
+
+
 _C05_PUBLISH_VIEWS_BODY = '''from customer_retention.stages.causal.dashboard_views import (
     DASHBOARD_VIEW_NAMES,
     publish_dashboard_views,
@@ -833,9 +910,11 @@ def build_c05() -> List[Dict[str, Any]]:
         *setup_block(stage, needs_model=True),
         md_cell(stage, "c05_build_snapshot_section", ["## 5.1 Build Eligibility Snapshot\n"]),
         code_cell(stage, "code", "build_eligibility_snapshot", [_C05_BUILD_SNAPSHOT_BODY]),
-        md_cell(stage, "c05_publish_views_section", ["## 5.2 Publish Dashboard SQL Views\n"]),
+        md_cell(stage, "c05_write_run_context_section", ["## 5.2 Write Run Context (app masthead projection)\n"]),
+        code_cell(stage, "code", "write_run_context", [_C05_WRITE_RUN_CONTEXT_BODY]),
+        md_cell(stage, "c05_publish_views_section", ["## 5.3 Publish Dashboard SQL Views\n"]),
         code_cell(stage, "code", "publish_dashboard_views", [_C05_PUBLISH_VIEWS_BODY]),
-        md_cell(stage, "c05_summary_section", ["## 5.3 Print Run Summary\n"]),
+        md_cell(stage, "c05_summary_section", ["## 5.4 Print Run Summary\n"]),
         code_cell(stage, "code", "print_run_summary", [_C05_SUMMARY_BODY]),
         release_cleanup_cell(stage),
     ]

@@ -35,6 +35,7 @@ DASHBOARD_VIEW_NAMES: tuple[str, ...] = (
     "v_playbook_archetype_rollup",
     "v_eligible_all_playbooks",
     "v_account_explanation",
+    "v_run_context",
 )
 
 

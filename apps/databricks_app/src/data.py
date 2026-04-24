@@ -157,6 +157,22 @@ def account_explanation(entity_id: str) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=300, show_spinner=False)
+def run_context() -> pd.DataFrame:
+    """Single-row projection for the app masthead.
+
+    Returns an empty DataFrame when the view or the underlying table is absent
+    (e.g. the causal track hasn't been re-run since ``v_run_context`` was
+    introduced). The masthead gracefully degrades to a minimal title in that
+    case.
+    """
+    cfg = load_config()
+    try:
+        return _query(cfg, f"SELECT * FROM {cfg.fqn_prefix}.v_run_context LIMIT 1")
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
 def run_history() -> pd.DataFrame:
     cfg = load_config()
     return _query(cfg, f"""
