@@ -79,6 +79,7 @@ from .predicate_compiler import (
 from .rule_extractor import ExtractedRule, extract_eligibility_rules
 from .run_context_writer import (
     RunContextConfig,
+    ensure_run_context_table,
     from_project_context,
     write_run_context,
 )
@@ -144,6 +145,7 @@ __all__ = [
     "compute_shap_distributed",
     "cosine_similarity",
     "derive_archetypes_and_policies",
+    "ensure_run_context_table",
     "expire_stale_pending",
     "evaluate_eligibility",
     "extract_eligibility_rules",

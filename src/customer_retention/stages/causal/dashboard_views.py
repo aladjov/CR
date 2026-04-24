@@ -77,7 +77,16 @@ def publish_dashboard_views(spark: "SparkSession", catalog: str, schema: str) ->
     Returns the list of statements that were submitted (one per view).
     Each statement is a ``CREATE OR REPLACE VIEW`` so re-running is a
     no-op when the underlying schema is unchanged.
+
+    Before submitting, the ``run_context`` Delta table is ensured via
+    idempotent ``CREATE TABLE IF NOT EXISTS`` — Spark validates the
+    ``v_run_context`` view body against its referenced table at creation
+    time, so this makes publish order-independent from the per-run
+    ``write_run_context`` write.
     """
+    from .run_context_writer import ensure_run_context_table
+
+    ensure_run_context_table(spark, f"{catalog}.{schema}.run_context")
     rendered = render_dashboard_view_sql(catalog, schema)
     statements = split_view_statements(rendered)
     submitted: List[str] = []

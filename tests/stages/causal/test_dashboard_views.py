@@ -61,9 +61,21 @@ class TestPublishDashboardViews:
         statements = publish_dashboard_views(spark, "c", "s")
         expected = len(DASHBOARD_VIEW_NAMES)
         assert len(statements) == expected
-        assert spark.sql.call_count == expected
-        for call in spark.sql.call_args_list:
-            assert "CREATE OR REPLACE VIEW" in call.args[0]
+        # publish_dashboard_views also issues a CREATE TABLE IF NOT EXISTS for
+        # run_context (the v_run_context view references it and Spark validates
+        # the view body at DDL time), so spark.sql is called once extra.
+        assert spark.sql.call_count == expected + 1
+        view_calls = [
+            call for call in spark.sql.call_args_list
+            if "CREATE OR REPLACE VIEW" in call.args[0]
+        ]
+        assert len(view_calls) == expected
+
+    def test_ensures_run_context_table_before_publishing_views(self):
+        spark = MagicMock()
+        publish_dashboard_views(spark, "c", "s")
+        first_sql = spark.sql.call_args_list[0].args[0]
+        assert "CREATE TABLE IF NOT EXISTS c.s.run_context" in first_sql
 
     def test_substitutes_catalog_and_schema_into_sql(self):
         spark = MagicMock()

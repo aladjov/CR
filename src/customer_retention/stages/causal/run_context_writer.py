@@ -115,6 +115,22 @@ def from_project_context(
     )
 
 
+def ensure_run_context_table(spark: "SparkSession", table_fqn: str) -> None:
+    """Idempotent ``CREATE TABLE IF NOT EXISTS`` for the ``run_context`` Delta table.
+
+    Safe to call from both the writer (before a MERGE) and the view publisher
+    (before ``CREATE OR REPLACE VIEW v_run_context``, which Spark validates at
+    creation time against the referenced table).
+    """
+    from .schemas import get_schema
+
+    schema = get_schema(_DEFAULT_TARGET_TABLE)
+    spark.sql(
+        f"CREATE TABLE IF NOT EXISTS {table_fqn} "
+        f"({_schema_to_ddl(schema)}) USING DELTA"
+    )
+
+
 def write_run_context(config: RunContextConfig) -> None:
     """Upsert one row into ``{catalog}.{schema}.run_context`` keyed on ``scoring_run_id``.
 
@@ -130,11 +146,7 @@ def write_run_context(config: RunContextConfig) -> None:
     spark = config.spark
     schema = get_schema(_DEFAULT_TARGET_TABLE)
 
-    # Ensure the target table exists before the MERGE.
-    spark.sql(
-        f"CREATE TABLE IF NOT EXISTS {config.table_fqn} "
-        f"({_schema_to_ddl(schema)}) USING DELTA"
-    )
+    ensure_run_context_table(spark, config.table_fqn)
 
     row = {
         "scoring_run_id": config.scoring_run_id,
