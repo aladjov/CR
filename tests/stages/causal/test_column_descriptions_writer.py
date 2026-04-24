@@ -4,7 +4,7 @@ from __future__ import annotations
 import sys
 import types
 from datetime import datetime, timezone
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -14,6 +14,7 @@ from customer_retention.stages.causal.column_descriptions_writer import (
     _field_type_ddl,
     _row_to_record,
     _schema_to_ddl,
+    bootstrap_column_descriptions,
     write_column_descriptions,
 )
 
@@ -161,3 +162,30 @@ class TestWriteColumnDescriptionsMerge:
         merge_builder.whenMatchedUpdateAll.assert_called_once()
         merge_builder.whenNotMatchedInsertAll.assert_called_once()
         merge_builder.execute.assert_called_once()
+
+
+class TestBootstrapColumnDescriptions:
+    def test_chains_parse_and_write(self, tmp_path):
+        md = tmp_path / "seed.md"
+        md.write_text(
+            "prod.s.account:\n"
+            "\n"
+            "ACCOUNT_ID (string): Unique identifier for the account.\n"
+        )
+        spark = MagicMock()
+        with patch(
+            "customer_retention.stages.causal.column_descriptions_writer.write_column_descriptions",
+            return_value=1,
+        ) as mocked_write:
+            n = bootstrap_column_descriptions(spark, "c.s.column_descriptions", md)
+        assert n == 1
+        assert mocked_write.call_count == 1
+        cfg = mocked_write.call_args.args[0]
+        assert cfg.spark is spark
+        assert cfg.table_fqn == "c.s.column_descriptions"
+        assert len(cfg.rows) == 1
+        assert cfg.rows[0].column_name == "ACCOUNT_ID"
+
+    def test_missing_file_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            bootstrap_column_descriptions(MagicMock(), "c.s.t", tmp_path / "nope.md")

@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -104,6 +105,27 @@ def write_column_descriptions(config: ColumnDescriptionsConfig) -> int:
         len(records), config.table_fqn,
     )
     return len(records)
+
+
+def bootstrap_column_descriptions(
+    spark: "SparkSession",
+    table_fqn: str,
+    md_path: Path | str,
+) -> int:
+    """Parse ``docs/sps_table_descriptions.md`` and upsert every column.
+
+    Single call NB00 0.15 makes for the one-shot bootstrap. Returns the
+    number of rows upserted. Missing file raises ``FileNotFoundError`` —
+    fail fast per ``Coding_Practices.md``.
+    """
+    from customer_retention.stages.causal.interpretation.markdown_bootstrap import (
+        parse_table_descriptions_md,
+    )
+
+    rows = parse_table_descriptions_md(md_path)
+    return write_column_descriptions(
+        ColumnDescriptionsConfig(spark=spark, table_fqn=table_fqn, rows=rows)
+    )
 
 
 def _row_to_record(row: ColumnDescriptionRow, written_at: datetime) -> dict:

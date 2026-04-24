@@ -9,12 +9,26 @@ from customer_retention.stages.causal.interpretation.business_phrase import (
     render_business_phrase,
     render_window_phrase,
 )
+from customer_retention.stages.causal.interpretation.feature_meta_builder import (
+    FeatureLineage,
+    build_feature_meta_rows,
+    parse_aggregation_feature_name,
+)
 from customer_retention.stages.causal.interpretation.markdown_bootstrap import (
     parse_table_descriptions_md,
+)
+from customer_retention.stages.causal.interpretation.quantile_phrasing import (
+    PopulationStats,
+    quantile_phrase,
 )
 
 __all__ = [
     "render_business_phrase",
     "render_window_phrase",
     "parse_table_descriptions_md",
+    "FeatureLineage",
+    "build_feature_meta_rows",
+    "parse_aggregation_feature_name",
+    "PopulationStats",
+    "quantile_phrase",
 ]

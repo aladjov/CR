@@ -61,6 +61,18 @@ class TestRunNamespacePathConstruction:
         expected = tmp_path / "runs" / "proj-abc" / "data" / "bronze" / "events_aggregated"
         assert ns.bronze_table_dir("events") == expected
 
+    def test_feature_meta_dir(self, tmp_path):
+        ns = RunNamespace(root=tmp_path, run_id="proj-abc")
+        assert ns.feature_meta_dir == tmp_path / "runs" / "proj-abc" / "feature_meta"
+
+    def test_column_descriptions_dir_is_root_scoped(self, tmp_path):
+        ns = RunNamespace(root=tmp_path, run_id="proj-abc")
+        assert ns.column_descriptions_dir == tmp_path / "column_descriptions"
+
+    def test_feature_population_stats_dir(self, tmp_path):
+        ns = RunNamespace(root=tmp_path, run_id="proj-abc")
+        assert ns.feature_population_stats_dir == tmp_path / "runs" / "proj-abc" / "feature_population_stats"
+
     def test_gold_table_dir(self, tmp_path):
         ns = RunNamespace(root=tmp_path, run_id="proj-abc")
         expected = tmp_path / "runs" / "proj-abc" / "data" / "gold" / "gold_features_cust_emai__abc1234"

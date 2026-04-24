@@ -1,0 +1,169 @@
+"""Build ``FeatureMetaRow`` lists from gold-layer lineage.
+
+Two public helpers:
+
+- ``parse_aggregation_feature_name`` — reverse-parses the canonical bronze
+  aggregation naming convention (``{col}_{func}_{window}`` with optional
+  ``event_count_{window}`` / ``days_since_*`` specials) into a
+  ``FeatureLineage``. Returns ``None`` when the name does not match any
+  known pattern — the caller then emits a minimal row with just the
+  feature name.
+- ``build_feature_meta_rows`` — converts a list of ``FeatureLineage``
+  inputs into ``FeatureMetaRow`` objects, filling ``business_phrase``
+  deterministically from an optional ``column_descriptions`` lookup.
+
+Keeping the two helpers decoupled lets the caller drive the lineage list
+from whatever source is available at generation time (``PipelineConfig``
+walk, findings.yaml parse, or a manual list for tests) without entangling
+the builder with ``FindingsParser`` internals.
+"""
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import Iterable, List, Mapping, Optional
+
+from customer_retention.stages.causal.column_descriptions_writer import ColumnDescriptionRow
+from customer_retention.stages.causal.feature_meta_writer import FeatureMetaRow
+
+_AGG_FUNC_ALIASES = {
+    "sum": "sum",
+    "mean": "avg",
+    "avg": "avg",
+    "min": "min",
+    "max": "max",
+    "count": "count",
+    "count_distinct": "count_distinct",
+    "std": "avg",
+    "stddev": "avg",
+}
+
+_WINDOW_SUFFIX_RE = re.compile(r"^(?P<body>.+?)_(?P<window>\d+)d$")
+_EVENT_COUNT_RE = re.compile(r"^event_count_(?P<window>\d+)d$")
+_DAYS_SINCE_RE = re.compile(r"^days_since_(last|first)_event$")
+
+
+@dataclass
+class FeatureLineage:
+    """Minimal lineage shape a builder needs to emit a ``FeatureMetaRow``.
+
+    All non-identifier fields stay optional so the caller can hand over
+    partial lineage and let the builder fill the deterministic ones.
+    """
+
+    feature_name: str
+    source_columns: Optional[List[str]] = None
+    source_table: Optional[str] = None
+    aggregation_kind: Optional[str] = None
+    window_days: Optional[int] = None
+    mask_future: Optional[bool] = None
+    target_dependency: Optional[bool] = None
+    polarity: Optional[str] = None
+
+
+def parse_aggregation_feature_name(
+    feature_name: str,
+    *,
+    value_columns: Iterable[str] = (),
+    agg_funcs: Iterable[str] = (),
+    source_table: Optional[str] = None,
+) -> Optional[FeatureLineage]:
+    """Reverse-parse the canonical ``{col}_{func}_{window}d`` naming.
+
+    ``event_count_{w}d`` and ``days_since_{last|first}_event`` are recognized
+    as specials. Returns ``None`` on any unrecognized shape — the caller
+    is then free to emit a minimal row or a row built from another source.
+    """
+    event_count = _EVENT_COUNT_RE.match(feature_name)
+    if event_count:
+        return FeatureLineage(
+            feature_name=feature_name,
+            source_columns=[],
+            source_table=source_table,
+            aggregation_kind="count",
+            window_days=int(event_count.group("window")),
+        )
+    days_since = _DAYS_SINCE_RE.match(feature_name)
+    if days_since:
+        return FeatureLineage(
+            feature_name=feature_name,
+            source_columns=[],
+            source_table=source_table,
+            aggregation_kind="recency_days",
+        )
+    windowed = _WINDOW_SUFFIX_RE.match(feature_name)
+    if not windowed:
+        return None
+    body = windowed.group("body")
+    window_days = int(windowed.group("window"))
+    col, func = _split_col_and_func(body, value_columns, agg_funcs)
+    if col is None or func is None:
+        return None
+    return FeatureLineage(
+        feature_name=feature_name,
+        source_columns=[col],
+        source_table=source_table,
+        aggregation_kind=_AGG_FUNC_ALIASES.get(func, func),
+        window_days=window_days,
+    )
+
+
+def _split_col_and_func(
+    body: str,
+    value_columns: Iterable[str],
+    agg_funcs: Iterable[str],
+) -> tuple[Optional[str], Optional[str]]:
+    """Given ``body = '{col}_{func}'`` resolve the boundary using the known
+    column / function vocabulary. Ambiguity is resolved by longest-column
+    match, then longest-function match."""
+    cols_sorted = sorted((c for c in value_columns if c), key=len, reverse=True)
+    funcs_sorted = sorted((f for f in agg_funcs if f), key=len, reverse=True)
+    for col in cols_sorted:
+        prefix = f"{col}_"
+        if body.startswith(prefix):
+            tail = body[len(prefix):]
+            if tail in _AGG_FUNC_ALIASES or tail in funcs_sorted:
+                return col, tail
+    for func in funcs_sorted:
+        suffix = f"_{func}"
+        if body.endswith(suffix):
+            return body[: -len(suffix)], func
+    return None, None
+
+
+def build_feature_meta_rows(
+    composite_name: str,
+    lineages: Iterable[FeatureLineage],
+    *,
+    column_descriptions: Optional[Mapping[str, ColumnDescriptionRow]] = None,
+) -> List[FeatureMetaRow]:
+    """Convert lineages into ``FeatureMetaRow``s with rendered phrases."""
+    rows: List[FeatureMetaRow] = []
+    for lineage in lineages:
+        base = FeatureMetaRow(
+            composite_name=composite_name,
+            feature_name=lineage.feature_name,
+            source_columns=lineage.source_columns,
+            source_table=lineage.source_table,
+            aggregation_kind=lineage.aggregation_kind,
+            window_days=lineage.window_days,
+            target_dependency=lineage.target_dependency,
+            mask_future=lineage.mask_future,
+            polarity=lineage.polarity,
+        )
+        source_business_name = _resolve_business_name(lineage, column_descriptions)
+        rows.append(base.with_rendered_phrases(source_business_name))
+    return rows
+
+
+def _resolve_business_name(
+    lineage: FeatureLineage,
+    column_descriptions: Optional[Mapping[str, ColumnDescriptionRow]],
+) -> Optional[str]:
+    if not column_descriptions or not lineage.source_columns:
+        return None
+    for candidate in lineage.source_columns:
+        entry = column_descriptions.get(candidate)
+        if entry and entry.business_name:
+            return entry.business_name
+    return None

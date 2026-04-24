@@ -29,6 +29,7 @@ EXPECTED_TABLES = {
     "run_context",
     "feature_meta",
     "column_descriptions",
+    "feature_population_stats",
 }
 
 

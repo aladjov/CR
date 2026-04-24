@@ -696,6 +696,53 @@ def run_context_schema() -> "StructType":
     )
 
 
+def _top_category_struct():
+    """One (value, count, share) entry for a categorical feature's top-10 list."""
+    t = _types()
+    return t["StructType"](
+        [
+            t["StructField"]("value", t["StringType"](), True),
+            t["StructField"]("count", t["LongType"](), True),
+            t["StructField"]("share", t["DoubleType"](), True),
+        ]
+    )
+
+
+def feature_population_stats_schema() -> "StructType":
+    """Per-run, per-feature population summary from training rows.
+
+    Computed once per derivation run on the training split only (never on
+    test — leakage). Feeds the quantile-phrasing layer so the dashboard
+    and LLM prompt can say "elevated" / "typical" / "very low" instead of
+    quoting raw cutoffs.
+    """
+    t = _types()
+    return t["StructType"](
+        [
+            t["StructField"]("run_id", t["StringType"](), False),
+            t["StructField"]("feature_name", t["StringType"](), False),
+            # ``numeric`` / ``categorical``
+            t["StructField"]("dtype", t["StringType"](), False),
+            t["StructField"]("count_nonnull", t["LongType"](), True),
+            t["StructField"]("mean", t["DoubleType"](), True),
+            t["StructField"]("stddev", t["DoubleType"](), True),
+            t["StructField"]("q01", t["DoubleType"](), True),
+            t["StructField"]("q05", t["DoubleType"](), True),
+            t["StructField"]("q25", t["DoubleType"](), True),
+            t["StructField"]("q50", t["DoubleType"](), True),
+            t["StructField"]("q75", t["DoubleType"](), True),
+            t["StructField"]("q95", t["DoubleType"](), True),
+            t["StructField"]("q99", t["DoubleType"](), True),
+            t["StructField"](
+                "top_categories",
+                t["ArrayType"](_top_category_struct()),
+                True,
+            ),
+            t["StructField"]("computed_at", t["TimestampType"](), False),
+        ]
+    )
+
+
 def column_descriptions_schema() -> "StructType":
     """Source-column business definitions, slowly-changing.
 
@@ -824,6 +871,7 @@ ALL_SCHEMAS: Dict[str, Callable[[], "StructType"]] = {
     "run_context": run_context_schema,
     "feature_meta": feature_meta_schema,
     "column_descriptions": column_descriptions_schema,
+    "feature_population_stats": feature_population_stats_schema,
 }
 
 

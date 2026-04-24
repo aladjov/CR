@@ -132,6 +132,18 @@ class RunNamespace:
         return self.run_dir / "gold_metadata.json"
 
     @property
+    def feature_meta_dir(self) -> Path:
+        return self.run_dir / "feature_meta"
+
+    @property
+    def column_descriptions_dir(self) -> Path:
+        return self.root / "column_descriptions"
+
+    @property
+    def feature_population_stats_dir(self) -> Path:
+        return self.run_dir / "feature_population_stats"
+
+    @property
     def exploration_metadata_path(self) -> Path:
         return self.run_dir / "exploration_metadata.json"
 
