@@ -375,14 +375,25 @@ class TestDescribeDatasets:
         assert describe_datasets(datasets, frames) == {}
 
     @patch(
+        "customer_retention.analysis.auto_explorer.column_describer.fetch_uc_column_comments",
+    )
+    @patch(
+        "customer_retention.analysis.auto_explorer.column_describer.generate_column_descriptions",
+    )
+    @patch(
         "customer_retention.analysis.auto_explorer.column_describer.is_databricks",
         return_value=True,
     )
-    def test_skips_file_path_datasets(self, _mock_db):
+    def test_describes_file_path_datasets_via_llm(self, _mock_db, mock_gen, mock_uc):
+        mock_gen.return_value = {"X": "A simple column."}
         datasets = {"local": "../data/local.csv"}
         frames = {"local": pd.DataFrame({"X": [1]})}
+
         result = describe_datasets(datasets, frames)
-        assert result == {}
+
+        assert result == {"local": {"X": "A simple column."}}
+        mock_uc.assert_not_called()  # no UC lookup for CSV sources
+        assert mock_gen.call_args[0][0] == "file:local"
 
     @patch(
         "customer_retention.analysis.auto_explorer.column_describer.fetch_uc_column_comments",

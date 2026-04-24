@@ -137,23 +137,40 @@ def fetch_uc_column_comments(
 # ---------------------------------------------------------------------------
 
 _PROMPT_TEMPLATE = """\
-You are a data documentation assistant.  Given the fully-qualified Unity \
-Catalog table name and its columns, generate a short (one sentence) business \
+You are a data documentation assistant.  Given a dataset label, its column \
+names, and a small sample of rows, generate a short (one sentence) business \
 description for every column.
 
-Table: {table_fqn}
+Dataset: {table_fqn}
 
 Columns:
 {column_list}
-
+{sample_block}
 Reply with ONLY the column descriptions, one per line, using exactly this \
 format (no extra text, no blank lines):
 COLUMN_NAME: description text here"""
 
 
-def _build_prompt(table_fqn: str, columns: list[str]) -> str:
+def _build_prompt(
+    table_fqn: str,
+    columns: list[str],
+    *,
+    sample_rows: Optional[list[dict[str, Any]]] = None,
+) -> str:
     column_list = "\n".join(f"- {c}" for c in columns)
-    return _PROMPT_TEMPLATE.format(table_fqn=table_fqn, column_list=column_list)
+    sample_block = ""
+    if sample_rows:
+        lines = ["", "Sample rows (up to 10):"]
+        for row in sample_rows[:10]:
+            lines.append(
+                "- " + ", ".join(f"{k}={row[k]!r}" for k in columns if k in row)
+            )
+        sample_block = "\n".join(lines) + "\n"
+    return _PROMPT_TEMPLATE.format(
+        table_fqn=table_fqn,
+        column_list=column_list,
+        sample_block=sample_block,
+    )
 
 
 def _parse_llm_response(
@@ -185,6 +202,7 @@ def generate_column_descriptions(
     *,
     endpoint: Optional[str] = None,
     existing_comments: Optional[dict[str, str]] = None,
+    sample_rows: Optional[list[dict[str, Any]]] = None,
 ) -> dict[str, str]:
     """Call a Databricks serving endpoint to produce column descriptions.
 
@@ -232,7 +250,10 @@ def generate_column_descriptions(
             endpoint=resolved,
             inputs={
                 "messages": [
-                    {"role": "user", "content": _build_prompt(table_fqn, need_desc)},
+                    {"role": "user",
+                     "content": _build_prompt(
+                         table_fqn, need_desc, sample_rows=sample_rows,
+                     )},
                 ],
                 "max_tokens": 4096,
                 "temperature": 0.1,
@@ -280,25 +301,62 @@ def describe_datasets(
     all_descriptions: dict[str, dict[str, str]] = {}
 
     for name, source_path in dataset_paths.items():
-        if not is_table_name(source_path):
-            continue
-
         df = loaded_frames.get(name)
         if df is None:
             continue
 
         columns = list(ops.get_dtype_info(df).keys())
-        uc_comments = fetch_uc_column_comments(source_path)
+        is_table = is_table_name(source_path)
+        label = source_path if is_table else f"file:{name}"
+        uc_comments = fetch_uc_column_comments(source_path) if is_table else {}
+        sample_rows = _collect_sample_rows(df, columns, limit=10)
         descs = generate_column_descriptions(
-            source_path,
+            label,
             columns,
             endpoint=endpoint,
             existing_comments=uc_comments,
+            sample_rows=sample_rows,
         )
         if descs:
             all_descriptions[name] = descs
 
     return all_descriptions
+
+
+def _collect_sample_rows(
+    df: Any,
+    columns: list[str],
+    *,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """Return a small list of row dicts for prompt grounding.
+
+    Works for pandas, pyspark.pandas, and native Spark DataFrames.
+    Values are coerced to JSON-friendly primitives via ``str`` when they
+    are not builtin scalars, keeping the prompt stable.
+    """
+    try:
+        module = type(df).__module__
+        if module.startswith("pyspark.sql"):
+            pdf = df.select(*columns).limit(limit).toPandas()
+        elif module.startswith("pyspark.pandas"):
+            pdf = df[columns].head(limit).to_pandas()
+        else:
+            pdf = df[columns].head(limit)
+        rows: list[dict[str, Any]] = []
+        for _, row in pdf.iterrows():
+            entry: dict[str, Any] = {}
+            for col in columns:
+                val = row.get(col)
+                if val is None or isinstance(val, (bool, int, float, str)):
+                    entry[col] = val
+                else:
+                    entry[col] = str(val)
+            rows.append(entry)
+        return rows
+    except Exception:
+        logger.debug("Could not collect sample rows for prompt", exc_info=True)
+        return []
 
 
 # ---------------------------------------------------------------------------
