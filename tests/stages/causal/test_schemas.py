@@ -26,6 +26,7 @@ EXPECTED_TABLES = {
     "outcomes",
     "shap_background",
     "top_shap_drivers",
+    "run_context",
 }
 
 
