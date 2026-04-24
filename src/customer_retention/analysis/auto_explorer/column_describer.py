@@ -344,10 +344,10 @@ def _collect_sample_rows(
         else:
             pdf = df[columns].head(limit)
         rows: list[dict[str, Any]] = []
-        for _, row in pdf.iterrows():
+        for record in pdf.to_dict(orient="records"):
             entry: dict[str, Any] = {}
             for col in columns:
-                val = row.get(col)
+                val = record.get(col)
                 if val is None or isinstance(val, (bool, int, float, str)):
                     entry[col] = val
                 else:
