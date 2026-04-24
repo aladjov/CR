@@ -39,7 +39,9 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol, runtime_c
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # pragma: no cover
-    pass
+    from customer_retention.stages.causal.interpretation.archetype_context import (
+        EnrichedArchetypeContext,
+    )
 
 
 FALLBACK_SUFFIX: str = ":fallback"
@@ -119,7 +121,11 @@ class LLMNamer(Protocol):
     @property
     def model_id(self) -> str: ...  # pragma: no cover
 
-    def name_archetype(self, context: ArchetypeContext) -> ArchetypeNaming: ...
+    def name_archetype(
+        self,
+        context: ArchetypeContext,
+        enriched: Optional["EnrichedArchetypeContext"] = None,
+    ) -> ArchetypeNaming: ...
 
 
 # ---------------------------------------------------------------------------
@@ -183,7 +189,11 @@ class ProseOverlapMatcher:
 
     model_id: str = "prose_overlap"
 
-    def name_archetype(self, context: ArchetypeContext) -> ArchetypeNaming:
+    def name_archetype(
+        self,
+        context: ArchetypeContext,
+        enriched: Optional["EnrichedArchetypeContext"] = None,
+    ) -> ArchetypeNaming:
         from .playbook_mapper import ArchetypeSummary, prose_overlap_score
 
         archetype = ArchetypeSummary(
@@ -197,7 +207,11 @@ class ProseOverlapMatcher:
         top_positive = context.top_positive_drivers[0] if context.top_positive_drivers else None
         top_negative = context.top_negative_drivers[0] if context.top_negative_drivers else None
         label = self._template_label(context, top_positive, top_negative)
-        description = self._template_description(context, top_positive, top_negative)
+        description = (
+            self._template_description_enriched(context, enriched)
+            if enriched is not None
+            else self._template_description(context, top_positive, top_negative)
+        )
 
         decisions: List[PlaybookFitDecision] = []
         for cand in context.candidate_playbooks:
@@ -247,6 +261,33 @@ class ProseOverlapMatcher:
             parts.append(f"Top risk driver: {top_positive['feature']}.")
         if top_negative:
             parts.append(f"Top protective driver: {top_negative['feature']}.")
+        return " ".join(parts)
+
+    @staticmethod
+    def _template_description_enriched(
+        context: ArchetypeContext,
+        enriched: "EnrichedArchetypeContext",
+    ) -> str:
+        """Phase 3/4 fallback — use enriched ``business_phrase``/``value_phrase``
+        so the deterministic path reads the same as the LLM path."""
+        parts = [
+            f"Cluster of {context.cluster_size} customers with mean churn "
+            f"probability {context.cluster_mean_churn_probability:.3f}."
+        ]
+        if enriched.top_positive_drivers:
+            driver = enriched.top_positive_drivers[0]
+            parts.append(
+                f"Top risk driver: {driver.business_phrase} "
+                f"({driver.value_phrase})."
+            )
+        if enriched.top_negative_drivers:
+            driver = enriched.top_negative_drivers[0]
+            parts.append(
+                f"Top protective driver: {driver.business_phrase} "
+                f"({driver.value_phrase})."
+            )
+        if enriched.eligibility_rule_prose:
+            parts.append(f"Eligible when: {enriched.eligibility_rule_prose}.")
         return " ".join(parts)
 
     @staticmethod
@@ -308,23 +349,28 @@ class DatabricksFoundationModelNamer:
     def model_id(self) -> str:
         return self.endpoint_name
 
-    def name_archetype(self, context: ArchetypeContext) -> ArchetypeNaming:
+    def name_archetype(
+        self,
+        context: ArchetypeContext,
+        enriched: Optional["EnrichedArchetypeContext"] = None,
+    ) -> ArchetypeNaming:
         client = self._get_client()
         if client is None:
-            return self._fallback_with_log("OpenAI client unavailable", context)
+            return self._fallback_with_log("OpenAI client unavailable", context, enriched)
         try:
+            messages = self._build_messages(context, enriched)
             response = client.chat.completions.create(
                 model=self.endpoint_name,
-                messages=[{"role": "user", "content": self._build_prompt(context)}],
+                messages=messages,
                 max_tokens=self.max_tokens,
                 temperature=self.temperature,
             )
             content = response.choices[0].message.content if response and response.choices else ""
             parsed = self._parse_response(content)
         except Exception as exc:  # noqa: BLE001 — fallback for any LLM error
-            return self._fallback_with_log(f"LLM call failed: {exc}", context)
+            return self._fallback_with_log(f"LLM call failed: {exc}", context, enriched)
         if parsed is None:
-            return self._fallback_with_log("LLM returned unparseable JSON", context)
+            return self._fallback_with_log("LLM returned unparseable JSON", context, enriched)
         decisions = [
             PlaybookFitDecision(
                 playbook_id=str(item.get("playbook_id")),
@@ -355,13 +401,30 @@ class DatabricksFoundationModelNamer:
         self._client = OpenAI(base_url=base_url, api_key=self.workspace_token or "dummy")
         return self._client
 
-    def _fallback_with_log(self, reason: str, context: ArchetypeContext) -> ArchetypeNaming:
+    def _fallback_with_log(
+        self,
+        reason: str,
+        context: ArchetypeContext,
+        enriched: Optional["EnrichedArchetypeContext"] = None,
+    ) -> ArchetypeNaming:
         logger.warning(
             "DatabricksFoundationModelNamer fallback (%s); using ProseOverlapMatcher", reason
         )
-        result = self._fallback.name_archetype(context)
+        result = self._fallback.name_archetype(context, enriched=enriched)
         result.llm_model_id = self.endpoint_name + FALLBACK_SUFFIX
         return result
+
+    def _build_messages(
+        self,
+        context: ArchetypeContext,
+        enriched: Optional["EnrichedArchetypeContext"],
+    ) -> List[Dict[str, str]]:
+        if enriched is not None:
+            from customer_retention.stages.causal.interpretation.llm_prompt import (
+                build_enriched_prompt_messages,
+            )
+            return build_enriched_prompt_messages(enriched)
+        return [{"role": "user", "content": self._build_prompt(context)}]
 
     def _build_prompt(self, context: ArchetypeContext) -> str:
         positive_block = "\n".join(

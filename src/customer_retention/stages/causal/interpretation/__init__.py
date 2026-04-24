@@ -21,6 +21,9 @@ from customer_retention.stages.causal.interpretation.feature_meta_builder import
     build_feature_meta_rows,
     parse_aggregation_feature_name,
 )
+from customer_retention.stages.causal.interpretation.llm_prompt import (
+    build_enriched_prompt_messages,
+)
 from customer_retention.stages.causal.interpretation.markdown_bootstrap import (
     parse_table_descriptions_md,
 )
@@ -46,5 +49,6 @@ __all__ = [
     "EnrichedDriver",
     "EnrichedPlaybook",
     "build_enriched_context",
+    "build_enriched_prompt_messages",
     "compile_predicate_prose",
 ]

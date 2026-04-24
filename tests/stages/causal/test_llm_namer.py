@@ -127,6 +127,28 @@ class TestProseOverlapMatcher:
         low_nps = next(d for d in result.playbooks if d.playbook_id == "low_nps")
         assert "nps" in low_nps.rationale.lower()
 
+    def test_enriched_description_uses_business_phrases(self):
+        from customer_retention.stages.causal.interpretation.archetype_context import (
+            EnrichedArchetypeContext,
+            EnrichedDriver,
+        )
+        enriched = EnrichedArchetypeContext(
+            cluster_index=1, cluster_size=120, cluster_mean_churn_probability=0.42,
+            eligibility_rule_prose="tenure in days is low AND NPS score is low",
+            top_positive_drivers=[EnrichedDriver(
+                feature_name="tenure_days", business_phrase="tenure in days",
+                value=30.0, value_phrase="low", polarity=None,
+            )],
+            top_negative_drivers=[EnrichedDriver(
+                feature_name="nps_score", business_phrase="NPS score",
+                value=8.0, value_phrase="elevated", polarity="high_is_good",
+            )],
+        )
+        result = ProseOverlapMatcher().name_archetype(_make_context(), enriched=enriched)
+        assert "tenure in days" in result.archetype_description
+        assert "NPS score" in result.archetype_description
+        assert "tenure in days is low AND NPS score is low" in result.archetype_description
+
     def test_zero_candidates_yields_zero_confidence(self):
         ctx = _make_context(candidate_playbooks=[])
         result = ProseOverlapMatcher().name_archetype(ctx)
@@ -294,6 +316,86 @@ class TestDatabricksFoundationModelNamer:
         assert "tenure_days" in prompt
         assert "low_nps" in prompt
         assert "0.420" in prompt or "0.42" in prompt
+
+    def test_enriched_context_routes_through_phase4_builder(self):
+        from customer_retention.stages.causal.interpretation.archetype_context import (
+            EnrichedArchetypeContext,
+            EnrichedDriver,
+            EnrichedPlaybook,
+        )
+        client = _FakeOpenAIClient(
+            content=json.dumps(
+                {"archetype_name": "Low Tenure Risk", "archetype_description": "x",
+                 "playbooks": [{"playbook_id": "nps_followup", "fit_score": 0.9, "rationale": "r"}],
+                 "confidence": 0.9}
+            )
+        )
+        namer = DatabricksFoundationModelNamer(
+            endpoint_name="databricks-claude-sonnet-4-6",
+            workspace_url="https://example.com",
+            workspace_token="token",
+        )
+        namer._client = client
+        enriched = EnrichedArchetypeContext(
+            cluster_index=0, cluster_size=100, cluster_mean_churn_probability=0.5,
+            eligibility_rule_prose="tenure is low AND NPS is low",
+            top_positive_drivers=[EnrichedDriver(
+                feature_name="tenure_days", business_phrase="tenure in days",
+                value=30.0, value_phrase="low", polarity="high_is_good",
+            )],
+            candidate_playbooks=[EnrichedPlaybook(
+                playbook_id="nps_followup", name="NPS Follow-up",
+            )],
+        )
+        result = namer.name_archetype(_make_context(), enriched=enriched)
+        assert result.archetype_name == "Low Tenure Risk"
+        messages = client.last_kwargs["messages"]
+        assert len(messages) == 2
+        assert messages[0]["role"] == "system"
+        user_content = messages[1]["content"]
+        assert "tenure in days" in user_content
+        assert "tenure is low AND NPS is low" in user_content
+
+    def test_legacy_path_uses_raw_prompt_when_no_enriched(self):
+        client = _FakeOpenAIClient(
+            content=json.dumps(
+                {"archetype_name": "X", "archetype_description": "x", "playbooks": []}
+            )
+        )
+        namer = DatabricksFoundationModelNamer(
+            endpoint_name="databricks-claude-sonnet-4-6",
+            workspace_url="https://example.com",
+            workspace_token="token",
+        )
+        namer._client = client
+        namer.name_archetype(_make_context())
+        messages = client.last_kwargs["messages"]
+        assert len(messages) == 1
+        assert messages[0]["role"] == "user"
+        assert "tenure_days" in messages[0]["content"]
+
+    def test_enriched_path_fallback_preserves_enriched_description(self):
+        from customer_retention.stages.causal.interpretation.archetype_context import (
+            EnrichedArchetypeContext,
+            EnrichedDriver,
+        )
+        namer = DatabricksFoundationModelNamer(
+            endpoint_name="databricks-claude-sonnet-4-6",
+            workspace_url="",
+            workspace_token="",
+        )
+        enriched = EnrichedArchetypeContext(
+            cluster_index=0, cluster_size=100, cluster_mean_churn_probability=0.5,
+            eligibility_rule_prose="tenure is low",
+            top_positive_drivers=[EnrichedDriver(
+                feature_name="tenure_days", business_phrase="tenure in days",
+                value=30.0, value_phrase="low", polarity=None,
+            )],
+        )
+        result = namer.name_archetype(_make_context(), enriched=enriched)
+        assert result.llm_model_id.endswith(":fallback")
+        assert "tenure in days" in result.archetype_description
+        assert "tenure is low" in result.archetype_description
 
     def test_get_client_returns_none_without_openai(self, monkeypatch):
         namer = DatabricksFoundationModelNamer(
