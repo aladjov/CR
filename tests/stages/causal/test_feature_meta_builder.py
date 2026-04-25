@@ -162,6 +162,43 @@ class TestBuildFeatureMetaRows:
         rows = build_feature_meta_rows(composite_name="cn1", lineages=[lineage])
         assert "nps" in rows[0].business_phrase
 
+    def test_empty_source_columns_backfills_to_feature_name(self):
+        """Cycle 013 D1 fix — never emit a row with empty source_columns.
+
+        compile_predicate_prose has nothing to look up in column_descriptions
+        when source_columns is empty, so prose falls back to raw SQL. The
+        backfill guarantees at least the feature_name itself is queryable.
+        """
+        lineage = FeatureLineage(
+            feature_name="active_span_days",
+            source_columns=None,  # caller couldn't determine real lineage
+            aggregation_kind=None,
+        )
+        rows = build_feature_meta_rows(composite_name="cn1", lineages=[lineage])
+        assert rows[0].source_columns == ["active_span_days"]
+        assert rows[0].aggregation_kind == "passthrough"
+
+    def test_empty_list_source_columns_also_backfills(self):
+        """Same backfill when source_columns is an explicit empty list."""
+        lineage = FeatureLineage(
+            feature_name="custom_feature_x",
+            source_columns=[],
+            aggregation_kind=None,
+        )
+        rows = build_feature_meta_rows(composite_name="cn1", lineages=[lineage])
+        assert rows[0].source_columns == ["custom_feature_x"]
+
+    def test_explicit_source_columns_not_overwritten_by_backfill(self):
+        lineage = FeatureLineage(
+            feature_name="revenue_sum_30d",
+            source_columns=["revenue"],
+            aggregation_kind="sum",
+            window_days=30,
+        )
+        rows = build_feature_meta_rows(composite_name="cn1", lineages=[lineage])
+        assert rows[0].source_columns == ["revenue"]
+        assert rows[0].aggregation_kind == "sum"
+
     def test_ignores_description_without_business_name(self):
         lineage = FeatureLineage(
             feature_name="x_sum_30d",

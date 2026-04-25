@@ -186,6 +186,86 @@ class TestBootstrapColumnDescriptions:
         assert len(cfg.rows) == 1
         assert cfg.rows[0].column_name == "ACCOUNT_ID"
 
-    def test_missing_file_raises(self, tmp_path):
-        with pytest.raises(FileNotFoundError):
-            bootstrap_column_descriptions(MagicMock(), "c.s.t", tmp_path / "nope.md")
+    def test_missing_file_no_llm_returns_zero(self, tmp_path):
+        """Phase 3 widening — missing markdown + no LLM endpoint = empty bootstrap."""
+        spark = MagicMock()
+        with patch(
+            "customer_retention.stages.causal.column_descriptions_writer.write_column_descriptions",
+            return_value=0,
+        ) as mocked_write:
+            n = bootstrap_column_descriptions(
+                spark, "c.s.t", tmp_path / "nope.md",
+            )
+        assert n == 0
+        # write_column_descriptions still called, with empty rows
+        cfg = mocked_write.call_args.args[0]
+        assert cfg.rows == []
+
+    def test_missing_md_path_none_no_llm_returns_zero(self):
+        """md_path is now Optional — None + no LLM = empty bootstrap."""
+        spark = MagicMock()
+        with patch(
+            "customer_retention.stages.causal.column_descriptions_writer.write_column_descriptions",
+            return_value=0,
+        ):
+            n = bootstrap_column_descriptions(spark, "c.s.t", md_path=None)
+        assert n == 0
+
+    def test_llm_fallback_invoked_when_markdown_absent(self, tmp_path):
+        """Cycle 013 P11 root cause fix — LLM produces rows when md unreachable."""
+        spark = MagicMock()
+        # Spark returns a 'table' with two columns
+        fake_table = MagicMock()
+        fake_table.columns = ["nps_score", "tenure_days"]
+        spark.table.return_value = fake_table
+        with patch(
+            "customer_retention.stages.causal.column_descriptions_writer.write_column_descriptions",
+            return_value=2,
+        ) as mocked_write, patch(
+            "customer_retention.analysis.auto_explorer.column_describer.fetch_uc_column_comments",
+            return_value={},
+        ), patch(
+            "customer_retention.analysis.auto_explorer.column_describer.generate_column_descriptions",
+            return_value={
+                "nps_score":   "0-10 customer loyalty score.",
+                "tenure_days": "Days since signup.",
+            },
+        ):
+            n = bootstrap_column_descriptions(
+                spark,
+                "c.s.column_descriptions",
+                md_path=tmp_path / "missing.md",
+                llm_endpoint="databricks-claude-sonnet-4",
+                fallback_table_fqns=["c.s.gold_features"],
+            )
+        assert n == 2
+        cfg = mocked_write.call_args.args[0]
+        assert len(cfg.rows) == 2
+        assert {r.column_name for r in cfg.rows} == {"nps_score", "tenure_days"}
+        assert all(r.source == "llm_proposed" for r in cfg.rows)
+        assert all(r.catalog == "c" and r.schema == "s" and r.table == "gold_features"
+                   for r in cfg.rows)
+
+    def test_markdown_present_skips_llm(self, tmp_path):
+        """When markdown is reachable, LLM is not called even if endpoint provided."""
+        md = tmp_path / "seed.md"
+        md.write_text(
+            "prod.s.account:\n"
+            "\n"
+            "ACCOUNT_ID (string): Unique identifier for the account.\n"
+        )
+        spark = MagicMock()
+        with patch(
+            "customer_retention.stages.causal.column_descriptions_writer.write_column_descriptions",
+            return_value=1,
+        ), patch(
+            "customer_retention.analysis.auto_explorer.column_describer.generate_column_descriptions",
+        ) as mocked_llm:
+            bootstrap_column_descriptions(
+                spark,
+                "c.s.column_descriptions",
+                md_path=md,
+                llm_endpoint="databricks-claude-sonnet-4",
+            )
+        # LLM not called because markdown produced rows
+        mocked_llm.assert_not_called()

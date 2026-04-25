@@ -1076,7 +1076,14 @@ def run_gold_features():
                     continue
                 _lineage = _parse_aggregation_feature_name(_col)
                 if _lineage is None:
-                    _lineage = _FeatureLineage(feature_name=_col)
+                    # Defensive fallback — always emit a non-empty source_columns
+                    # so compile_predicate_prose has a column to look up in
+                    # column_descriptions even for unrecognised feature patterns.
+                    _lineage = _FeatureLineage(
+                        feature_name=_col,
+                        source_columns=[_col],
+                        aggregation_kind="passthrough",
+                    )
                 _fm_lineages.append(_lineage)
             _fm_rows = _build_feature_meta_rows(
                 composite_name=COMPOSITE_NAME,

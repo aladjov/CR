@@ -74,6 +74,41 @@ def _find_project_root() -> Path:
     return Path.cwd()
 
 
+_RUN_POINTER_FILENAME = ".cr_active_run.json"
+
+
+def _read_project_pointer_experiments_root() -> Optional[str]:
+    """Return ``experiments_root`` from ``<project_root>/.cr_active_run.json``.
+
+    The pointer is the file-based signal NB00 (and any other run-creating
+    notebook) writes — it carries both the active ``run_id`` and the
+    ``experiments_root`` path. Notebook-job tasks cannot rely on env vars
+    propagating across tasks, so file-tracked discovery is mandatory.
+
+    Returns None when the pointer is absent, malformed, or stale (the
+    referenced directory no longer exists). The staleness check protects
+    against leftover pointers from prior test runs and from runs whose
+    Volume mount has been deleted.
+    """
+    try:
+        pointer = _find_project_root() / _RUN_POINTER_FILENAME
+        if not pointer.exists():
+            return None
+        data = json.loads(pointer.read_text())
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+    root_str = data.get("experiments_root")
+    if not (isinstance(root_str, str) and root_str):
+        return None
+    # Defend against stale pointers — only honor when the directory exists.
+    try:
+        if not Path(root_str).exists():
+            return None
+    except OSError:
+        return None
+    return root_str
+
+
 def get_experiments_dir(default: Optional[str] = None) -> Union[Path, RemotePath]:
     if "CR_EXPERIMENTS_DIR" in os.environ:
         return make_path(os.environ["CR_EXPERIMENTS_DIR"])
@@ -82,6 +117,12 @@ def get_experiments_dir(default: Optional[str] = None) -> Union[Path, RemotePath
     persisted = _load_persisted_databricks_config()
     if persisted and "experiments_dir" in persisted:
         return make_path(persisted["experiments_dir"])
+    # File-tracked tier: read from the project pointer NB00 writes. This is
+    # the only signal that survives across notebook-job tasks (env vars do
+    # not). Falls through to the project-root fallback when absent.
+    pointer_root = _read_project_pointer_experiments_root()
+    if pointer_root:
+        return make_path(pointer_root)
     return _find_project_root() / "experiments"
 
 

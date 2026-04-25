@@ -16,6 +16,10 @@ from customer_retention.stages.causal.interpretation.business_phrase import (
     render_business_phrase,
     render_window_phrase,
 )
+from customer_retention.stages.causal.interpretation.discovery import (
+    InterpretationSidecars,
+    discover_interpretation_sidecars,
+)
 from customer_retention.stages.causal.interpretation.enrichment_pipeline import (
     enrich_archetype_from_namespace,
 )
@@ -62,7 +66,9 @@ __all__ = [
     "build_enriched_context",
     "build_enriched_prompt_messages",
     "compile_predicate_prose",
+    "discover_interpretation_sidecars",
     "enrich_archetype_from_namespace",
+    "InterpretationSidecars",
     "write_feature_meta_sidecar",
     "load_feature_meta_sidecar",
     "write_population_stats_sidecar",

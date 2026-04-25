@@ -189,12 +189,21 @@ def build_feature_meta_rows(
     rows: List[FeatureMetaRow] = []
     for lineage in lineages:
         polarity = lineage.polarity or _resolve_polarity(lineage, column_descriptions)
+        # Backfill: when the caller couldn't determine real lineage, fall back
+        # to the feature name itself so source_columns is never empty. This
+        # guarantees ``compile_predicate_prose`` always has at least one
+        # column to look up in ``column_descriptions``. Real lineage from
+        # ``parse_aggregation_feature_name`` or upstream metadata wins.
+        source_columns = lineage.source_columns
+        if not source_columns:
+            source_columns = [lineage.feature_name]
+        aggregation_kind = lineage.aggregation_kind or "passthrough"
         base = FeatureMetaRow(
             composite_name=composite_name,
             feature_name=lineage.feature_name,
-            source_columns=lineage.source_columns,
+            source_columns=source_columns,
             source_table=lineage.source_table,
-            aggregation_kind=lineage.aggregation_kind,
+            aggregation_kind=aggregation_kind,
             window_days=lineage.window_days,
             target_dependency=lineage.target_dependency,
             mask_future=lineage.mask_future,

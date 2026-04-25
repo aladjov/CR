@@ -360,16 +360,38 @@ class RunNamespace:
 
     @classmethod
     def from_env_or_latest(cls, root: Optional[Path] = None) -> Optional[RunNamespace]:
+        """Resolve the active run via every file-tracked discovery tier.
+
+        Tier order (notebook-job-safe — no env vars required after tier 1):
+          1. ``CR_RUN_ID`` env var (when present, used with ``root`` if given).
+          2. Explicit ``root`` is honored: try the in-root sentinel + latest
+             marker. This handles the case where the caller knows the right
+             experiments dir but hasn't pointed env vars at it.
+          3. Project pointer (``<project_root>/.cr_active_run.json``) — the
+             file NB00 writes carrying both ``run_id`` and ``experiments_root``.
+             Always consulted, even when ``root`` was explicit, because the
+             pointer is the only signal that survives across job tasks
+             (where env vars do not propagate).
+          4. Fall back to discovery without an explicit root (uses
+             ``get_experiments_dir()`` which itself reads the pointer).
+        """
         ns = cls.from_env(root=root)
         if ns is not None:
             return ns
-        # Project-level pointer — only when neither root nor
-        # CR_EXPERIMENTS_DIR are set (explicit location takes priority).
-        if root is None and not os.environ.get("CR_EXPERIMENTS_DIR"):
-            ns = cls.from_run_pointer()
+        if root is not None:
+            ns = cls.from_sentinel(root=root)
             if ns is not None:
                 return ns
-        ns = cls.from_sentinel(root=root)
+            ns = cls.from_latest(root=root)
+            if ns is not None:
+                return ns
+        # File-tracked tier — never gated on env vars or explicit root.
+        ns = cls.from_run_pointer()
         if ns is not None:
             return ns
-        return cls.from_latest(root=root)
+        if root is None:
+            ns = cls.from_sentinel()
+            if ns is not None:
+                return ns
+            return cls.from_latest()
+        return None

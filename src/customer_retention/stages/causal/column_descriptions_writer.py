@@ -110,22 +110,118 @@ def write_column_descriptions(config: ColumnDescriptionsConfig) -> int:
 def bootstrap_column_descriptions(
     spark: "SparkSession",
     table_fqn: str,
-    md_path: Path | str,
+    md_path: Path | str | None = None,
+    *,
+    llm_endpoint: Optional[str] = None,
+    fallback_table_fqns: Optional[List[str]] = None,
 ) -> int:
-    """Parse ``docs/sps_table_descriptions.md`` and upsert every column.
+    """Bootstrap ``column_descriptions`` from markdown, LLM, or both.
 
-    Single call NB00 0.15 makes for the one-shot bootstrap. Returns the
-    number of rows upserted. Missing file raises ``FileNotFoundError`` —
-    fail fast per ``Coding_Practices.md``.
+    Resolution order:
+
+    1. **Markdown** — when ``md_path`` is given and exists, parse
+       ``docs/sps_table_descriptions.md`` and upsert every column. This is
+       the original single-call NB00 0.15 path.
+    2. **LLM fallback** — when the markdown is absent (or ``md_path`` is
+       None) and ``llm_endpoint`` resolves on this workspace, call
+       ``column_describer.generate_column_descriptions`` over each table in
+       ``fallback_table_fqns`` (defaults to ``[table_fqn]``) and upsert the
+       generated descriptions. Marks each row ``source="llm_proposed"``.
+    3. **Empty** — when neither path produces rows, the sidecar still
+       exists as a Delta table (zero rows) so downstream consumers can
+       operate on a definitive empty bag rather than failing on missing.
+
+    Returns the number of rows upserted.
     """
-    from customer_retention.stages.causal.interpretation.markdown_bootstrap import (
-        parse_table_descriptions_md,
-    )
+    rows: List[ColumnDescriptionRow] = []
 
-    rows = parse_table_descriptions_md(md_path)
+    if md_path is not None:
+        path = Path(md_path)
+        if path.exists():
+            from customer_retention.stages.causal.interpretation.markdown_bootstrap import (
+                parse_table_descriptions_md,
+            )
+            rows.extend(parse_table_descriptions_md(path))
+            logger.info(
+                "bootstrap_column_descriptions: parsed %d rows from %s",
+                len(rows), path,
+            )
+
+    if not rows and llm_endpoint is not None:
+        rows.extend(
+            _llm_describe_columns(
+                spark,
+                llm_endpoint=llm_endpoint,
+                table_fqns=fallback_table_fqns or [table_fqn],
+            )
+        )
+        if rows:
+            logger.info(
+                "bootstrap_column_descriptions: LLM fallback produced %d rows via endpoint=%s",
+                len(rows), llm_endpoint,
+            )
+
     return write_column_descriptions(
         ColumnDescriptionsConfig(spark=spark, table_fqn=table_fqn, rows=rows)
     )
+
+
+def _llm_describe_columns(
+    spark: "SparkSession",
+    *,
+    llm_endpoint: str,
+    table_fqns: List[str],
+) -> List[ColumnDescriptionRow]:
+    """Call ``column_describer.generate_column_descriptions`` per table.
+
+    Pulls the column list off Spark's catalog for each FQN and routes the
+    LLM output into ``ColumnDescriptionRow`` instances. Failures per table
+    are logged and skipped so a single bad table doesn't kill the bootstrap.
+    """
+    from customer_retention.analysis.auto_explorer.column_describer import (
+        fetch_uc_column_comments,
+        generate_column_descriptions,
+    )
+
+    rows: List[ColumnDescriptionRow] = []
+    for fqn in table_fqns:
+        try:
+            df = spark.table(fqn)
+            cols = list(df.columns)
+            existing = fetch_uc_column_comments(fqn)
+            descs = generate_column_descriptions(
+                table_fqn=fqn,
+                columns=cols,
+                endpoint=llm_endpoint,
+                existing_comments=existing,
+            )
+        except Exception:  # noqa: BLE001 — per-table best-effort
+            logger.warning("LLM bootstrap failed for %s", fqn, exc_info=True)
+            continue
+        catalog, schema, table = _split_fqn(fqn)
+        for col, definition in descs.items():
+            if not definition:
+                continue
+            rows.append(
+                ColumnDescriptionRow(
+                    catalog=catalog,
+                    schema=schema,
+                    table=table,
+                    column_name=col,
+                    business_definition=definition,
+                    source="llm_proposed",
+                )
+            )
+    return rows
+
+
+def _split_fqn(fqn: str) -> tuple[Optional[str], Optional[str], str]:
+    parts = fqn.split(".")
+    if len(parts) == 3:
+        return parts[0], parts[1], parts[2]
+    if len(parts) == 2:
+        return None, parts[0], parts[1]
+    return None, None, fqn
 
 
 def _row_to_record(row: ColumnDescriptionRow, written_at: datetime) -> dict:
