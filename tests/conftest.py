@@ -20,6 +20,47 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "spark: tests requiring PySpark")
 
 
+@pytest.fixture(autouse=True)
+def _isolate_project_run_pointer(request):
+    """Snapshot + restore ``<project_root>/.cr_active_run.json`` per test.
+
+    The pointer is the file-tracked signal NB00 / RunNamespace tests write.
+    Without isolation, a test that creates one (pointing at a pytest tmp dir)
+    leaves the file behind; the next test that calls ``get_experiments_dir``
+    or ``RunNamespace.from_env_or_latest`` then resolves to the stale tmp
+    location instead of the expected default. Cycle 013's pointer-tier fix
+    made every consumer susceptible to that pollution.
+
+    We don't want individual tests to have to remember to clean up — this
+    fixture restores the pre-test state at every test boundary so the
+    cross-contamination disappears.
+    """
+    try:
+        from customer_retention.core.config.experiments import (
+            _RUN_POINTER_FILENAME,
+            _find_project_root,
+        )
+    except ImportError:
+        yield
+        return
+    pointer = _find_project_root() / _RUN_POINTER_FILENAME
+    original = pointer.read_text() if pointer.exists() else None
+    try:
+        yield
+    finally:
+        if original is None:
+            if pointer.exists():
+                try:
+                    pointer.unlink()
+                except OSError:
+                    pass
+        else:
+            try:
+                pointer.write_text(original)
+            except OSError:
+                pass
+
+
 def pytest_collection_modifyitems(config, items):
     """Auto-skip tests marked with databricks or spark when environment not available."""
     skip_databricks = pytest.mark.skip(reason="Requires Databricks runtime (DATABRICKS_RUNTIME_VERSION not set)")
