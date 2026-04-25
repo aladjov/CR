@@ -288,7 +288,12 @@ class RecommendationRegistry:
 
     def add_bronze_null(self, column: str, strategy: str, rationale: str, source_notebook: str,
                         source: Optional[str] = None) -> None:
-        rec = self._create_recommendation("bronze", "null", "impute", column,
+        # `action` mirrors the strategy intent ("drop" → action=drop, otherwise "impute")
+        # so yaml inspection matches the parser's `_map_bronze_null` decision (which
+        # branches on `parameters.strategy`). Without this, the yaml `action: impute`
+        # silently masks columns that will be DROPped at codegen time.
+        action = "drop" if strategy == "drop" else "impute"
+        rec = self._create_recommendation("bronze", "null", action, column,
                                           {"strategy": strategy}, rationale, source_notebook)
         if source and source in self.sources:
             self.sources[source].null_handling.append(rec)

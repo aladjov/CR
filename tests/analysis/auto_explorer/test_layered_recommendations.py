@@ -176,6 +176,18 @@ class TestRecommendationRegistry:
         rec = registry.bronze.null_handling[0]
         assert rec.target_column == "age"
         assert rec.parameters["strategy"] == "median"
+        assert rec.action == "impute"
+
+    def test_add_bronze_null_drop_strategy_sets_drop_action(self):
+        registry = RecommendationRegistry()
+        registry.init_bronze("data.csv")
+        registry.add_bronze_null(
+            column="DEAD_COL", strategy="drop",
+            rationale="98% missing", source_notebook="02_source_integrity"
+        )
+        rec = registry.bronze.null_handling[0]
+        assert rec.parameters["strategy"] == "drop"
+        assert rec.action == "drop"
 
     def test_add_recommendation_to_silver(self):
         registry = RecommendationRegistry()
