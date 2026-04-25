@@ -90,7 +90,12 @@ class TestExperimentsConfigModule:
         assert FINDINGS_DIR is not None
         assert OUTPUT_DIR is not None
 
-    def test_experiments_dir_default(self):
+    def test_experiments_dir_default(self, monkeypatch):
+        # Neutralize the project-pointer tier (cycle 013 fix) so this test
+        # exercises only the project-root fallback. A stale pointer at the
+        # dev's repo root from prior test runs would otherwise resolve here.
+        from customer_retention.core.config import experiments as cfg
+        monkeypatch.setattr(cfg, "_read_project_pointer_experiments_root", lambda: None)
         from customer_retention.core.config.experiments import get_experiments_dir
 
         experiments_dir = get_experiments_dir()

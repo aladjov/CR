@@ -549,6 +549,10 @@ class TestFromEnvOrLatest:
     def test_returns_none_when_nothing_found(self, tmp_path, monkeypatch):
         monkeypatch.delenv("CR_RUN_ID", raising=False)
         monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
+        # Neutralize the project-pointer tier (added for cycle 013 fix) so this
+        # test exercises only the explicit-root + sentinel/latest paths. A
+        # stale pointer at the dev's repo root would otherwise resolve here.
+        monkeypatch.setattr(RunNamespace, "from_run_pointer", classmethod(lambda cls: None))
         ns = RunNamespace.from_env_or_latest(root=tmp_path)
         assert ns is None
 
