@@ -137,6 +137,74 @@ class TestPredictorParityWithRenderers:
         assert "latency_count_30d" not in cols
 
 
+class TestPerValueCountExpansion:
+    """`_event_aggregated_columns` must expand the per-value count shape
+    `{col}_{val}_count_{window}` whenever (a) `value_counts` is in
+    `categorical_agg_funcs`, (b) `col` is in `event_cfg.value_counts_columns`,
+    and (c) `unique_values_by_col` provides the observed values. This
+    matches what `time_window_aggregator._compute_value_counts` actually
+    emits at runtime when `per_grid_date_mode=True`. Without this, the
+    parity gate sees only the literal `event_type_value_counts_365d` shape
+    and fails for every `<col>_<val>_count_<w>` feature in `feature_spec`."""
+
+    def _bec_with_value_counts(self, value_counts_columns):
+        agg = AggregationWindowConfig(
+            windows=["365d"], value_columns=[],
+            agg_funcs=[], categorical_columns=["event_type"],
+            categorical_agg_funcs=["value_counts"],
+        )
+        return BronzeEventConfig(
+            source=_src(), entity_column="customer_id", time_column="event_date",
+            aggregation=agg, per_grid_date_mode=True,
+            value_counts_columns=tuple(value_counts_columns),
+        )
+
+    def test_per_value_expansion_when_unique_values_provided(self):
+        bec = self._bec_with_value_counts(["event_type"])
+        cols = FindingsParser._event_aggregated_columns(
+            bec, unique_values_by_col={"event_type": ["start", "terminate"]},
+        )
+        assert "event_type_start_count_365d" in cols
+        assert "event_type_terminate_count_365d" in cols
+        # The literal `value_counts` shape is suppressed when expansion fires.
+        assert "event_type_value_counts_365d" not in cols
+
+    def test_no_expansion_without_unique_values_fallback_to_literal(self):
+        """Default behaviour (no `unique_values_by_col` arg) preserves the
+        legacy literal `value_counts` column name so existing parity-mode
+        tests stay green."""
+        bec = self._bec_with_value_counts(["event_type"])
+        cols = FindingsParser._event_aggregated_columns(bec)
+        assert "event_type_value_counts_365d" in cols
+        assert "event_type_start_count_365d" not in cols
+
+    def test_no_expansion_when_col_not_in_value_counts_columns(self):
+        bec = self._bec_with_value_counts([])  # value_counts_columns empty
+        cols = FindingsParser._event_aggregated_columns(
+            bec, unique_values_by_col={"event_type": ["start", "terminate"]},
+        )
+        assert "event_type_value_counts_365d" in cols
+        assert "event_type_start_count_365d" not in cols
+
+    def test_unaffected_when_func_is_not_value_counts(self):
+        agg = AggregationWindowConfig(
+            windows=["365d"], value_columns=[],
+            agg_funcs=[], categorical_columns=["event_type"],
+            categorical_agg_funcs=["mode", "nunique"],
+        )
+        bec = BronzeEventConfig(
+            source=_src(), entity_column="customer_id", time_column="event_date",
+            aggregation=agg, per_grid_date_mode=True,
+            value_counts_columns=("event_type",),
+        )
+        cols = FindingsParser._event_aggregated_columns(
+            bec, unique_values_by_col={"event_type": ["start", "terminate"]},
+        )
+        assert "event_type_mode_365d" in cols
+        assert "event_type_nunique_365d" in cols
+        assert "event_type_start_count_365d" not in cols
+
+
 class TestCountParityIsMirroredAcrossAllThreeSurfaces:
     """Regression oracle — a single scenario, three parallel assertions.
     If any surface (local renderer, Databricks renderer, predictor)

@@ -214,6 +214,11 @@ class FindingsParser:
         self._source_findings_paths: Dict[str, Path] = {}
         self._landing_sibling_findings: Dict[str, ExplorationFindings] = {}
         self._raw_source_columns: Dict[str, Set[str]] = {}
+        # `_value_counts_by_source[<source>][<col>]` -> distinct observed values
+        # for that categorical column, harvested from findings' type_metrics.
+        # Used by `_event_aggregated_columns` to expand the per-value count
+        # shape `{col}_{val}_count_{window}` for `value_counts` aggregations.
+        self._value_counts_by_source: Dict[str, Dict[str, List[str]]] = {}
         self._feature_spec: Optional[FeatureSpec] = None
         self._silver_merged_columns_cache: Optional[Set[str]] = None
         self._parity_mode: str = _resolve_parity_mode(parity_mode)
@@ -305,6 +310,21 @@ class FindingsParser:
     def _index_raw_source_columns(self, discovered_events: Dict[str, ExplorationFindings]) -> None:
         for name, findings in discovered_events.items():
             self._raw_source_columns[name] = set(findings.columns.keys())
+            per_col: Dict[str, List[str]] = {}
+            for col_name, col_finding in findings.columns.items():
+                tm = getattr(col_finding, "type_metrics", None) or {}
+                vc = tm.get("value_counts")
+                if isinstance(vc, dict) and vc:
+                    per_col[col_name] = [str(v) for v in vc.keys()]
+                    continue
+                top_cats = tm.get("top_categories")
+                if isinstance(top_cats, (list, tuple)) and top_cats:
+                    per_col[col_name] = [
+                        str(c if isinstance(c, str) else (c.get("value") if isinstance(c, dict) else c))
+                        for c in top_cats
+                    ]
+            if per_col:
+                self._value_counts_by_source[name] = per_col
 
     def _load_feature_spec(self) -> Optional[FeatureSpec]:
         spec_path = None
@@ -1123,7 +1143,10 @@ class FindingsParser:
             }
             columns |= (raw_cols - dropped)
         for _name, event_cfg in config.bronze_event.items():
-            columns |= self._event_aggregated_columns(event_cfg)
+            columns |= self._event_aggregated_columns(
+                event_cfg,
+                unique_values_by_col=getattr(self, "_value_counts_by_source", {}).get(_name),
+            )
         columns |= self._read_silver_merged_columns()
         return columns
 
@@ -1213,9 +1236,23 @@ class FindingsParser:
         return expanded
 
     @staticmethod
-    def _event_aggregated_columns(event_cfg: "BronzeEventConfig") -> Set[str]:
+    def _event_aggregated_columns(
+        event_cfg: "BronzeEventConfig",
+        unique_values_by_col: Optional[Dict[str, List[str]]] = None,
+    ) -> Set[str]:
+        # `unique_values_by_col` maps a categorical column to its distinct
+        # observed values (from findings' type_metrics). When provided AND the
+        # column appears in `event_cfg.value_counts_columns` AND the
+        # aggregation function is `value_counts`, this expands the column set
+        # to the per-value count shape `{col}_{val}_count_{window}` (mirroring
+        # what `time_window_aggregator._compute_value_counts` actually emits at
+        # runtime). Without `unique_values_by_col` the function falls back to
+        # the literal `{col}_value_counts_{window}` shape, preserving the
+        # historical behavior so existing tests stay green.
         columns: Set[str] = set()
         agg = event_cfg.aggregation
+        vc_targets = set(event_cfg.value_counts_columns or ())
+        unique_map = unique_values_by_col or {}
         if agg:
             blocked = agg.column_blocked_funcs if agg else {}
             for window in agg.windows:
@@ -1230,7 +1267,15 @@ class FindingsParser:
                     for func in agg.categorical_agg_funcs:
                         if func in col_blocked:
                             continue
-                        columns.add(f"{col}_{func}_{window}")
+                        if (
+                            func == "value_counts"
+                            and col in vc_targets
+                            and col in unique_map
+                        ):
+                            for val in unique_map[col]:
+                                columns.add(f"{col}_{val}_count_{window}")
+                        else:
+                            columns.add(f"{col}_{func}_{window}")
                 for col in agg.binary_columns:
                     col_blocked = set(blocked.get(col, []))
                     for func in agg.binary_agg_funcs:
@@ -1342,7 +1387,10 @@ class FindingsParser:
         for name, event_cfg in config.bronze_event.items():
             if not event_cfg.post_shaping:
                 continue
-            valid_columns = self._event_aggregated_columns(event_cfg)
+            valid_columns = self._event_aggregated_columns(
+                event_cfg,
+                unique_values_by_col=getattr(self, "_value_counts_by_source", {}).get(name),
+            )
             if not valid_columns:
                 continue
             dropped = [s.column for s in event_cfg.post_shaping if s.column not in valid_columns]

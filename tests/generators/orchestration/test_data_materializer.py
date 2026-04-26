@@ -100,6 +100,35 @@ class TestBronzeTransforms:
             sample_df.loc[result_non_null_mask, "age"].values
         )
 
+    def test_drop_strategy_drops_column(self, sample_df):
+        # Mirror production: `findings_parser._map_bronze_null` translates
+        # parameters.strategy=drop into a DROP_COLUMN bronze step. Exploration
+        # must mirror this so NB04+/feature_spec stay in sync with what
+        # production will materialize.
+        registry = RecommendationRegistry()
+        registry.init_bronze("customers.csv")
+        registry.bronze.null_handling.append(LayeredRecommendation(
+            id="bronze_null_revenue", layer="bronze", category="null", action="drop",
+            target_column="revenue", parameters={"strategy": "drop"},
+            rationale="98% missing", source_notebook="02_source_integrity",
+        ))
+        materializer = DataMaterializer(registry)
+        result = materializer.apply_bronze(sample_df)
+        assert "revenue" not in result.columns
+        assert "age" in result.columns  # untouched columns preserved
+
+    def test_drop_strategy_no_op_when_column_missing(self, sample_df):
+        registry = RecommendationRegistry()
+        registry.init_bronze("customers.csv")
+        registry.bronze.null_handling.append(LayeredRecommendation(
+            id="bronze_null_phantom", layer="bronze", category="null", action="drop",
+            target_column="not_in_dataframe", parameters={"strategy": "drop"},
+            rationale="dropped column already absent", source_notebook="02_source_integrity",
+        ))
+        materializer = DataMaterializer(registry)
+        result = materializer.apply_bronze(sample_df)
+        assert set(result.columns) == set(sample_df.columns)
+
 
 class TestGoldTransforms:
     def test_applies_one_hot_encoding(self, sample_df, gold_registry):

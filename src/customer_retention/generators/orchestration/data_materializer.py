@@ -71,6 +71,14 @@ class DataMaterializer:
         if col not in df.columns:
             return df
         strategy = rec.parameters.get("strategy", "median")
+        if strategy == "drop":
+            # Mirror production: `findings_parser._map_bronze_null` translates
+            # `parameters.strategy=drop` into a DROP_COLUMN bronze step. If the
+            # exploration runtime no-ops here, NB04/05/07 see the column with
+            # original nulls and propose encodings/select features for it,
+            # then production drops it at codegen and parity fails. Drop here
+            # so exploration's column set matches production's.
+            return df.drop(columns=[col])
         if strategy == "median":
             df[col] = df[col].fillna(df[col].median())
         elif strategy == "mean":
