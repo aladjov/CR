@@ -682,3 +682,126 @@ class TestDatasetFingerprinterLocalPaths:
         monkeypatch.setattr(DatasetFingerprinter, "_is_remote", staticmethod(lambda: False))
         with pytest.raises(Exception):
             fp._load("/nonexistent/path.parquet")
+
+
+class TestPandasNsTimestampClamp:
+    """Regression tests for NB00 `KeyError: 'opportunity'`.
+
+    Source tables can carry timestamp values outside the pandas
+    `datetime64[ns]` range (1677-09-22 .. 2262-04-10). Snowflake/Databricks
+    happily store year-2287+ sentinels, but `Spark.toPandas()` then raises
+    `ArrowInvalid: would result in out of bounds timestamp`. The
+    `_clamp_pandas_ns_timestamps` step rewrites those values to NULL via
+    Spark SQL — keeping the dataset usable for fingerprinting and
+    surfacing in `semantics` instead of being silently dropped by the
+    blanket exception in `fingerprint_all`.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_clamp_no_op_when_no_timestamp_columns(self):
+        from pyspark.sql.types import LongType, StringType, StructField
+
+        from customer_retention.analysis.auto_explorer.dataset_fingerprinter import (
+            _clamp_pandas_ns_timestamps,
+        )
+
+        sdf = MagicMock()
+        sdf.schema.fields = [
+            StructField("id", StringType(), True),
+            StructField("amount", LongType(), True),
+        ]
+        result = _clamp_pandas_ns_timestamps(sdf)
+        assert result is sdf
+        sdf.select.assert_not_called()
+
+    def test_clamp_walks_select_for_each_timestamp_column(self):
+        from pyspark.sql.types import LongType, StringType, StructField, TimestampNTZType, TimestampType
+
+        from customer_retention.analysis.auto_explorer.dataset_fingerprinter import (
+            _clamp_pandas_ns_timestamps,
+        )
+
+        sdf = MagicMock()
+        sdf.schema.fields = [
+            StructField("id", StringType(), True),
+            StructField("created_at", TimestampType(), True),
+            StructField("amount", LongType(), True),
+            StructField("updated_at", TimestampNTZType(), True),
+        ]
+        result = _clamp_pandas_ns_timestamps(sdf)
+
+        sdf.select.assert_called_once()
+        select_args = sdf.select.call_args[0]
+        assert len(select_args) == 4
+        assert result is sdf.select.return_value
+
+    def test_clamp_passes_through_non_timestamp_columns_via_col(self):
+        from pyspark.sql.types import StringType, StructField, TimestampType
+
+        from customer_retention.analysis.auto_explorer.dataset_fingerprinter import (
+            _clamp_pandas_ns_timestamps,
+        )
+
+        sdf = MagicMock()
+        sdf.schema.fields = [
+            StructField("id", StringType(), True),
+            StructField("ts", TimestampType(), True),
+        ]
+        _clamp_pandas_ns_timestamps(sdf)
+        select_args = sdf.select.call_args[0]
+        assert len(select_args) == 2
+
+    def test_safe_to_pandas_calls_clamp_then_topandas(self, monkeypatch):
+        from customer_retention.analysis.auto_explorer import dataset_fingerprinter as m
+
+        clamped = MagicMock()
+        clamped.toPandas.return_value = "PANDAS_DF"
+        monkeypatch.setattr(m, "_clamp_pandas_ns_timestamps",
+                            MagicMock(return_value=clamped))
+        sdf = MagicMock()
+        out = m._safe_to_pandas(sdf)
+        m._clamp_pandas_ns_timestamps.assert_called_once_with(sdf)
+        clamped.toPandas.assert_called_once()
+        assert out == "PANDAS_DF"
+
+    def test_load_table_routes_through_safe_to_pandas(self, monkeypatch):
+        """Regression for NB00 `KeyError: 'opportunity'` — `_load_table`
+        must funnel `Spark.toPandas()` through the clamp wrapper so that a
+        single corrupt year-2287 timestamp does not crash the whole
+        fingerprint pass and silently drop the table from `semantics`."""
+        from customer_retention.analysis.auto_explorer import dataset_fingerprinter as m
+
+        spark = MagicMock()
+        limited = MagicMock()
+        spark.table.return_value.limit.return_value = limited
+        monkeypatch.setattr(DatasetFingerprinter, "_ensure_spark",
+                            staticmethod(lambda: spark))
+        safe = MagicMock(return_value="PANDAS_DF")
+        monkeypatch.setattr(m, "_safe_to_pandas", safe)
+
+        out = DatasetFingerprinter(nrows=42)._load_table("opportunity")
+
+        spark.table.assert_called_once_with("opportunity")
+        spark.table.return_value.limit.assert_called_once_with(42)
+        safe.assert_called_once_with(limited)
+        assert out == "PANDAS_DF"
+
+    def test_load_remote_routes_through_safe_to_pandas(self, monkeypatch):
+        from customer_retention.analysis.auto_explorer import dataset_fingerprinter as m
+
+        spark = MagicMock()
+        limited = MagicMock()
+        spark.read.parquet.return_value.limit.return_value = limited
+        monkeypatch.setattr(DatasetFingerprinter, "_ensure_spark",
+                            staticmethod(lambda: spark))
+        safe = MagicMock(return_value="PANDAS_DF")
+        monkeypatch.setattr(m, "_safe_to_pandas", safe)
+
+        out = DatasetFingerprinter(nrows=7)._load_remote("/tmp/x.parquet")
+
+        spark.read.parquet.assert_called_once_with("/tmp/x.parquet")
+        safe.assert_called_once_with(limited)
+        assert out == "PANDAS_DF"

@@ -12,6 +12,37 @@ from customer_retention.stages.profiling.type_detector import TypeDetector
 
 _FILE_EXTENSIONS = frozenset((".csv", ".parquet", ".json", ".orc", ".avro", ".delta", ".txt"))
 
+PANDAS_NS_MIN = "1677-09-22"
+PANDAS_NS_MAX = "2262-04-10"
+
+
+def _clamp_pandas_ns_timestamps(sdf):
+    from pyspark.sql import functions as F  # noqa: N812
+    from pyspark.sql import types as T  # noqa: N812
+
+    timestamp_fields = [f for f in sdf.schema.fields
+                        if isinstance(f.dataType, (T.TimestampType, T.TimestampNTZType))]
+    if not timestamp_fields:
+        return sdf
+    select_exprs = []
+    for field in sdf.schema.fields:
+        if field in timestamp_fields:
+            col = F.col(f"`{field.name}`")
+            null_lit = F.lit(None).cast(field.dataType)
+            min_lit = F.lit(PANDAS_NS_MIN).cast(field.dataType)
+            max_lit = F.lit(PANDAS_NS_MAX).cast(field.dataType)
+            clamped = (F.when(col > max_lit, null_lit)
+                        .when(col < min_lit, null_lit)
+                        .otherwise(col)).alias(field.name)
+            select_exprs.append(clamped)
+        else:
+            select_exprs.append(F.col(f"`{field.name}`"))
+    return sdf.select(*select_exprs)
+
+
+def _safe_to_pandas(sdf):
+    return _clamp_pandas_ns_timestamps(sdf).toPandas()
+
 
 def is_table_name(source: str) -> bool:
     if "/" in source or "\\" in source:
@@ -217,7 +248,7 @@ class DatasetFingerprinter:
         spark = self._ensure_spark()
         if not spark:
             raise RuntimeError(f"No active Spark session to read table '{table_name}'")
-        return spark.table(table_name).limit(self.nrows).toPandas()
+        return _safe_to_pandas(spark.table(table_name).limit(self.nrows))
 
     @staticmethod
     def _is_remote() -> bool:
@@ -241,4 +272,4 @@ class DatasetFingerprinter:
             sdf = spark.read.option("header", "true").option("inferSchema", "true").csv(path_str)
         else:
             sdf = spark.read.parquet(path_str)
-        return sdf.limit(self.nrows).toPandas()
+        return _safe_to_pandas(sdf.limit(self.nrows))
