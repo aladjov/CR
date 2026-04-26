@@ -77,6 +77,12 @@ class SchemaReportResult:
     column_count: int = 0
     dataset_count: int = 0
     llm_endpoint_used: Optional[str] = None
+    # Per-dataset column descriptions actually produced by the LLM call.
+    # Empty when ``llm_descriptions`` was False, when the endpoint failed,
+    # or when running off-Databricks. Surface here so notebook cells can
+    # bootstrap the ``column_descriptions`` sidecar from the same LLM
+    # invocation rather than triggering a second round-trip.
+    col_descriptions: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
 def build_schema_report(
@@ -166,4 +172,5 @@ def build_schema_report(
         column_count=col_count,
         dataset_count=ds_count,
         llm_endpoint_used=resolved_endpoint,
+        col_descriptions=col_descriptions,
     )
