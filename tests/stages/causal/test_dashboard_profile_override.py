@@ -29,6 +29,46 @@ def test_render_profile_sql_substitutes_composite_name_when_supplied():
     assert "{composite_name}" not in out
 
 
+def test_render_profile_sql_substitutes_arbitrary_placeholders():
+    out = render_profile_sql(
+        "SELECT * FROM delta.`{volume_run_data}/silver/silver_merged`",
+        catalog="c", schema="s",
+        placeholders={"volume_run_data": "/Volumes/x/y/runs/r1/data"},
+    )
+    assert "/Volumes/x/y/runs/r1/data/silver/silver_merged" in out
+    assert "{volume_run_data}" not in out
+
+
+def test_render_profile_sql_rejects_reserved_placeholder_keys():
+    with pytest.raises(ValueError, match="reserved key"):
+        render_profile_sql(
+            "SELECT 1",
+            catalog="c", schema="s",
+            placeholders={"catalog": "evil"},
+        )
+    with pytest.raises(ValueError, match="reserved key"):
+        render_profile_sql(
+            "SELECT 1",
+            catalog="c", schema="s",
+            placeholders={"composite_name": "evil"},
+        )
+
+
+def test_apply_passes_placeholders_through(tmp_path):
+    spark = MagicMock()
+    sql = "CREATE OR REPLACE VIEW {catalog}.{schema}.v AS SELECT * FROM delta.`{vol}/silver/silver_merged`;"
+    apply_profile_override(
+        spark, "c", "s",
+        profile_sql=sql,
+        profile_html="x",
+        template_volume_path=str(tmp_path / "t.html"),
+        placeholders={"vol": "/Volumes/foo/bar/runs/r/data"},
+    )
+    submitted = spark.sql.call_args_list[0].args[0]
+    assert "/Volumes/foo/bar/runs/r/data/silver/silver_merged" in submitted
+    assert "{vol}" not in submitted
+
+
 def test_render_profile_sql_leaves_placeholder_when_no_composite():
     out = render_profile_sql(
         "SELECT * FROM {catalog}.{schema}.gold_features_{composite_name}",

@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 from .dashboard_views import split_view_statements
 
@@ -50,19 +50,40 @@ class ProfileOverrideResult:
         return "\n".join(lines)
 
 
+_RESERVED_PLACEHOLDERS = ("catalog", "schema", "composite_name")
+
+
 def render_profile_sql(
     sql_text: str,
     *,
     catalog: str,
     schema: str,
     composite_name: Optional[str] = None,
+    placeholders: Optional[Dict[str, str]] = None,
 ) -> str:
-    """Substitute ``{catalog}`` / ``{schema}`` (and optionally ``{composite_name}``)
+    r"""Substitute ``{catalog}`` / ``{schema}`` (and optionally ``{composite_name}``)
     into the operator-supplied SQL text.  Mirrors the contract of the
     framework's ``render_dashboard_view_sql`` so override authors can rely
     on the same set of placeholders.
+
+    ``placeholders`` is an open-ended dict the operator can use to inject
+    runtime-specific tokens such as Volume paths (e.g.
+    ``{"volume_run_data": "/Volumes/.../runs/<run_id>/data"}``) so the
+    profile SQL can reference Delta paths via
+    ``delta.\`{volume_run_data}/silver/silver_merged\``` without coupling
+    the framework to per-cluster storage layout.  Reserved keys
+    ``catalog``, ``schema``, ``composite_name`` raise ``ValueError`` to
+    avoid silent collisions.
     """
     text = sql_text
+    if placeholders:
+        for reserved in _RESERVED_PLACEHOLDERS:
+            if reserved in placeholders:
+                raise ValueError(
+                    f"placeholders may not override reserved key {reserved!r}"
+                )
+        for key, value in placeholders.items():
+            text = text.replace("{" + key + "}", str(value))
     if composite_name is not None:
         text = text.replace("{composite_name}", composite_name)
     return text.replace("{catalog}", catalog).replace("{schema}", schema)
@@ -109,6 +130,7 @@ def apply_profile_override(
     profile_html: str,
     template_volume_path: str,
     composite_name: Optional[str] = None,
+    placeholders: Optional[Dict[str, str]] = None,
 ) -> ProfileOverrideResult:
     """Publish a project-side profile view set and drop the HTML on Volume.
 
@@ -147,6 +169,7 @@ def apply_profile_override(
         catalog=catalog,
         schema=schema,
         composite_name=composite_name,
+        placeholders=placeholders,
     )
     if "{catalog}" in rendered or "{schema}" in rendered:
         raise ValueError(
