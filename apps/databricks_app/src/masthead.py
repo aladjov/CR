@@ -81,12 +81,14 @@ def masthead_title(ctx: dict) -> tuple[str, list[str]]:
 
 
 def l1_title_html(ctx: dict) -> str:
-    """L1 hero headline. Falls back to the static editorial title when run
-    context is unavailable so the page still reads when ``v_run_context`` is
-    missing or empty."""
+    """L1 hero headline. Always dynamic: when run context is unavailable
+    (``v_run_context`` missing or empty), surfaces a "context unavailable"
+    flourish so the operator immediately sees that c05 needs republishing
+    rather than a misleading editorial fallback.
+    """
     main = horizon_phrase(ctx)
     if main is None:
-        return 'The book, <em>at a glance</em>'
+        return 'Churn Risk &middot; <em>Actionable insights</em>'
     extras = context_segments(ctx)
     if not extras:
         return escape(main)

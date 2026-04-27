@@ -20,14 +20,19 @@ from src.masthead import l1_title_html, masthead_title
 from src import accounts_view, archetype_view, customer_profile, data, state, treemap
 
 
-def _load_run_context() -> dict:
-    """Return a dict with the masthead fields; empty on any failure."""
+def _load_run_context() -> tuple[dict, str | None]:
+    """Return ``(ctx, diagnostic)`` for the masthead.
+
+    ``diagnostic`` is ``None`` on the happy path. When the run-context view
+    is missing or empty the diagnostic surfaces the operator-actionable
+    reason so the dashboard never silently degrades to a generic title.
+    """
     try:
         df = data.run_context()
-    except Exception:
-        return {}
+    except Exception as exc:  # noqa: BLE001 — surfaced verbatim to operator
+        return {}, f"v_run_context query failed: {type(exc).__name__}: {exc}"
     if df is None or df.empty:
-        return {}
+        return {}, "v_run_context returned 0 rows — re-run c05 to publish run_context"
     row = df.iloc[0]
 
     def _get(col):
@@ -36,13 +41,19 @@ def _load_run_context() -> dict:
         v = row[col]
         return None if pd.isna(v) else v
 
-    return {
+    ctx = {
         "horizon_days":       _get("horizon_days"),
         "primary_objective":  _get("primary_objective"),
         "temporal_posture":   _get("temporal_posture"),
         "model_type":         _get("model_type"),
         "model_name":         _get("model_name"),
     }
+    missing = [k for k, v in ctx.items() if v is None]
+    diag = (
+        f"v_run_context row has NULL fields: {', '.join(missing)}"
+        if missing else None
+    )
+    return ctx, diag
 
 
 st.set_page_config(
@@ -191,9 +202,12 @@ def _render_stat_row() -> None:
 # ===========================================================================
 # Render
 # ===========================================================================
-_ctx = _load_run_context()
+_ctx, _ctx_diagnostic = _load_run_context()
 _render_masthead(_ctx)
 _render_reset_bar()
+
+if _ctx_diagnostic:
+    st.warning(f"Dashboard run context unavailable — {_ctx_diagnostic}")
 
 # --- Level 1 · Portfolio ----------------------------------------------------
 _level_header(

@@ -59,8 +59,13 @@ def test_masthead_title_falls_back_when_empty():
     assert segments == []
 
 
-def test_l1_title_html_falls_back_to_static_when_no_horizon():
-    assert l1_title_html({}) == 'The book, <em>at a glance</em>'
+def test_l1_title_html_falls_back_to_actionable_insights_when_no_horizon():
+    out = l1_title_html({})
+    assert "Churn Risk" in out
+    assert "Actionable insights" in out
+    assert "<em>" in out and "</em>" in out
+    assert "book" not in out.lower()
+    assert "glance" not in out.lower()
 
 
 def test_l1_title_html_renders_dynamic_with_flourish():
@@ -80,6 +85,14 @@ def test_l1_title_html_renders_dynamic_with_flourish():
 def test_l1_title_html_horizon_only_has_no_em():
     html = l1_title_html({"horizon_days": 30})
     assert html == "Churn Risk in next 30 days"
+
+
+def test_l1_title_html_partial_horizon_only_renders_dynamic_no_static():
+    # When horizon is present but every other field is NULL, we must still
+    # render the horizon-bearing dynamic title (no static fallback string).
+    out = l1_title_html({"horizon_days": 60})
+    assert out == "Churn Risk in next 60 days"
+    assert "book" not in out.lower()
 
 
 def test_l1_title_html_escapes_unknown_segment_values():
