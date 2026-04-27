@@ -1,7 +1,7 @@
 """Streamlit entry — progressive-disclosure CSM triage.
 
 Four levels, one long scroll, strict detail gating:
-  L1 Portfolio        — always visible: the book at a glance
+  L1 Portfolio        — always visible: churn risk over the model horizon
   L2 Playbook drill   — appears after a playbook treemap click
   L3 Customer list    — appears alongside L2, scoped by the selection
   L4 Customer profile — appears after a row click
@@ -15,29 +15,9 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+from src.masthead import l1_title_html, masthead_title
 
 from src import accounts_view, archetype_view, customer_profile, data, state, treemap
-
-# ---------------------------------------------------------------------------
-# Page config
-# ---------------------------------------------------------------------------
-_OBJECTIVE_LABELS = {
-    "immediate_risk":   "Immediate risk",
-    "renewal_risk":     "Renewal risk",
-    "disengagement":    "Disengagement",
-}
-_POSTURE_LABELS = {
-    "long_memory":      "Stable posture",
-    "short_memory":     "Reactive posture",
-}
-_MODEL_TYPE_LABELS = {
-    "xgboost":          "XGBoost",
-    "lightgbm":         "LightGBM",
-    "catboost":         "CatBoost",
-    "sklearn":          "scikit-learn",
-    "pytorch":          "PyTorch",
-    "tensorflow":       "TensorFlow",
-}
 
 
 def _load_run_context() -> dict:
@@ -63,30 +43,6 @@ def _load_run_context() -> dict:
         "model_type":         _get("model_type"),
         "model_name":         _get("model_name"),
     }
-
-
-def _masthead_title(ctx: dict) -> tuple[str, list[str]]:
-    """Return (main_title, [subtitle segments]) for the masthead."""
-    horizon = ctx.get("horizon_days")
-    if horizon is None:
-        title = "Churn Risk"
-    else:
-        try:
-            title = f"Churn Risk in {int(horizon)} days"
-        except (TypeError, ValueError):
-            title = "Churn Risk"
-
-    segments: list[str] = []
-    model_type = ctx.get("model_type")
-    if model_type:
-        segments.append(_MODEL_TYPE_LABELS.get(model_type, str(model_type).title()))
-    objective = ctx.get("primary_objective")
-    if objective:
-        segments.append(_OBJECTIVE_LABELS.get(objective, str(objective).replace("_", " ").title()))
-    posture = ctx.get("temporal_posture")
-    if posture:
-        segments.append(_POSTURE_LABELS.get(posture, str(posture).replace("_", " ").title()))
-    return title, segments
 
 
 st.set_page_config(
@@ -119,7 +75,7 @@ def _render_masthead(ctx: dict) -> None:
         )
     trail_html = "".join(crumbs) if crumbs else ""
 
-    title, segments = _masthead_title(ctx)
+    title, segments = masthead_title(ctx)
     sub_html = (
         " &middot; ".join(escape(s) for s in segments)
         if segments
@@ -243,7 +199,7 @@ _render_reset_bar()
 _level_header(
     level=1,
     eyebrow="Level 01 · Portfolio",
-    title_html='The book, <em>at a glance</em>',
+    title_html=l1_title_html(_ctx),
     lead=(
         "Every eligible customer across every active playbook. Tile size is the "
         "eligible cohort; tile colour tracks mean churn probability — pale green "
