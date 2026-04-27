@@ -479,7 +479,10 @@ active_playbooks AS (
     SELECT
         playbook_id,
         MAX(name) AS playbook_name,
-        MAX(description) AS playbook_description
+        MAX(description) AS playbook_description,
+        MAX(time_zero_definition) AS playbook_time_zero_definition,
+        MAX(analysis_population_rule) AS playbook_analysis_population_rule,
+        MAX(when_applicable) AS playbook_when_applicable
     FROM {catalog}.{schema}.playbook_catalog
     GROUP BY playbook_id
 ),
@@ -487,17 +490,47 @@ active_policies AS (
     SELECT
         playbook_id,
         MAX(eligibility_rules_sql) AS eligibility_rules_sql,
+        MAX(eligibility_rules_prose) AS eligibility_rules_prose,
         MAX(expected_uplift_pct) AS expected_uplift_pct,
-        MAX(rationale) AS policy_rationale
+        MAX(rationale) AS policy_rationale,
+        MAX(fit_score) AS policy_fit_score,
+        MAX(fit_tier) AS policy_fit_tier
     FROM {catalog}.{schema}.eligibility_policy
     WHERE status = 'active'
     GROUP BY playbook_id
+),
+exploded_policies AS (
+    SELECT
+        ai AS archetype_id,
+        e.playbook_id,
+        e.fit_score,
+        e.expected_uplift_pct
+    FROM {catalog}.{schema}.eligibility_policy e
+    LATERAL VIEW EXPLODE(e.archetype_ids) tbl AS ai
+    WHERE e.status = 'active'
+      AND e.archetype_ids IS NOT NULL
+),
+archetype_playbook_set AS (
+    SELECT
+        ep.archetype_id,
+        COLLECT_LIST(NAMED_STRUCT(
+            'playbook_id', ep.playbook_id,
+            'playbook_name', COALESCE(p.name, ep.playbook_id),
+            'fit_score', ep.fit_score,
+            'expected_uplift_pct', ep.expected_uplift_pct
+        )) AS playbooks_all
+    FROM exploded_policies ep
+    LEFT JOIN {catalog}.{schema}.playbook_catalog p ON ep.playbook_id = p.playbook_id
+    GROUP BY ep.archetype_id
 )
 SELECT
     s.entity_id,
     s.playbook_id,
     COALESCE(p.playbook_name, s.playbook_id) AS playbook_name,
     p.playbook_description,
+    p.playbook_time_zero_definition,
+    p.playbook_analysis_population_rule,
+    p.playbook_when_applicable,
     s.archetype_id,
     COALESCE(a.archetype_name, s.archetype_id) AS archetype_name,
     a.archetype_description,
@@ -513,8 +546,23 @@ SELECT
     s.eligibility_evidence,
     s.top_shap_features AS account_top_shap_features,
     pol.eligibility_rules_sql,
+    pol.eligibility_rules_prose AS policy_eligibility_rules_prose,
     pol.expected_uplift_pct,
     pol.policy_rationale,
+    pol.policy_fit_score,
+    pol.policy_fit_tier,
+    ARRAY_SORT(
+        FILTER(
+            COALESCE(aps.playbooks_all, ARRAY()),
+            x -> x.playbook_id != s.playbook_id
+        ),
+        (a1, a2) ->
+            CASE
+                WHEN COALESCE(a1.fit_score, -1.0) > COALESCE(a2.fit_score, -1.0) THEN -1
+                WHEN COALESCE(a1.fit_score, -1.0) < COALESCE(a2.fit_score, -1.0) THEN 1
+                ELSE 0
+            END
+    ) AS alternate_playbooks,
     s.recommended,
     s.is_holdout,
     s.policy_rank_among_eligible,
@@ -526,6 +574,7 @@ JOIN latest_run lr ON s.scoring_run_id = lr.scoring_run_id
 LEFT JOIN active_archetypes a ON s.archetype_id = a.archetype_id
 LEFT JOIN active_playbooks p ON s.playbook_id = p.playbook_id
 LEFT JOIN active_policies pol ON s.playbook_id = pol.playbook_id
+LEFT JOIN archetype_playbook_set aps ON s.archetype_id = aps.archetype_id
 WHERE COALESCE(s.is_dashboard_visible, TRUE) = TRUE;
 
 -- ============================================================================

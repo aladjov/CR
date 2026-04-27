@@ -201,51 +201,161 @@ body {
 }
 
 /* --------------------------------------------------------------------------
-   Callout — recommendation / holdout
+   Card sections — flat expandable summary/detail
    -------------------------------------------------------------------------- */
-.cr-callout {
+.cr-card-section {
+  border-top: 1px solid var(--line);
+  padding: 0;
+  margin: 0;
+  background: var(--paper);
+}
+.cr-card-section[open] { background: var(--paper); }
+
+.cr-summary {
   display: flex;
-  gap: 1rem;
   align-items: center;
-  margin: 1.5rem 2.25rem 0 2.25rem;
-  padding: 1rem 1.2rem;
-  border-radius: 10px;
+  gap: 0.9rem;
+  padding: 1.1rem 2.25rem;
+  cursor: pointer;
+  list-style: none;
   font-family: var(--font-sans);
 }
-.cr-callout-ok   { background: var(--green-50); border: 1px solid var(--green-200); color: var(--green-800); }
-.cr-callout-warn { background: var(--yellow-50); border: 1px solid var(--yellow-200); color: var(--yellow-800); }
+.cr-summary::-webkit-details-marker { display: none; }
+.cr-summary::marker { content: ""; }
 
-.cr-callout-glyph {
+.cr-summary-glyph {
   flex-shrink: 0;
-  width: 34px; height: 34px;
+  width: 30px; height: 30px;
   border-radius: 50%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.1rem;
+  font-size: 0.95rem;
   font-weight: 500;
+  background: var(--paper-deep);
+  color: var(--ink-soft);
 }
-.cr-callout-ok .cr-callout-glyph   { background: var(--green-100);  color: var(--green-600); }
-.cr-callout-warn .cr-callout-glyph { background: var(--yellow-100); color: var(--yellow-600); }
+.cr-action-ok .cr-summary-glyph      { background: var(--green-100);  color: var(--green-800); }
+.cr-action-warn .cr-summary-glyph    { background: var(--yellow-100); color: var(--yellow-800); }
+.cr-action-holdout .cr-summary-glyph { background: var(--blue-100);   color: var(--blue-700); }
 
-.cr-callout-body { display: flex; flex-direction: column; gap: 0.15rem; }
-.cr-callout-eyebrow {
+.cr-summary-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.cr-summary-eyebrow {
   font-family: var(--font-mono);
   font-size: 0.66rem;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  opacity: 0.7;
+  color: var(--muted);
   font-weight: 500;
 }
-.cr-callout-title {
+.cr-summary-title {
   font-family: var(--font-sans);
   font-weight: 600;
-  font-size: 0.98rem;
+  font-size: 1rem;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.cr-callout-meta {
+
+.cr-summary-chevron {
+  font-family: var(--font-serif);
+  font-size: 1.4rem;
+  color: var(--muted);
+  flex-shrink: 0;
+  transition: transform 0.18s ease;
+  line-height: 1;
+}
+details[open] > .cr-summary > .cr-summary-chevron { transform: rotate(90deg); }
+
+.cr-card-body {
+  padding: 0 2.25rem 1.6rem 2.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+/* Pills — compact metadata badges shown inline in the summary -------------- */
+.cr-pill {
+  font-family: var(--font-sans);
+  font-size: 0.74rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  padding: 0.22rem 0.62rem;
+  border-radius: 999px;
+  background: var(--paper-deep);
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.cr-pill-uplift { background: var(--green-50);  border-color: var(--green-200);  color: var(--green-800); }
+.cr-pill-match  { background: var(--blue-50);   border-color: var(--blue-200);   color: var(--blue-700); }
+
+.cr-pill-fit-auto      { background: var(--green-50);  border-color: var(--green-200);  color: var(--green-800); }
+.cr-pill-fit-review    { background: var(--yellow-50); border-color: var(--yellow-200); color: var(--yellow-800); }
+.cr-pill-fit-manual    { background: var(--paper-deep); border-color: var(--line);       color: var(--ink-2); }
+.cr-pill-fit-catch_all { background: var(--paper-deep); border-color: var(--line);       color: var(--ink-soft); font-style: italic; }
+.cr-pill-fit-unknown   { display: none; }
+
+.cr-stat-pill {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  padding: 0.18rem 0.55rem;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  border: 1px dashed var(--line);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Alternate playbook chips ------------------------------------------------- */
+.cr-alts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+.cr-alt {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: 8px;
+  background: var(--paper-deep);
+  border: 1px solid var(--line);
+  font-family: var(--font-sans);
   font-size: 0.82rem;
-  opacity: 0.85;
-  font-weight: 400;
+  color: var(--ink-2);
+}
+.cr-alt-name   { font-weight: 500; }
+.cr-alt-fit    { font-family: var(--font-mono); font-size: 0.72rem; color: var(--blue-700); }
+.cr-alt-uplift { font-family: var(--font-mono); font-size: 0.72rem; color: var(--green-800); }
+
+/* Nested technical details ------------------------------------------------- */
+.cr-card-nested {
+  border-top: 1px dashed var(--line);
+  margin-top: 0.4rem;
+  padding-top: 0.4rem;
+}
+.cr-summary-tech {
+  padding: 0.6rem 0;
+  gap: 0.6rem;
+}
+
+/* Print: keep action card open, collapse nested technical details ---------- */
+@media print {
+  .cr-card-section, .cr-card-nested { break-inside: avoid; }
+  .cr-action[open] .cr-summary-chevron,
+  .cr-archetype[open] .cr-summary-chevron { display: none; }
+  .cr-card-nested { display: none; }
 }
 
 /* --------------------------------------------------------------------------

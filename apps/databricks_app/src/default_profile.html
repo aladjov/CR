@@ -40,64 +40,76 @@ data: {}
     </div>
   </section>
 
-  {{#if recommended}}
-    <aside class="cr-callout cr-callout-ok">
-      <span class="cr-callout-glyph">✓</span>
-      <div class="cr-callout-body">
-        <span class="cr-callout-eyebrow">Recommended action</span>
-        <span class="cr-callout-title">{{playbook_name}}</span>
-        {{#if expected_uplift_pct}}<span class="cr-callout-meta">Expected uplift · {{fmt_pct expected_uplift_pct}}</span>{{/if}}
-      </div>
-    </aside>
-  {{else}}
-    <aside class="cr-callout cr-callout-warn">
-      <span class="cr-callout-glyph">◎</span>
-      <div class="cr-callout-body">
-        <span class="cr-callout-eyebrow">{{#if is_holdout}}Holdout{{else}}Not recommended{{/if}}</span>
-        <span class="cr-callout-title">{{playbook_name}}</span>
-        <span class="cr-callout-meta">{{#if is_holdout}}Reserved for uplift measurement this cycle{{else}}Top-ranked candidate but below decision threshold{{/if}}</span>
-      </div>
-    </aside>
-  {{/if}}
-
-  <section class="cr-chapter">
-    <header class="cr-chapter-head">
-      <span class="cr-chapter-eyebrow">Archetype</span>
-      <h2 class="cr-chapter-title">{{archetype_name}}</h2>
-    </header>
-    {{#if archetype_description}}<p class="cr-chapter-lead">{{archetype_description}}</p>{{/if}}
-    <div class="cr-chapter-body">
-      {{#if archetype_rationale}}
+  <details class="cr-card-section cr-action {{#if recommended}}cr-action-ok{{else}}{{#if is_holdout}}cr-action-holdout{{else}}cr-action-warn{{/if}}{{/if}}" open>
+    <summary class="cr-summary">
+      <span class="cr-summary-glyph">{{#if recommended}}✓{{else}}◎{{/if}}</span>
+      <span class="cr-summary-text">
+        <span class="cr-summary-eyebrow">{{#if recommended}}Recommended action{{else}}{{#if is_holdout}}Holdout{{else}}Not recommended{{/if}}{{/if}}</span>
+        <span class="cr-summary-title">{{playbook_name}}</span>
+      </span>
+      {{#if expected_uplift_pct}}<span class="cr-pill cr-pill-uplift">Expected uplift · {{fmt_pct expected_uplift_pct}}</span>{{/if}}
+      <span class="cr-summary-chevron" aria-hidden="true">›</span>
+    </summary>
+    <div class="cr-card-body">
+      {{#if playbook_description}}<p class="cr-prose">{{playbook_description}}</p>{{/if}}
+      {{#if playbook_when_applicable}}
         <div class="cr-block">
-          <span class="cr-block-label">Why the cluster exists</span>
-          <div class="cr-prose">{{archetype_rationale}}</div>
+          <span class="cr-block-label">When this play helps</span>
+          <div class="cr-prose">{{playbook_when_applicable}}</div>
         </div>
       {{/if}}
-      {{#if archetype_feature_thresholds}}
+      {{#if playbook_time_zero_definition}}
         <div class="cr-block">
-          <span class="cr-block-label">Feature thresholds</span>
-          <pre class="cr-mono">{{archetype_feature_thresholds}}</pre>
+          <span class="cr-block-label">Time-zero definition</span>
+          <div class="cr-prose">{{playbook_time_zero_definition}}</div>
+        </div>
+      {{/if}}
+      {{#if playbook_analysis_population_rule}}
+        <div class="cr-block">
+          <span class="cr-block-label">Analysis population</span>
+          <div class="cr-prose">{{playbook_analysis_population_rule}}</div>
+        </div>
+      {{/if}}
+      {{#if alternate_playbooks}}
+        <div class="cr-block">
+          <span class="cr-block-label">Other applicable playbooks</span>
+          <div class="cr-alts">
+            {{#each alternate_playbooks}}
+              <span class="cr-alt">
+                <span class="cr-alt-name">{{this.playbook_name}}</span>
+                {{#if this.fit_score}}<span class="cr-alt-fit">{{fmt_pct this.fit_score}} match</span>{{/if}}
+                {{#if this.expected_uplift_pct}}<span class="cr-alt-uplift">+{{fmt_pct this.expected_uplift_pct}}</span>{{/if}}
+              </span>
+            {{/each}}
+          </div>
         </div>
       {{/if}}
     </div>
-  </section>
+  </details>
 
-  <section class="cr-chapter">
-    <header class="cr-chapter-head">
-      <span class="cr-chapter-eyebrow">Match</span>
-      <h2 class="cr-chapter-title">Why this customer qualified</h2>
-    </header>
-    <div class="cr-chapter-body">
-      {{#if eligibility_evidence}}
+  <details class="cr-card-section cr-archetype">
+    <summary class="cr-summary">
+      <span class="cr-summary-text">
+        <span class="cr-summary-eyebrow">Archetype</span>
+        <span class="cr-summary-title">{{archetype_name}}</span>
+      </span>
+      {{#if policy_fit_score}}<span class="cr-pill cr-pill-match">{{fmt_pct policy_fit_score}} match</span>{{/if}}
+      {{#if policy_fit_tier}}<span class="cr-pill cr-pill-fit cr-pill-{{fit_tier_class policy_fit_tier}}">{{fit_tier_label policy_fit_tier}}</span>{{/if}}
+      {{#if archetype_cluster_size}}<span class="cr-stat-pill">{{fmt_int archetype_cluster_size}} customers</span>{{/if}}
+      {{#if archetype_mean_churn_probability}}<span class="cr-stat-pill">avg {{fmt_pct archetype_mean_churn_probability}} churn</span>{{/if}}
+      <span class="cr-summary-chevron" aria-hidden="true">›</span>
+    </summary>
+    <div class="cr-card-body">
+      {{#if archetype_description}}
         <div class="cr-block">
-          <span class="cr-block-label">Evidence</span>
-          <div class="cr-prose">{{eligibility_evidence}}</div>
+          <span class="cr-block-label">Description</span>
+          <div class="cr-prose">{{archetype_description}}</div>
         </div>
       {{/if}}
-      {{#if eligibility_rules_sql}}
+      {{#if archetype_rationale}}
         <div class="cr-block">
-          <span class="cr-block-label">Eligibility predicate · SQL</span>
-          <pre class="cr-mono">{{eligibility_rules_sql}}</pre>
+          <span class="cr-block-label">Why this customer matches</span>
+          <div class="cr-prose">{{archetype_rationale}}</div>
         </div>
       {{/if}}
       {{#if policy_rationale}}
@@ -106,6 +118,38 @@ data: {}
           <div class="cr-prose">{{policy_rationale}}</div>
         </div>
       {{/if}}
+      {{#if eligibility_evidence}}
+        <div class="cr-block">
+          <span class="cr-block-label">Evidence on this customer</span>
+          <div class="cr-prose">{{eligibility_evidence}}</div>
+        </div>
+      {{/if}}
+      <details class="cr-card-nested">
+        <summary class="cr-summary cr-summary-tech">
+          <span class="cr-summary-eyebrow">Technical details</span>
+          <span class="cr-summary-chevron" aria-hidden="true">›</span>
+        </summary>
+        <div class="cr-card-body">
+          {{#if archetype_feature_thresholds}}
+            <div class="cr-block">
+              <span class="cr-block-label">Feature thresholds</span>
+              <pre class="cr-mono">{{archetype_feature_thresholds}}</pre>
+            </div>
+          {{/if}}
+          {{#if policy_eligibility_rules_prose}}
+            <div class="cr-block">
+              <span class="cr-block-label">Eligibility rules · prose</span>
+              <div class="cr-prose">{{policy_eligibility_rules_prose}}</div>
+            </div>
+          {{/if}}
+          {{#if eligibility_rules_sql}}
+            <div class="cr-block">
+              <span class="cr-block-label">Eligibility predicate · SQL</span>
+              <pre class="cr-mono">{{eligibility_rules_sql}}</pre>
+            </div>
+          {{/if}}
+        </div>
+      </details>
     </div>
-  </section>
+  </details>
 </article>

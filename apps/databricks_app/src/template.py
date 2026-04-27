@@ -202,6 +202,29 @@ def _h_risk_tier_class(this, tier):
     }.get(tier, "risk-unknown")
 
 
+_FIT_TIER_LABELS = {
+    "auto":      "Auto-fit",
+    "review":    "Manual review",
+    "manual":    "Manual",
+    "catch_all": "Default",
+}
+
+
+def _h_fit_tier_label(this, tier):
+    if _is_missing(tier):
+        return ""
+    return _FIT_TIER_LABELS.get(str(tier), str(tier).replace("_", " ").title())
+
+
+def _h_fit_tier_class(this, tier):
+    if _is_missing(tier):
+        return "fit-unknown"
+    key = str(tier).strip().lower().replace(" ", "_")
+    if key in _FIT_TIER_LABELS:
+        return f"fit-{key}"
+    return "fit-unknown"
+
+
 def _h_upper(this, s):
     return (str(s) if not _is_missing(s) else "").upper()
 
@@ -218,6 +241,8 @@ HELPERS = {
     "fmt_date":        _h_fmt_date,
     "fmt_datetime":    _h_fmt_datetime,
     "risk_tier_class": _h_risk_tier_class,
+    "fit_tier_label":  _h_fit_tier_label,
+    "fit_tier_class":  _h_fit_tier_class,
     "upper":           _h_upper,
     "lower":           _h_lower,
 }
