@@ -262,6 +262,18 @@ def _is_uc_table_reference(path: str) -> bool:
     return not path.lower().endswith(_UC_TABLE_FILE_SUFFIXES)
 
 def read_raw_source(path: str, fmt: str):
+    if isinstance(path, str) and path.startswith("global_temp."):
+        raise RuntimeError(
+            f"read_raw_source: refusing to read session-scoped temp view {path!r}. "
+            "Spark global_temp views vanish at exploration-kernel exit, so this "
+            "generated landing notebook would fail on a fresh dbutils.notebook.run "
+            "session. Root cause: NB00 build_dataset_registry recorded a "
+            "post-user_code-mutation path. Fix: ensure cell f1eb641c stashed "
+            "_namespace.original_datasets before any register_temp_view call, "
+            "and re-run NB00->NB10. If the upstream needs filtering, declare "
+            "registry.add_landing_filter(dataset=..., predicate=...) so the "
+            "generated landing replays the filter from the persistent source."
+        )
     if _is_uc_table_reference(path):
         return spark.read.table(path)
     if fmt == "csv":
