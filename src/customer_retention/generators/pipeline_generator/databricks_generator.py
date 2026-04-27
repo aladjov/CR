@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 
 from customer_retention.core.config.experiments import get_framework_repo_path
 
@@ -30,6 +30,7 @@ class DatabricksPipelineGenerator(PipelineGeneratorBase):
         disable_user_extensions: Optional[bool] = None,
         harvest_result: Optional["HarvestResult"] = None,
         parity_mode: Optional[str] = None,
+        parity_ignored_features: Optional[Iterable[str]] = None,
     ):
         self._findings_dir = Path(findings_dir)
         self._output_dir = Path(output_dir)
@@ -47,6 +48,7 @@ class DatabricksPipelineGenerator(PipelineGeneratorBase):
             bronze_aggregation_overrides=merged_bronze_overrides,
             disable_user_extensions=disable_user_extensions,
             parity_mode=parity_mode,
+            parity_ignored_features=parity_ignored_features,
         )
         self._harvest_result = harvest_result
         self._renderer = DatabricksCodeRenderer(

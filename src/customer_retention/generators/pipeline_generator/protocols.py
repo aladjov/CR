@@ -64,6 +64,7 @@ class PipelineGeneratorBase(ABC):
         ]
         config.composite_name = composite_name(source_names)
         self._snapshot_feature_spec_into_namespace(config)
+        self._materialize_patched_feature_spec(config)
         return config
 
     def _snapshot_feature_spec_into_namespace(self, config: PipelineConfig) -> None:
@@ -85,6 +86,27 @@ class PipelineGeneratorBase(ABC):
         import shutil
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
+
+    def _materialize_patched_feature_spec(self, config: PipelineConfig) -> None:
+        """When `parity_ignored_features` is non-empty, materialize a stripped
+        copy of the spec into ``output_dir/findings/feature_spec.yaml`` and
+        repoint ``config.feature_spec_path`` at it. The runtime gate (training
+        script) re-loads ``_FEATURE_SPEC_PATH`` and re-checks selected_features
+        against gold columns; without this redirect, generation would pass but
+        the generated training step would still raise on the same missing
+        feature. The on-disk source-of-truth (namespace) is never modified.
+        """
+        ignored = getattr(self._parser, "parity_ignored_features", frozenset())
+        spec = getattr(self._parser, "_feature_spec", None)
+        if not ignored or spec is None:
+            return
+        dst_dir = self._output_dir / "findings"
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        patched_path = dst_dir / "feature_spec.yaml"
+        spec.save(patched_path)
+        config.feature_spec_path = str(patched_path)
+        if config.training is not None:
+            config.training.feature_spec_path = str(patched_path)
 
     def _write_config(self, config: PipelineConfig) -> Path:
         path = self._output_dir / "config.py"

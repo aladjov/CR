@@ -2,12 +2,18 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
 import yaml
 
 _PARITY_MODE_ENV_VAR = "CR_FEATURE_SPEC_PARITY_MODE"
 _PARITY_MODES = frozenset({"strict", "warn"})
+
+
+def _resolve_parity_ignored_features(explicit: Optional[Iterable[str]]) -> FrozenSet[str]:
+    if not explicit:
+        return frozenset()
+    return frozenset(str(c) for c in explicit if c)
 
 
 def _resolve_parity_mode(explicit: Optional[str]) -> str:
@@ -204,6 +210,7 @@ class FindingsParser:
         bronze_aggregation_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
         disable_user_extensions: Optional[bool] = None,
         parity_mode: Optional[str] = None,
+        parity_ignored_features: Optional[Iterable[str]] = None,
     ):
         self._findings_dir = Path(findings_dir)
         self._namespace = namespace
@@ -222,6 +229,9 @@ class FindingsParser:
         self._feature_spec: Optional[FeatureSpec] = None
         self._silver_merged_columns_cache: Optional[Set[str]] = None
         self._parity_mode: str = _resolve_parity_mode(parity_mode)
+        self._parity_ignored_features: FrozenSet[str] = _resolve_parity_ignored_features(
+            parity_ignored_features
+        )
         from customer_retention.runtime.flags import is_user_extensions_disabled
         self._ext_disabled: bool = is_user_extensions_disabled(disable_user_extensions)
 
@@ -232,6 +242,10 @@ class FindingsParser:
     @property
     def parity_mode(self) -> str:
         return self._parity_mode
+
+    @property
+    def parity_ignored_features(self) -> FrozenSet[str]:
+        return self._parity_ignored_features
 
     def parse(self) -> PipelineConfig:
         self._feature_spec = self._load_feature_spec()
@@ -338,7 +352,42 @@ class FindingsParser:
                 spec_path = fallback
         if spec_path is None:
             return None
-        return FeatureSpec.load(spec_path)
+        spec = FeatureSpec.load(spec_path)
+        return self._apply_parity_ignored(spec)
+
+    def _apply_parity_ignored(self, spec: FeatureSpec) -> FeatureSpec:
+        """Return a copy of ``spec`` with ``parity_ignored_features`` removed.
+
+        The on-disk spec is never mutated. Removing ignored features here makes
+        every downstream consumer (parity gate, reconciliation, runtime gate via
+        the patched copy in `_materialize_patched_feature_spec`) see a spec that
+        does not include the user-acknowledged divergent feature, so `NB10`
+        completes without re-running NB08. ``fitted_transforms`` for the ignored
+        column are also dropped so `FeatureSpec.validate()` still passes.
+        """
+        ignored = self._parity_ignored_features
+        if not ignored:
+            return spec
+        recognized = ignored & set(spec.selected_features)
+        if not recognized:
+            return spec
+        from dataclasses import replace
+        kept_features = [c for c in spec.selected_features if c not in recognized]
+        kept_transforms = [ft for ft in spec.fitted_transforms if ft.column not in recognized]
+        kept_topology = [
+            step for step in spec.transform_topology
+            if getattr(step, "column", None) not in recognized
+        ]
+        logger.warning(
+            "PARITY_IGNORED_FEATURES: skipping %d feature(s) from spec parity gate: %s",
+            len(recognized), sorted(recognized),
+        )
+        return replace(
+            spec,
+            selected_features=kept_features,
+            fitted_transforms=kept_transforms,
+            transform_topology=kept_topology,
+        )
 
     def _collect_allowlist_drops(
         self,
