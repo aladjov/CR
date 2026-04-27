@@ -32,6 +32,8 @@ class DatabricksPipelineGenerator(PipelineGeneratorBase):
         parity_mode: Optional[str] = None,
         parity_ignored_features: Optional[Iterable[str]] = None,
         raw_source_path_overrides: Optional[Dict[str, str]] = None,
+        landing_lifecycle_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
+        landing_filter_overrides: Optional[Dict[str, str]] = None,
     ):
         self._findings_dir = Path(findings_dir)
         self._output_dir = Path(output_dir)
@@ -51,6 +53,8 @@ class DatabricksPipelineGenerator(PipelineGeneratorBase):
             parity_mode=parity_mode,
             parity_ignored_features=parity_ignored_features,
             raw_source_path_overrides=raw_source_path_overrides,
+            landing_lifecycle_overrides=landing_lifecycle_overrides,
+            landing_filter_overrides=landing_filter_overrides,
         )
         self._harvest_result = harvest_result
         self._renderer = DatabricksCodeRenderer(

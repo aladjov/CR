@@ -212,6 +212,8 @@ class FindingsParser:
         parity_mode: Optional[str] = None,
         parity_ignored_features: Optional[Iterable[str]] = None,
         raw_source_path_overrides: Optional[Dict[str, str]] = None,
+        landing_lifecycle_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
+        landing_filter_overrides: Optional[Dict[str, str]] = None,
     ):
         self._findings_dir = Path(findings_dir)
         self._namespace = namespace
@@ -229,6 +231,24 @@ class FindingsParser:
         # persistent upstream WITHOUT re-running NB00 -> NB05.
         self._raw_source_path_overrides: Dict[str, str] = (
             dict(raw_source_path_overrides) if raw_source_path_overrides else {}
+        )
+        # Per-dataset NB10-time landing-step overrides. Same shape the
+        # `registry.add_landing_lifecycle_enrichment` / `add_landing_filter`
+        # recommendations would emit, but injected directly without going
+        # through `recommendations.yaml`. Lets the operator finish a run
+        # whose NB00 still uses pre-migration imperative `@cr:user_code`
+        # cells (so the registry never received the `add_landing_*` calls).
+        # `landing_lifecycle_overrides[<ds>]` carries a dict in the shape
+        # `LifecycleEnrichmentConfig.from_dict(...)` accepts; the parser
+        # appends one `LANDING_LIFECYCLE_ENRICHMENT` step to that dataset's
+        # `LandingLayerConfig.lifecycle_enrichments`.
+        # `landing_filter_overrides[<ds>]` carries the predicate string;
+        # the parser appends one `LANDING_FILTER` step.
+        self._landing_lifecycle_overrides: Dict[str, Dict[str, Any]] = (
+            dict(landing_lifecycle_overrides) if landing_lifecycle_overrides else {}
+        )
+        self._landing_filter_overrides: Dict[str, str] = (
+            dict(landing_filter_overrides) if landing_filter_overrides else {}
         )
         self._source_findings_paths: Dict[str, Path] = {}
         self._landing_sibling_findings: Dict[str, ExplorationFindings] = {}
@@ -262,6 +282,14 @@ class FindingsParser:
     @property
     def raw_source_path_overrides(self) -> Dict[str, str]:
         return dict(self._raw_source_path_overrides)
+
+    @property
+    def landing_lifecycle_overrides(self) -> Dict[str, Dict[str, Any]]:
+        return {k: dict(v) for k, v in self._landing_lifecycle_overrides.items()}
+
+    @property
+    def landing_filter_overrides(self) -> Dict[str, str]:
+        return dict(self._landing_filter_overrides)
 
     def _resolve_raw_source(self, name: str, fallback: Optional[str]) -> Optional[str]:
         """Apply the operator-supplied raw_source_path override for ``name``.
@@ -307,6 +335,7 @@ class FindingsParser:
         if recommendations_registry:
             self._apply_recommendations_to_config(config, recommendations_registry, multi_dataset, source_findings)
             self._apply_event_recommendations(config, recommendations_registry)
+        self._apply_landing_overrides(config)
         config.gold.feature_exclusion_prefixes = self._collect_leakage_exclusion_prefixes(source_findings, multi_dataset)
         self._reconcile_discovered_event_transforms(config, discovered_events)
         self._reconcile_event_post_shaping(config)
@@ -947,6 +976,54 @@ class FindingsParser:
         self._apply_dedup_recommendations(config, registry)
         self._apply_filter_recommendations(config, registry)
         self._apply_landing_recommendations(config, registry)
+
+    def _apply_landing_overrides(self, config: PipelineConfig) -> None:
+        """Inject NB10-time landing filters / lifecycle enrichments per dataset.
+
+        This is the post-recommendations escape hatch: if the operator's NB00
+        still uses pre-migration imperative `@cr:user_code` cells (so the
+        registered overrides chain in `recommendations.yaml.landing` never
+        received the `add_landing_*` calls), NB10 can paste the equivalent
+        config directly into `LANDING_LIFECYCLE_OVERRIDES` /
+        `LANDING_FILTER_OVERRIDES` and the generated landing notebook will
+        replay the same logic at runtime via the existing template branches
+        (`databricks_landing.py.j2` `config.lifecycle_enrichments` /
+        `config.filters`).
+        """
+        for dataset, predicate in self._landing_filter_overrides.items():
+            if not predicate:
+                continue
+            target = config.landing.get(dataset)
+            if target is None:
+                logger.warning(
+                    "landing_filter_overrides: unknown dataset %r (known landing keys: %s); skipping.",
+                    dataset, sorted(config.landing.keys()),
+                )
+                continue
+            target.filters.append(TransformationStep(
+                type=PipelineTransformationType.LANDING_FILTER,
+                column=dataset,
+                parameters={"predicate": str(predicate)},
+                rationale="NB10 LANDING_FILTER_OVERRIDES",
+                source_notebook="NB10",
+            ))
+        for dataset, lifecycle_cfg in self._landing_lifecycle_overrides.items():
+            if not lifecycle_cfg:
+                continue
+            target = config.landing.get(dataset)
+            if target is None:
+                logger.warning(
+                    "landing_lifecycle_overrides: unknown dataset %r (known landing keys: %s); skipping.",
+                    dataset, sorted(config.landing.keys()),
+                )
+                continue
+            target.lifecycle_enrichments.append(TransformationStep(
+                type=PipelineTransformationType.LANDING_LIFECYCLE_ENRICHMENT,
+                column=dataset,
+                parameters={"config": dict(lifecycle_cfg)},
+                rationale="NB10 LANDING_LIFECYCLE_OVERRIDES",
+                source_notebook="NB10",
+            ))
 
     def _apply_landing_recommendations(
         self, config: PipelineConfig, registry: RecommendationRegistry
