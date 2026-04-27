@@ -37,6 +37,10 @@ from customer_retention.stages.causal.interpretation.markdown_bootstrap import (
 from customer_retention.stages.causal.interpretation.predicate_prose import (
     compile_predicate_prose,
 )
+from customer_retention.stages.causal.interpretation.prose_backfill import (
+    ProseBackfillResult,
+    backfill_eligibility_prose,
+)
 from customer_retention.stages.causal.interpretation.quantile_phrasing import (
     PopulationStats,
     quantile_phrase,
@@ -64,11 +68,13 @@ __all__ = [
     "EnrichedDriver",
     "EnrichedPlaybook",
     "build_enriched_context",
+    "backfill_eligibility_prose",
     "build_enriched_prompt_messages",
     "compile_predicate_prose",
     "discover_interpretation_sidecars",
     "enrich_archetype_from_namespace",
     "InterpretationSidecars",
+    "ProseBackfillResult",
     "write_feature_meta_sidecar",
     "load_feature_meta_sidecar",
     "write_population_stats_sidecar",

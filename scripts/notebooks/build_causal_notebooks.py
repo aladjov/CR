@@ -422,8 +422,35 @@ def build_c02() -> List[Dict[str, Any]]:
         *setup_block(stage, needs_model=True),
         md_cell(stage, "c02_derive_section", ["## 2.1 Derive Archetypes + Eligibility Policies\n"]),
         code_cell(stage, "code", "derive_archetypes_and_policies", [_C02_DERIVE_BODY]),
+        md_cell(
+            stage,
+            "c02_backfill_prose_section",
+            ["## 2.2 Backfill `eligibility_rules_prose`\n"],
+        ),
+        code_cell(stage, "code", "backfill_eligibility_rules_prose", [_C02_BACKFILL_PROSE_BODY]),
         release_cleanup_cell(stage),
     ]
+
+
+_C02_BACKFILL_PROSE_BODY = '''# Re-render `eligibility_rules_prose` for every existing active policy row whose
+# prose column is NULL — derivation populates the column at row-creation time
+# only, so rows written before column_descriptions / feature_meta /
+# feature_population_stats sidecars existed stay NULL until we rewrite them.
+# Cycle 013 P4 surfaced exactly this gap; the backfill closes it idempotently.
+if is_databricks() and spark is not None and spark.catalog.tableExists(ELIGIBILITY_POLICY_FQN):
+    from customer_retention.stages.causal.interpretation import (
+        backfill_eligibility_prose,
+    )
+
+    _backfill = backfill_eligibility_prose(
+        spark, ELIGIBILITY_POLICY_FQN, namespace=_enrich_ns,
+    )
+    print(_backfill.summary())
+    if _backfill.warnings:
+        print("(interpretation-layer warnings — see logs for details)")
+        for _w in _backfill.warnings:
+            print(f"  - {_w}")
+'''
 
 
 # ---------------------------------------------------------------------------
