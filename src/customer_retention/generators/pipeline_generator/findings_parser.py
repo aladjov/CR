@@ -211,12 +211,24 @@ class FindingsParser:
         disable_user_extensions: Optional[bool] = None,
         parity_mode: Optional[str] = None,
         parity_ignored_features: Optional[Iterable[str]] = None,
+        raw_source_path_overrides: Optional[Dict[str, str]] = None,
     ):
         self._findings_dir = Path(findings_dir)
         self._namespace = namespace
         self._intent = intent
         self._bronze_aggregation_overrides: Dict[str, Dict[str, Any]] = (
             dict(bronze_aggregation_overrides) if bronze_aggregation_overrides else {}
+        )
+        # Dataset-name -> persistent upstream path. When set, the parser swaps
+        # any `raw_source_path` it would have read from findings (e.g. a stale
+        # `global_temp.sps_filtered_case` from a pre-fix NB00 run) with the
+        # operator-supplied upstream path. NB10 cells `1a5c0868` /
+        # `0f3cc762` resolve this dict from `_namespace.original_datasets`
+        # (or paste-fallback `DATASETS_ORIGINAL_FALLBACK`); passing it here
+        # is what makes the in-flight generated landing read from the
+        # persistent upstream WITHOUT re-running NB00 -> NB05.
+        self._raw_source_path_overrides: Dict[str, str] = (
+            dict(raw_source_path_overrides) if raw_source_path_overrides else {}
         )
         self._source_findings_paths: Dict[str, Path] = {}
         self._landing_sibling_findings: Dict[str, ExplorationFindings] = {}
@@ -246,6 +258,23 @@ class FindingsParser:
     @property
     def parity_ignored_features(self) -> FrozenSet[str]:
         return self._parity_ignored_features
+
+    @property
+    def raw_source_path_overrides(self) -> Dict[str, str]:
+        return dict(self._raw_source_path_overrides)
+
+    def _resolve_raw_source(self, name: str, fallback: Optional[str]) -> Optional[str]:
+        """Apply the operator-supplied raw_source_path override for ``name``.
+
+        Returns the override when present; otherwise the normalized fallback
+        (the value the parser would have used pre-override). Single source of
+        truth for raw_source_path resolution across `_build_source_configs`,
+        `_build_landing_configs`, and `_build_discovered_landing_configs`.
+        """
+        override = self._raw_source_path_overrides.get(name)
+        if override:
+            return _normalize_source_path(str(override))
+        return _normalize_source_path(fallback) if fallback else fallback
 
     def parse(self) -> PipelineConfig:
         self._feature_spec = self._load_feature_spec()
@@ -665,9 +694,10 @@ class FindingsParser:
             dataset_info = multi.datasets.get(name)
             is_event = name in multi.event_datasets
             is_excluded = name in multi.excluded_datasets or (dataset_info and dataset_info.excluded)
-            raw_source = _normalize_source_path(
-                dataset_info.raw_source_path or dataset_info.source_path
-                if dataset_info else findings.source_path
+            raw_source = self._resolve_raw_source(
+                name,
+                (dataset_info.raw_source_path or dataset_info.source_path)
+                if dataset_info else findings.source_path,
             )
             time_col = None
             entity_key = findings.identifier_columns[0] if findings.identifier_columns else "id"
@@ -1964,8 +1994,9 @@ class FindingsParser:
                 or "timestamp"
             )
             raw_time_col = self._resolve_raw_time_column(findings)
-            raw_source = _normalize_source_path(
-                dataset_info.raw_source_path or dataset_info.source_path or findings.source_path
+            raw_source = self._resolve_raw_source(
+                event_name,
+                dataset_info.raw_source_path or dataset_info.source_path or findings.source_path,
             )
             source_cfg = next((s for s in config.sources if s.name == event_name), None)
             if not source_cfg:
@@ -2559,7 +2590,7 @@ class FindingsParser:
                 if ms.name == agg_name:
                     ms.granularity = DatasetGranularity.EVENT_LEVEL.value
                     break
-            raw_source = _normalize_source_path(preagg.source_path)
+            raw_source = self._resolve_raw_source(agg_name, preagg.source_path)
             original_target = self._resolve_original_target(preagg, config.target_column)
             config.landing[agg_name] = LandingLayerConfig(
                 source=source_cfg,
