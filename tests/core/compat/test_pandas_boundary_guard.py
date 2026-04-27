@@ -151,6 +151,12 @@ COLLECT_BOUNDARY_FILES = {
     "stages/profiling/time_window_aggregator.py",
     #     directly — never collected to the driver.
     "stages/causal/snapshot_writer.py",
+    #   prose_backfill: collects active eligibility_policy rows whose prose
+    #     column is NULL — bounded by |archetypes| × |playbooks| (≤ a few
+    #     hundred rows). Result rows are renderered to prose locally and
+    #     MERGE'd back via DeltaTable.merge — no entity-grain data ever
+    #     touches the driver.
+    "stages/causal/interpretation/prose_backfill.py",
     # Lifecycle enrichment — .agg().collect()[0] for corrupt-row counts (1 row,
     # 3 count columns) in the on_corrupt_row='raise'/'warn' triage path.
     "stages/lifecycle/enrich.py",

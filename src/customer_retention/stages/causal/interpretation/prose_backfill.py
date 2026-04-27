@@ -29,7 +29,11 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple
+from typing import TYPE_CHECKING, List, Optional, Tuple
+
+from customer_retention.stages.causal.interpretation.predicate_prose import (
+    compile_predicate_prose,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +41,9 @@ if TYPE_CHECKING:  # pragma: no cover
     from pyspark.sql import SparkSession
 
     from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+    from customer_retention.stages.causal.interpretation.discovery import (
+        InterpretationSidecars,
+    )
 
 
 @dataclass
@@ -145,23 +152,30 @@ def _read_null_prose_rows(
     return out
 
 
-def _safe_render(predicate_json_str: str, bundle: Any) -> Optional[str]:
-    """Render one row, returning None on parse / render failure."""
+def _safe_render(
+    predicate_json_str: str, bundle: "InterpretationSidecars",
+) -> Optional[str]:
+    """Render one row, returning None on parse / render failure.
+
+    Catches only the **expected** failure modes per the no-defensive-code rule
+    in ``docs/Coding_Practices.md``: malformed JSON (``TypeError`` /
+    ``ValueError`` from ``json.loads``) and structural mismatches between the
+    persisted predicate and the current ``compile_predicate_prose`` schema
+    (``KeyError`` / ``AttributeError``). Any other exception type propagates
+    so the operator sees the real root cause instead of silent NULL fills.
+    """
     try:
         predicate = json.loads(predicate_json_str)
     except (TypeError, ValueError):
         return None
     try:
-        from customer_retention.stages.causal.interpretation.predicate_prose import (
-            compile_predicate_prose,
-        )
         prose = compile_predicate_prose(
             predicate,
             feature_meta=bundle.feature_meta,
             population_stats=bundle.population_stats,
             column_descriptions=bundle.column_descriptions,
         )
-    except Exception:  # noqa: BLE001 — single bad row should not abort the batch
+    except (KeyError, AttributeError, TypeError):
         return None
     return prose or None
 

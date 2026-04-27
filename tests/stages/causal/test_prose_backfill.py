@@ -107,7 +107,7 @@ class TestBackfillEligibilityProse:
             ".discover_interpretation_sidecars",
             return_value=_bundle(namespace=ns, fm={"f": "x"}, ps={"f": "x"}, cd={"c": "x"}),
         ), patch(
-            "customer_retention.stages.causal.interpretation.predicate_prose"
+            "customer_retention.stages.causal.interpretation.prose_backfill"
             ".compile_predicate_prose",
             return_value="rendered prose",
         ), patch(
@@ -163,25 +163,40 @@ class TestSafeRender:
     def test_empty_prose_returns_none(self):
         bundle = _bundle()
         with patch(
-            "customer_retention.stages.causal.interpretation.predicate_prose"
+            "customer_retention.stages.causal.interpretation.prose_backfill"
             ".compile_predicate_prose",
             return_value="",
         ):
             assert _safe_render('{"op":"AND","clauses":[]}', bundle) is None
 
-    def test_compile_exception_returns_none(self):
+    def test_expected_compile_failures_return_none(self):
+        """Schema-mismatch errors (KeyError/AttributeError/TypeError) are caught."""
+        bundle = _bundle()
+        for exc in (KeyError("missing"), AttributeError("missing"), TypeError("bad")):
+            with patch(
+                "customer_retention.stages.causal.interpretation.prose_backfill"
+                ".compile_predicate_prose",
+                side_effect=exc,
+            ):
+                assert _safe_render('{"op":"AND","clauses":[]}', bundle) is None
+
+    def test_unexpected_compile_failures_propagate(self):
+        """Per Coding_Practices.md, unrelated exceptions must surface — not be swallowed."""
+        import pytest
+
         bundle = _bundle()
         with patch(
-            "customer_retention.stages.causal.interpretation.predicate_prose"
+            "customer_retention.stages.causal.interpretation.prose_backfill"
             ".compile_predicate_prose",
-            side_effect=RuntimeError("oops"),
+            side_effect=RuntimeError("genuine bug"),
         ):
-            assert _safe_render('{"op":"AND","clauses":[]}', bundle) is None
+            with pytest.raises(RuntimeError, match="genuine bug"):
+                _safe_render('{"op":"AND","clauses":[]}', bundle)
 
     def test_happy_path_returns_prose(self):
         bundle = _bundle()
         with patch(
-            "customer_retention.stages.causal.interpretation.predicate_prose"
+            "customer_retention.stages.causal.interpretation.prose_backfill"
             ".compile_predicate_prose",
             return_value="rendered ok",
         ):
