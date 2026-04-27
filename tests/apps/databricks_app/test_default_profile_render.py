@@ -110,3 +110,43 @@ def test_missing_fit_tier_skips_pill(compiled_template, base_context):
     html = compiled_template(base_context, helpers=HELPERS)
     assert "match" not in html.split('cr-card-section cr-archetype')[1].split('</summary>')[0]
     assert "Auto-fit" not in html
+
+
+def test_renders_deviation_panel_with_bidirectional_bars(compiled_template, base_context):
+    base_context["feature_deviation"] = [
+        {"feature_name": "event_count_all_time", "feature_value": 0.321, "z": -1.5},
+        {"feature_name": "event_count_365d",     "feature_value": 0.855, "z":  0.6},
+        {"feature_name": "regularity_score",     "feature_value": -1.174, "z": 0.0},
+    ]
+    html = compiled_template(base_context, helpers=HELPERS)
+    assert "cr-grid cr-grid-2col" in html
+    assert "cr-deviation" in html
+    assert "Why this customer stands out" in html
+    assert "event_count_all_time" in html
+    assert "dev-neg" in html
+    assert "dev-pos" in html
+    assert "dev-zero" in html
+    assert "width:50.0%" in html
+    assert "width:20.0%" in html
+    assert "-1.50σ" in html
+    assert "+0.60σ" in html
+
+
+def test_no_feature_deviation_data_hides_panel(compiled_template, base_context):
+    base_context["feature_deviation"] = []
+    html = compiled_template(base_context, helpers=HELPERS)
+    assert "Why this customer stands out" not in html
+    assert "cr-deviation" not in html
+
+
+def test_customer_left_panel_hidden_when_no_data(compiled_template, base_context):
+    base_context.pop("customer", None)
+    html = compiled_template(base_context, helpers=HELPERS)
+    assert "cr-customer-profile" not in html
+
+
+def test_two_column_grid_always_present(compiled_template, base_context):
+    base_context["feature_deviation"] = []
+    html = compiled_template(base_context, helpers=HELPERS)
+    # The grid scaffold itself stays — only its contents vary.
+    assert "cr-grid cr-grid-2col" in html

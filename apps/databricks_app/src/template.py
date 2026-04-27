@@ -51,12 +51,21 @@ import yaml
 
 @dataclass
 class DataSource:
-    """Declares a table to join against the currently-selected entity."""
+    """Declares a table to join against the currently-selected entity.
+
+    ``as_list`` controls the shape passed into the template context:
+        * ``False`` (default) — first matching row as ``dict[str, Any]``,
+          matching the historical contract used by the bundled profile.
+        * ``True`` — list of row-dicts. Use for fan-out children (e.g. the
+          deviation-bar feature list) where the template iterates with
+          ``{{#each}}``.
+    """
     name: str
     source: str          # table name in {catalog}.{schema}
     join_key: str        # column on `source` to match against the selected entity_id
     order_by: Optional[str] = None
     limit: int = 1
+    as_list: bool = False
 
 
 @dataclass
@@ -113,12 +122,18 @@ def load_template(path: Optional[str]) -> Template:
 
     data_sources: list[DataSource] = []
     for name, cfg in (front.get("data") or {}).items():
+        as_list = bool(cfg.get("as_list", False))
+        # When the template asks for a list, default to a generous limit
+        # rather than the single-row default — most array uses (top-N
+        # deviation rows, history slices) want more than one row.
+        default_limit = 50 if as_list else 1
         data_sources.append(DataSource(
             name=name,
             source=cfg["source"],
             join_key=cfg["join_key"],
             order_by=cfg.get("order_by"),
-            limit=int(cfg.get("limit", 1)),
+            limit=int(cfg.get("limit", default_limit)),
+            as_list=as_list,
         ))
 
     return Template(
@@ -233,6 +248,47 @@ def _h_lower(this, s):
     return (str(s) if not _is_missing(s) else "").lower()
 
 
+# Deviation panel — turns a z-score into a percentage width and a sign-class
+# so the template can draw bidirectional bars without inline conditionals.
+
+_DEVIATION_BAR_CAP = 3.0  # |z| above this saturates the bar at 100%
+
+
+def _h_dev_bar_pct(this, z):
+    """Map |z| → 0–100% bar width, capped at ``_DEVIATION_BAR_CAP`` sigma."""
+    if _is_missing(z):
+        return "0"
+    try:
+        magnitude = min(abs(float(z)) / _DEVIATION_BAR_CAP, 1.0)
+        return f"{magnitude * 100:.1f}"
+    except Exception:
+        return "0"
+
+
+def _h_dev_sign_class(this, z):
+    if _is_missing(z):
+        return "dev-zero"
+    try:
+        zf = float(z)
+    except Exception:
+        return "dev-zero"
+    if zf > 0:
+        return "dev-pos"
+    if zf < 0:
+        return "dev-neg"
+    return "dev-zero"
+
+
+def _h_fmt_signed_z(this, z):
+    if _is_missing(z):
+        return "—"
+    try:
+        zf = float(z)
+        return f"{zf:+.2f}σ"
+    except Exception:
+        return str(z)
+
+
 HELPERS = {
     "fmt_currency":    _h_fmt_currency,
     "fmt_pct":         _h_fmt_pct,
@@ -243,6 +299,9 @@ HELPERS = {
     "risk_tier_class": _h_risk_tier_class,
     "fit_tier_label":  _h_fit_tier_label,
     "fit_tier_class":  _h_fit_tier_class,
+    "dev_bar_pct":     _h_dev_bar_pct,
+    "dev_sign_class":  _h_dev_sign_class,
+    "fmt_signed_z":    _h_fmt_signed_z,
     "upper":           _h_upper,
     "lower":           _h_lower,
 }

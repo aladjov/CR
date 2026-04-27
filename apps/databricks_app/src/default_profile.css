@@ -446,6 +446,107 @@ details[open] > .cr-summary > .cr-summary-chevron { transform: rotate(90deg); }
 .cr-tier-risk-low    .cr-prose { border-left-color: var(--green-200); }
 
 /* --------------------------------------------------------------------------
+   Two-column grid (left = profile slot, right = deviation panel)
+   -------------------------------------------------------------------------- */
+.cr-grid {
+  padding: 1.6rem 2.25rem;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: var(--paper);
+}
+.cr-grid-2col {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr);
+  gap: 2rem;
+}
+.cr-grid-left,
+.cr-grid-right {
+  min-width: 0;
+}
+.cr-grid-left  > .cr-customer-profile,
+.cr-grid-right > .cr-deviation {
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+/* Deviation panel — bidirectional bar chart, sign-coloured ---------------- */
+.cr-deviation .cr-chapter-lead { margin-bottom: 0.9rem; }
+
+.cr-dev-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.cr-dev-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) auto minmax(80px, 1fr) auto;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.25rem 0;
+  font-family: var(--font-sans);
+  font-size: 0.82rem;
+}
+.cr-dev-name {
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cr-dev-value {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: var(--ink-soft);
+  text-align: right;
+  font-feature-settings: "tnum" 1, "lnum" 1;
+}
+.cr-dev-bar-track {
+  position: relative;
+  height: 14px;
+  background: var(--paper-deep);
+  border-radius: 3px;
+  overflow: hidden;
+  border: 1px solid var(--line-soft);
+}
+.cr-dev-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: block;
+  transition: width 0.18s ease;
+}
+.cr-dev-pos .cr-dev-bar { left: 50%;  background: var(--blue-300); }
+.cr-dev-neg .cr-dev-bar { right: 50%; background: var(--yellow-400); }
+.cr-dev-zero .cr-dev-bar { width: 0; }
+
+/* Mid-line tick on the bar to anchor the zero point */
+.cr-dev-bar-track::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: -1px;
+  bottom: -1px;
+  width: 1px;
+  background: var(--line);
+}
+
+.cr-dev-score {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: var(--ink-soft);
+  font-feature-settings: "tnum" 1, "lnum" 1;
+  text-align: right;
+  white-space: nowrap;
+}
+.cr-dev-pos .cr-dev-score { color: var(--blue-700); }
+.cr-dev-neg .cr-dev-score { color: var(--yellow-800); }
+
+/* --------------------------------------------------------------------------
    Small screens
    -------------------------------------------------------------------------- */
 @media (max-width: 720px) {
@@ -454,4 +555,7 @@ details[open] > .cr-summary > .cr-summary-chevron { transform: rotate(90deg); }
   .cr-kpis { grid-template-columns: repeat(2, 1fr); row-gap: 1rem; }
   .cr-kpi { border-right: none; padding: 0; }
   .cr-kpi:nth-child(odd) { border-right: 1px dashed var(--line); padding-right: 1rem; }
+  .cr-grid-2col { grid-template-columns: 1fr; }
+  .cr-dev-row { grid-template-columns: minmax(0, 1.4fr) minmax(60px, 1fr) auto; }
+  .cr-dev-value { display: none; }
 }

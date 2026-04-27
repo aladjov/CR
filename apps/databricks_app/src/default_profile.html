@@ -1,9 +1,17 @@
 ---
 # Default customer-profile template.
 # Copy to a Volume, edit, and point CR_PROFILE_TEMPLATE_PATH at it to customize.
-# The `data:` block (empty here) lets you declare additional tables to join
-# against the selected entity so you can reference e.g. {{account.mrr}}.
-data: {}
+# Two declared data sources, both optional:
+#   * feature_deviation — top-N deviation rows (right-hand panel; SHAP placeholder)
+#   * customer          — single profile row (left column; override per dataset)
+# Either source returning empty is rendered gracefully — the section just hides.
+data:
+  feature_deviation:
+    source: "v_account_feature_deviation_topn"
+    join_key: "entity_id"
+    order_by: "deviation_rank ASC"
+    limit: 12
+    as_list: true
 ---
 <article class="cr-card cr-tier-{{risk_tier_class risk_tier}}">
   <header class="cr-hero">
@@ -37,6 +45,43 @@ data: {}
     <div class="cr-kpi">
       <span class="cr-kpi-label">Eligible plays</span>
       <span class="cr-kpi-value">{{fmt_int eligible_playbook_count}}</span>
+    </div>
+  </section>
+
+  <section class="cr-grid cr-grid-2col">
+    <div class="cr-grid-left">
+      {{#if customer}}
+        <section class="cr-customer-profile">
+          <header class="cr-chapter-head">
+            <span class="cr-chapter-eyebrow">Customer</span>
+            <h2 class="cr-chapter-title">Profile</h2>
+          </header>
+          <p class="cr-chapter-lead">Override <code>CR_PROFILE_TEMPLATE_PATH</code> with a dataset-specific template to populate this panel from the project's own profile view.</p>
+        </section>
+      {{/if}}
+    </div>
+    <div class="cr-grid-right">
+      {{#if feature_deviation}}
+        <section class="cr-deviation">
+          <header class="cr-chapter-head">
+            <span class="cr-chapter-eyebrow">Feature deviation from average</span>
+            <h2 class="cr-chapter-title">Why this customer stands out</h2>
+            <p class="cr-chapter-lead">Placeholder for SHAP — bars show z-score vs. training population (capped at ±3σ).</p>
+          </header>
+          <ul class="cr-dev-list">
+            {{#each feature_deviation}}
+              <li class="cr-dev-row {{dev_sign_class this.z}}">
+                <span class="cr-dev-name" title="{{this.feature_name}}">{{this.feature_name}}</span>
+                <span class="cr-dev-value">{{fmt_float this.feature_value 3}}</span>
+                <span class="cr-dev-bar-track">
+                  <span class="cr-dev-bar" style="width:{{dev_bar_pct this.z}}%"></span>
+                </span>
+                <span class="cr-dev-score">{{fmt_signed_z this.z}}</span>
+              </li>
+            {{/each}}
+          </ul>
+        </section>
+      {{/if}}
     </div>
   </section>
 

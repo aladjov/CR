@@ -33,16 +33,21 @@ def _row_to_context(row: pd.Series) -> dict[str, Any]:
     return {k: _clean(v) for k, v in row.items()}
 
 
-def _fetch_data_source(ds: DataSource, entity_id: str) -> dict[str, Any]:
-    """Fetch the first row of a data source joined on entity_id.
+def _rows_to_context(df: pd.DataFrame) -> list[dict[str, Any]]:
+    return [{k: _clean(v) for k, v in row.items()} for _, row in df.iterrows()]
 
-    Returns an empty dict when the row is missing so `{{#if account}}` treats it
-    as falsy in the template.
+
+def _fetch_data_source(ds: DataSource, entity_id: str):
+    """Fetch rows of a data source joined on entity_id.
+
+    Returns an empty dict (or list, when ``ds.as_list``) when no matching row
+    exists so ``{{#if x}}`` / ``{{#each x}}`` treat it as falsy/empty.
     """
     cfg = load_config()
     sdk_cfg = Config()
     order_clause = f"ORDER BY {ds.order_by}" if ds.order_by else ""
-    limit_clause = f"LIMIT {int(ds.limit or 1)}"
+    default_limit = 50 if ds.as_list else 1
+    limit_clause = f"LIMIT {int(ds.limit or default_limit)}"
     fqn = f"{cfg.fqn_prefix}.{ds.source}"
 
     conn = sql.connect(
@@ -57,6 +62,8 @@ def _fetch_data_source(ds: DataSource, entity_id: str) -> dict[str, Any]:
             {"eid": entity_id},
         )
         df = cur.fetchall_arrow().to_pandas()
+        if ds.as_list:
+            return _rows_to_context(df)
         if df.empty:
             return {}
         return {k: _clean(v) for k, v in df.iloc[0].items()}
@@ -85,7 +92,7 @@ def render() -> None:
             context[ds.name] = _fetch_data_source(ds, entity)
         except Exception as exc:
             st.warning(f"Template data source `{ds.name}` failed — leaving empty. ({exc})")
-            context[ds.name] = {}
+            context[ds.name] = [] if ds.as_list else {}
 
     # Render the template. On any render error, show a pivoted fallback so the
     # CSM still sees the raw fields.

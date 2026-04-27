@@ -612,3 +612,105 @@ SELECT
 FROM latest
 ORDER BY written_at DESC
 LIMIT 1;
+
+-- @cr:deviation-block:open
+-- ============================================================================
+-- 12. v_account_feature_deviation (L4 right-pane — per-account feature z-score)
+-- ----------------------------------------------------------------------------
+-- One row per (entity_id, feature_name) with both the customer's feature value
+-- and the population mean / stddev / quantiles.  This is the SHAP placeholder
+-- backing the right-hand panel: a bidirectional bar chart of how far each
+-- feature deviates from the training population.  Numeric features only —
+-- categorical population stats live as JSON in feature_population_stats and
+-- need a different visual.
+--
+-- Population stats join is "latest writer wins" by ``computed_at`` so the
+-- view stays generic across model retrains: the dashboard always reflects the
+-- most recent training population, not a stale derivation_run_id.
+-- ============================================================================
+CREATE OR REPLACE VIEW {catalog}.{schema}.v_account_feature_deviation AS
+WITH latest_run AS (
+    SELECT scoring_run_id
+    FROM {catalog}.{schema}.eligibility_snapshot
+    WHERE as_of_date = (SELECT MAX(as_of_date) FROM {catalog}.{schema}.eligibility_snapshot)
+    LIMIT 1
+),
+gold_long AS (
+    SELECT
+        g.entity_id,
+        kv_key   AS feature_name,
+        kv_value AS feature_value
+    FROM (
+        SELECT
+            entity_id,
+            FROM_JSON(TO_JSON(STRUCT(*)), 'MAP<STRING,DOUBLE>') AS feature_map
+        FROM {catalog}.{schema}.gold_features_{composite_name}
+    ) g
+    LATERAL VIEW EXPLODE(g.feature_map) tbl AS kv_key, kv_value
+    WHERE kv_key NOT IN ('entity_id', 'as_of_date')
+),
+latest_pop AS (
+    SELECT
+        feature_name,
+        dtype,
+        mean, stddev,
+        q01, q05, q25, q50, q75, q95, q99,
+        ROW_NUMBER() OVER (
+            PARTITION BY feature_name ORDER BY computed_at DESC
+        ) AS rn
+    FROM {catalog}.{schema}.feature_population_stats
+    WHERE dtype = 'numeric'
+)
+SELECT
+    s.scoring_run_id,
+    s.entity_id,
+    g.feature_name,
+    g.feature_value,
+    p.mean,
+    p.stddev,
+    p.q05, p.q25, p.q50, p.q75, p.q95,
+    CASE WHEN p.stddev IS NOT NULL AND p.stddev > 0
+         THEN (g.feature_value - p.mean) / p.stddev END AS z,
+    CASE WHEN p.mean IS NOT NULL AND ABS(p.mean) > 1e-9
+         THEN (g.feature_value - p.mean) / p.mean   END AS pct_dev
+FROM gold_long g
+JOIN latest_pop p
+       ON p.feature_name = g.feature_name
+      AND p.rn = 1
+JOIN {catalog}.{schema}.eligibility_snapshot s
+       ON s.entity_id = g.entity_id
+JOIN latest_run lr ON s.scoring_run_id = lr.scoring_run_id
+WHERE g.feature_value IS NOT NULL
+  AND COALESCE(s.is_dashboard_visible, TRUE) = TRUE;
+
+-- ============================================================================
+-- 13. v_account_feature_deviation_topn (top-12 features by |z| for the panel)
+-- ----------------------------------------------------------------------------
+-- The dashboard renders only the top-N most-deviating features per customer
+-- (mirroring the SHAP plot's row count).  Pre-ranked here so the app issues
+-- one indexed query per page hit instead of fetching every feature row.
+-- ============================================================================
+CREATE OR REPLACE VIEW {catalog}.{schema}.v_account_feature_deviation_topn AS
+WITH ranked AS (
+    SELECT
+        d.*,
+        ROW_NUMBER() OVER (
+            PARTITION BY d.scoring_run_id, d.entity_id
+            ORDER BY ABS(COALESCE(d.z, 0.0)) DESC
+        ) AS deviation_rank
+    FROM {catalog}.{schema}.v_account_feature_deviation d
+    WHERE d.z IS NOT NULL
+)
+SELECT
+    scoring_run_id,
+    entity_id,
+    feature_name,
+    feature_value,
+    mean, stddev,
+    q05, q25, q50, q75, q95,
+    z,
+    pct_dev,
+    deviation_rank
+FROM ranked
+WHERE deviation_rank <= 12;
+-- @cr:deviation-block:close
