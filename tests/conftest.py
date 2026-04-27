@@ -44,7 +44,10 @@ def _isolate_project_run_pointer(request):
         yield
         return
     pointer = _find_project_root() / _RUN_POINTER_FILENAME
-    original = pointer.read_text() if pointer.exists() else None
+    try:
+        original = pointer.read_text()
+    except FileNotFoundError:
+        original = None
     try:
         yield
     finally:
