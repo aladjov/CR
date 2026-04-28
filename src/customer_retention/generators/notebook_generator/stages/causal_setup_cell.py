@@ -120,15 +120,20 @@ RISK_TIER_MEDIUM = 0.3
 
 _C05_CONFIG_MD = """## Configuration
 
-The cell below is the only place you should need to edit. Every value here is read by the snapshot writer and the dashboard publisher — nothing is hardcoded inside the algorithmic cells.
+The cell below is the only place you should need to edit. Every value here is read by the snapshot writer, the per-slice SHAP writer, and the dashboard publisher — nothing is hardcoded inside the algorithmic cells.
 
 - **`SNAPSHOT_RISK_TIER_HIGH` / `SNAPSHOT_RISK_TIER_MEDIUM`** — risk-tier thresholds applied at snapshot time. Leave as `None` to fall back to the values stored on the active `decision_policy` row (the canonical source — set in `c01_publish_definitions`).
 - **`SNAPSHOT_CAPACITY_PARTITION_COLUMN`** — optional partition column for capacity caps (e.g. `"csm_owner_id"`). Leave as `""` to apply caps globally per playbook.
+- **`SHAP_PER_SLICE_K`** — per `(playbook, archetype, risk_tier)` slice, this many top-ranked accounts (by `expected_loss = churn_probability × value_at_risk`, breaking ties on `churn_probability`) get per-row SHAP attributed and persisted to `top_shap_drivers`. This is the **only** cap controlling how many rows reach the L3 cohort dashboard view (`v_eligible_all_playbooks`) — slices without SHAP simply do not surface. Set to `0` to skip SHAP enrichment entirely.
+- **`SHAP_TOP_DRIVERS_PER_ROW`** — number of top drivers (by `|shap_contribution|`) emitted per scored account into the `top_drivers` array.
 """
 
 _C05_CONFIG_BODY = '''SNAPSHOT_RISK_TIER_HIGH = None
 SNAPSHOT_RISK_TIER_MEDIUM = None
 SNAPSHOT_CAPACITY_PARTITION_COLUMN = ""
+
+SHAP_PER_SLICE_K = 20
+SHAP_TOP_DRIVERS_PER_ROW = 5
 '''
 
 

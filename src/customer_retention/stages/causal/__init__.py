@@ -99,6 +99,11 @@ from .snapshot_writer import (
     evaluate_eligibility,
     write_snapshot,
 )
+from .top_drivers_writer import (
+    TopDriversConfig,
+    TopDriversResult,
+    compute_and_write_top_shap_drivers,
+)
 
 __all__ = [
     "DEFAULT_FEATURE_CAP",
@@ -127,6 +132,8 @@ __all__ = [
     "SnapshotConfig",
     "SnapshotResult",
     "StabilityDecision",
+    "TopDriversConfig",
+    "TopDriversResult",
     "ProseOverlapMatcher",
     "apply_decision_policy",
     "assign_archetype",
@@ -140,6 +147,7 @@ __all__ = [
     "cluster_target_means",
     "collect_features",
     "compile_predicate",
+    "compute_and_write_top_shap_drivers",
     "compute_eligibility_id",
     "compute_scoring_run_id",
     "compute_shap_distributed",

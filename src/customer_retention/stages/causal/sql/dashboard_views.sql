@@ -61,13 +61,17 @@ SELECT
     s.eligible_playbook_count,
     s.eligible_playbooks_set,
     s.eligibility_evidence,
-    s.top_shap_features,
+    COALESCE(s.top_shap_features, d.top_drivers) AS top_shap_features,
     s.scoring_run_id,
     s.as_of_date
 FROM {catalog}.{schema}.eligibility_snapshot s
 JOIN latest_run lr ON s.scoring_run_id = lr.scoring_run_id
 LEFT JOIN archetype_names an ON s.archetype_id = an.archetype_id
 LEFT JOIN playbook_names pn ON s.playbook_id = pn.playbook_id
+LEFT JOIN {catalog}.{schema}.top_shap_drivers d
+       ON d.model_name = s.model_name
+      AND d.model_version = s.model_version
+      AND d.entity_id = s.entity_id
 WHERE s.recommended = TRUE
   AND s.policy_rank_among_eligible = 1;
 
@@ -352,12 +356,12 @@ GROUP BY
 -- (an account eligible under three playbooks appears three times so
 -- drilling into any of those playbooks sees its full cohort).
 --
--- Row cap: per (playbook, archetype, risk_tier) slice, only the top 500
--- rows by expected_loss = churn_probability × value_at_risk are kept. This
--- is a defense-in-depth guardrail against the dashboard rendering millions
--- of rows — the SnapshotConfig.dashboard_min_churn_probability upstream cut
--- is the real fix. 500 is large enough that the cap is a no-op for typical
--- slices and only bites on pathological cohorts.
+-- Row cap: rows surface only when ``top_shap_features`` is populated. The
+-- per-slice top-K writer (``top_drivers_writer.py``, c05 step 5.2) emits
+-- SHAP for the top K accounts of every (playbook, archetype, risk_tier)
+-- slice ranked by expected_loss = churn_probability × value_at_risk; the
+-- COALESCE join below pulls those drivers in. Slices without SHAP simply
+-- return zero rows — there is no second cap fighting the writer's K.
 --
 -- Visibility: respects is_dashboard_visible with COALESCE(..., TRUE) so
 -- rows written before the flag existed still surface.
@@ -380,7 +384,7 @@ playbook_names AS (
     FROM {catalog}.{schema}.playbook_catalog
     GROUP BY playbook_id
 ),
-filtered AS (
+joined AS (
     SELECT
         s.entity_id,
         s.playbook_id,
@@ -396,7 +400,7 @@ filtered AS (
         s.priority_rank_within_cohort,
         s.eligible_playbook_count,
         s.eligibility_evidence,
-        s.top_shap_features,
+        COALESCE(s.top_shap_features, d.top_drivers) AS top_shap_features,
         s.recommended,
         s.is_holdout,
         s.playbook_suppressed_reason,
@@ -406,16 +410,21 @@ filtered AS (
     JOIN latest_run lr ON s.scoring_run_id = lr.scoring_run_id
     LEFT JOIN archetype_names an ON s.archetype_id = an.archetype_id
     LEFT JOIN playbook_names pn ON s.playbook_id = pn.playbook_id
+    LEFT JOIN {catalog}.{schema}.top_shap_drivers d
+           ON d.model_name = s.model_name
+          AND d.model_version = s.model_version
+          AND d.entity_id = s.entity_id
     WHERE COALESCE(s.is_dashboard_visible, TRUE) = TRUE
 ),
 ranked AS (
     SELECT
-        filtered.*,
+        joined.*,
         ROW_NUMBER() OVER (
             PARTITION BY playbook_id, archetype_id, risk_tier
             ORDER BY expected_loss DESC, churn_probability DESC
         ) AS slice_rank
-    FROM filtered
+    FROM joined
+    WHERE top_shap_features IS NOT NULL
 )
 SELECT
     entity_id,
@@ -439,8 +448,7 @@ SELECT
     scoring_run_id,
     as_of_date,
     slice_rank
-FROM ranked
-WHERE slice_rank <= 500;
+FROM ranked;
 
 -- ============================================================================
 -- 10. v_account_explanation (L4 — per-account interpretation)
@@ -549,7 +557,7 @@ SELECT
     s.value_at_risk,
     COALESCE(s.churn_probability, 0.0) * COALESCE(s.value_at_risk, 0.0) AS expected_loss,
     s.eligibility_evidence,
-    s.top_shap_features AS account_top_shap_features,
+    COALESCE(s.top_shap_features, d.top_drivers) AS account_top_shap_features,
     pol.eligibility_rules_sql,
     pol.eligibility_rules_prose AS policy_eligibility_rules_prose,
     pol.expected_uplift_pct,
@@ -580,6 +588,10 @@ LEFT JOIN active_archetypes a ON s.archetype_id = a.archetype_id
 LEFT JOIN active_playbooks p ON s.playbook_id = p.playbook_id
 LEFT JOIN active_policies pol ON s.playbook_id = pol.playbook_id
 LEFT JOIN archetype_playbook_set aps ON s.archetype_version = aps.archetype_version
+LEFT JOIN {catalog}.{schema}.top_shap_drivers d
+       ON d.model_name = s.model_name
+      AND d.model_version = s.model_version
+      AND d.entity_id = s.entity_id
 WHERE COALESCE(s.is_dashboard_visible, TRUE) = TRUE;
 
 -- ============================================================================

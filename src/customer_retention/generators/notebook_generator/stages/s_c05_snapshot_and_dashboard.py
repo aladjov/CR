@@ -50,11 +50,13 @@ class SnapshotAndDashboardStage(StageGenerator):
             + [
                 self.cb.section("5.1 Build Eligibility Snapshot"),
                 self.cb.code(_BUILD_SNAPSHOT_CELL),
-                self.cb.section("5.2 Write Run Context (app masthead projection)"),
+                self.cb.section("5.2 Compute Per-Slice Top SHAP Drivers"),
+                self.cb.code(_COMPUTE_TOP_SHAP_CELL),
+                self.cb.section("5.3 Write Run Context (app masthead projection)"),
                 self.cb.code(_WRITE_RUN_CONTEXT_CELL),
-                self.cb.section("5.3 Publish Dashboard SQL Views"),
+                self.cb.section("5.4 Publish Dashboard SQL Views"),
                 self.cb.code(_PUBLISH_VIEWS_CELL),
-                self.cb.section("5.4 Print Run Summary"),
+                self.cb.section("5.5 Print Run Summary"),
                 self.cb.code(_PRINT_SUMMARY_CELL),
             ]
         )
@@ -86,6 +88,41 @@ else:
     )
     snapshot_result = build_eligibility_snapshot(snapshot_cfg)
     print(snapshot_result.summary())
+'''
+
+
+_COMPUTE_TOP_SHAP_CELL = '''from customer_retention.stages.causal import (
+    TopDriversConfig,
+    compute_and_write_top_shap_drivers,
+)
+
+top_drivers_result = None
+if spark is None:
+    print("SKIPPED: no Spark session (Databricks-only cell)")
+elif snapshot_result is None:
+    print("SKIPPED: snapshot_result is None — 5.1 did not produce a run")
+elif int(SHAP_PER_SLICE_K) <= 0:
+    print("SKIPPED: SHAP_PER_SLICE_K == 0 (per-slice SHAP enrichment disabled)")
+elif MODEL_URI is None:
+    print("SKIPPED: MODEL_URI is None — local runs without an MLflow attribution artifact cannot replay SHAP")
+elif not spark.catalog.tableExists(GOLD_FEATURES_FQN):
+    print(f"SKIPPED: {GOLD_FEATURES_FQN} does not exist — gold features required for SHAP replay")
+else:
+    top_drivers_cfg = TopDriversConfig(
+        spark=spark,
+        snapshot_table_fqn=ELIGIBILITY_SNAPSHOT_FQN,
+        gold_features_fqn=GOLD_FEATURES_FQN,
+        top_shap_drivers_fqn=TOP_SHAP_DRIVERS_FQN,
+        model_name=MODEL_NAME,
+        model_version=str(MODEL_VERSION),
+        scoring_run_id=snapshot_result.scoring_run_id,
+        as_of_date=snapshot_result.as_of_date,
+        model_uri=MODEL_URI,
+        per_slice_k=int(SHAP_PER_SLICE_K),
+        top_drivers_per_row=int(SHAP_TOP_DRIVERS_PER_ROW),
+    )
+    top_drivers_result = compute_and_write_top_shap_drivers(top_drivers_cfg)
+    print(top_drivers_result.summary())
 '''
 
 
@@ -196,4 +233,6 @@ else:
     print(f"Model: {MODEL_NAME} v{MODEL_VERSION}")
     if snapshot_result is not None:
         print(snapshot_result.summary())
+    if top_drivers_result is not None:
+        print(top_drivers_result.summary())
 '''
