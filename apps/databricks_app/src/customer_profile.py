@@ -23,9 +23,44 @@ from .template import DataSource, bundle_css, load_template, render_html
 
 
 def _clean(v: Any) -> Any:
-    """Convert pandas NaN to None so `{{#if x}}` handles missing values correctly."""
-    if isinstance(v, float) and pd.isna(v):
+    """Coerce a Spark/pandas/Arrow value into a Handlebars-safe Python object.
+
+    The dashboard reads via ``cur.fetchall_arrow().to_pandas()``, which lands
+    Spark ``ARRAY<STRUCT<..>>`` columns as ``numpy.ndarray`` of dicts. Pybars
+    evaluates ``{{#if account_top_shap_features}}`` by calling ``bool(arr)``,
+    and a numpy ndarray with >1 elements raises
+    ``ValueError: The truth value of an array with more than one element is
+    ambiguous`` — which kills the whole render.
+
+    Recursively coerce:
+    - ``numpy.ndarray`` -> ``list`` (each item cleaned)
+    - ``list`` / ``tuple`` -> ``list`` (each item cleaned)
+    - ``dict`` -> ``dict`` (each value cleaned) so nested struct fields work
+    - scalar NaN / NaT / ``pd.NA`` -> ``None``
+    - anything else -> as-is
+    """
+    if v is None:
         return None
+    # numpy ndarray FIRST -- bool(ndarray) is the failure mode.
+    try:
+        import numpy as _np  # noqa: PLC0415 - cheap, pandas already imports numpy
+    except ImportError:
+        _np = None
+    if _np is not None and isinstance(v, _np.ndarray):
+        return [_clean(x) for x in v.tolist()]
+    if isinstance(v, (list, tuple)):
+        return [_clean(x) for x in v]
+    if isinstance(v, dict):
+        return {k: _clean(val) for k, val in v.items()}
+    # Scalar NaN/NaT detection -- pd.isna on arrays returns an array, so we
+    # only call it after the array/list/dict branches above. Falls back to
+    # the value unchanged on TypeError (non-NA-aware types like custom
+    # objects) so we never swallow legitimate values.
+    try:
+        if pd.isna(v):
+            return None
+    except (TypeError, ValueError):
+        pass
     return v
 
 
