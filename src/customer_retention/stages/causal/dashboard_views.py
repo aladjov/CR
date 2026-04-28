@@ -105,16 +105,78 @@ def render_dashboard_view_sql(
 def split_view_statements(sql_text: str) -> List[str]:
     """Split a multi-statement SQL string on semicolons.
 
+    A statement-ending ``;`` only counts when it sits outside ``--`` line
+    comments and outside single-quoted string literals.  This lets
+    operator-supplied SQL include English prose like
+    ``-- NB03 materialises and the scoring path consumes; reading from it``
+    inside CTE comments without the splitter cutting the statement in two
+    and handing Spark a truncated DDL (which surfaces as ``[PARSE_SYNTAX_ERROR]
+    Syntax error at or near end of input``).
+
     Comments (``--`` lines) are kept on the preceding statement so view
     headers stay readable in error messages. Empty trailing statements
     after the final semicolon are dropped.
     """
     statements: List[str] = []
-    for raw in sql_text.split(";"):
-        stripped = raw.strip()
-        if not stripped:
+    buf: List[str] = []
+    in_line_comment = False
+    in_single_quote = False
+    in_backtick = False
+    i = 0
+    n = len(sql_text)
+    while i < n:
+        ch = sql_text[i]
+        nxt = sql_text[i + 1] if i + 1 < n else ""
+        if in_line_comment:
+            buf.append(ch)
+            if ch == "\n":
+                in_line_comment = False
+            i += 1
             continue
-        statements.append(stripped)
+        if in_single_quote:
+            buf.append(ch)
+            # Handle escaped quote ``''`` (SQL-standard).
+            if ch == "'" and nxt == "'":
+                buf.append(nxt)
+                i += 2
+                continue
+            if ch == "'":
+                in_single_quote = False
+            i += 1
+            continue
+        if in_backtick:
+            buf.append(ch)
+            if ch == "`":
+                in_backtick = False
+            i += 1
+            continue
+        if ch == "-" and nxt == "-":
+            in_line_comment = True
+            buf.append(ch)
+            i += 1
+            continue
+        if ch == "'":
+            in_single_quote = True
+            buf.append(ch)
+            i += 1
+            continue
+        if ch == "`":
+            in_backtick = True
+            buf.append(ch)
+            i += 1
+            continue
+        if ch == ";":
+            stripped = "".join(buf).strip()
+            if stripped:
+                statements.append(stripped)
+            buf = []
+            i += 1
+            continue
+        buf.append(ch)
+        i += 1
+    tail = "".join(buf).strip()
+    if tail:
+        statements.append(tail)
     return statements
 
 

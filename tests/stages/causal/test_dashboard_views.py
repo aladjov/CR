@@ -54,6 +54,36 @@ class TestSplitViewStatements:
         statements = split_view_statements("SELECT 1;\n\n\n;\nSELECT 2")
         assert statements == ["SELECT 1", "SELECT 2"]
 
+    def test_ignores_semicolon_inside_line_comment(self):
+        # Operator-supplied SQL (e.g. the ECH profile override) puts English
+        # prose with semicolons inside ``--`` comments.  The splitter must
+        # not cut mid-comment -- doing so hands Spark a truncated DDL and
+        # surfaces ``[PARSE_SYNTAX_ERROR] Syntax error at or near end of input``.
+        sql = (
+            "CREATE VIEW v AS\n"
+            "SELECT 1\n"
+            "-- NB03 materialises and the scoring path consumes; reading from it\n"
+            "FROM t;"
+        )
+        statements = split_view_statements(sql)
+        assert len(statements) == 1
+        assert "FROM t" in statements[0]
+        assert "consumes; reading from it" in statements[0]
+
+    def test_ignores_semicolon_inside_string_literal(self):
+        sql = "INSERT INTO t VALUES ('a;b'); SELECT 1;"
+        statements = split_view_statements(sql)
+        assert statements == ["INSERT INTO t VALUES ('a;b')", "SELECT 1"]
+
+    def test_ignores_semicolon_inside_backticks(self):
+        # Delta path notation uses backticks: ``delta.`/Volumes/.../foo```.
+        sql = "SELECT * FROM delta.`/Volumes/x;y/z`; SELECT 2;"
+        statements = split_view_statements(sql)
+        assert statements == [
+            "SELECT * FROM delta.`/Volumes/x;y/z`",
+            "SELECT 2",
+        ]
+
 
 class TestPublishDashboardViews:
     def test_publishes_one_statement_per_named_view(self):
