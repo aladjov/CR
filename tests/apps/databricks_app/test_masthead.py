@@ -68,7 +68,11 @@ def test_l1_title_html_falls_back_to_actionable_insights_when_no_horizon():
     assert "glance" not in out.lower()
 
 
-def test_l1_title_html_renders_dynamic_with_flourish():
+def test_l1_title_html_renders_horizon_with_meta_span():
+    # The masthead at the top of the page already shows objective/posture
+    # segments, so the L1 hero stays scoped to the horizon line. The
+    # "in next N days" qualifier is wrapped in a styling hook so the body
+    # font + slightly darker tone can be applied via CSS.
     ctx = {
         "horizon_days":      270,
         "primary_objective": "immediate_risk",
@@ -76,29 +80,26 @@ def test_l1_title_html_renders_dynamic_with_flourish():
         "model_type":        "xgboost",
     }
     html = l1_title_html(ctx)
-    assert html.startswith("Churn Risk in next 270 days ")
-    assert "<em>" in html and "</em>" in html
+    assert html == 'Churn Risk <span class="cr-l1-meta">in next 270 days</span>'
+    # Objective/posture/model segments must NOT bleed into the L1 -- they
+    # already render in the masthead.
     for token in ("Immediate risk", "Reactive posture", "XGBoost"):
-        assert token in html
+        assert token not in html
+    assert "<em>" not in html
 
 
-def test_l1_title_html_horizon_only_has_no_em():
+def test_l1_title_html_horizon_only_uses_meta_span():
     html = l1_title_html({"horizon_days": 30})
-    assert html == "Churn Risk in next 30 days"
+    assert html == 'Churn Risk <span class="cr-l1-meta">in next 30 days</span>'
 
 
 def test_l1_title_html_partial_horizon_only_renders_dynamic_no_static():
-    # When horizon is present but every other field is NULL, we must still
-    # render the horizon-bearing dynamic title (no static fallback string).
     out = l1_title_html({"horizon_days": 60})
-    assert out == "Churn Risk in next 60 days"
+    assert out == 'Churn Risk <span class="cr-l1-meta">in next 60 days</span>'
     assert "book" not in out.lower()
 
 
-def test_l1_title_html_escapes_unknown_segment_values():
-    html = l1_title_html({
-        "horizon_days":      90,
-        "primary_objective": "<script>",
-    })
-    assert "<script>" not in html
-    assert "&lt;" in html and "&gt;" in html
+def test_l1_title_html_unparsable_horizon_falls_back():
+    out = l1_title_html({"horizon_days": "thirty"})
+    assert "Churn Risk" in out
+    assert "Actionable insights" in out

@@ -5,8 +5,6 @@ Streamlit side effects in ``app.py`` (page config, state init, theme injection).
 """
 from __future__ import annotations
 
-from html import escape
-
 OBJECTIVE_LABELS = {
     "immediate_risk":   "Immediate risk",
     "renewal_risk":     "Renewal risk",
@@ -85,12 +83,16 @@ def l1_title_html(ctx: dict) -> str:
     (``v_run_context`` missing or empty), surfaces a "context unavailable"
     flourish so the operator immediately sees that c05 needs republishing
     rather than a misleading editorial fallback.
+
+    The objective/posture segments are intentionally NOT appended here --
+    they already live in the masthead at the top of the page, and
+    repeating them in the L1 hero made the heading feel duplicative.
     """
-    main = horizon_phrase(ctx)
-    if main is None:
+    horizon = ctx.get("horizon_days")
+    if horizon is None:
         return 'Churn Risk &middot; <em>Actionable insights</em>'
-    extras = context_segments(ctx)
-    if not extras:
-        return escape(main)
-    flourish = " &middot; ".join(escape(s) for s in extras)
-    return f"{escape(main)} <em>{flourish}</em>"
+    try:
+        days = int(horizon)
+    except (TypeError, ValueError):
+        return 'Churn Risk &middot; <em>Actionable insights</em>'
+    return f'Churn Risk <span class="cr-l1-meta">in next {days} days</span>'

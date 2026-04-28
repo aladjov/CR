@@ -48,7 +48,12 @@ def _load_run_context() -> tuple[dict, str | None]:
         "model_type":         _get("model_type"),
         "model_name":         _get("model_name"),
     }
-    missing = [k for k, v in ctx.items() if v is None]
+    # Only fields that drive the masthead/L1 title trigger the warning.
+    # ``model_type`` is best-effort MLflow metadata and ``model_name`` is
+    # decorative -- neither is required to render the dashboard, so a
+    # missing one shouldn't surface a "context unavailable" banner.
+    _title_driving = ("horizon_days", "primary_objective", "temporal_posture")
+    missing = [k for k in _title_driving if ctx.get(k) is None]
     diag = (
         f"v_run_context row has NULL fields: {', '.join(missing)}"
         if missing else None

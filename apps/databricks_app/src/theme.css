@@ -229,6 +229,17 @@ hr, [data-testid="stHorizontalBlock"] + div { border: none; }
   background: linear-gradient(180deg, transparent 60%, var(--yellow-100) 60%, var(--yellow-100) 92%, transparent 92%);
   padding: 0 0.08em;
 }
+/* "in next N days" qualifier inside the L1 title -- same size as the
+   serif headline but in the body sans-serif at a slightly darker tone
+   than --ink-soft, so the horizon reads as a quiet annotation rather
+   than competing with the italic display face. */
+.level-1 .level-title .cr-l1-meta {
+  font-family: var(--font-sans);
+  font-style: normal;
+  font-weight: 400;
+  color: var(--ink-2);
+  letter-spacing: -0.01em;
+}
 .level-2 .level-title,
 .level-3 .level-title,
 .level-4 .level-title {
