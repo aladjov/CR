@@ -267,16 +267,16 @@ def _h_dev_bar_pct(this, z):
 
 def _h_dev_sign_class(this, z):
     if _is_missing(z):
-        return "dev-zero"
+        return "cr-dev-zero"
     try:
         zf = float(z)
     except Exception:
-        return "dev-zero"
+        return "cr-dev-zero"
     if zf > 0:
-        return "dev-pos"
+        return "cr-dev-pos"
     if zf < 0:
-        return "dev-neg"
-    return "dev-zero"
+        return "cr-dev-neg"
+    return "cr-dev-zero"
 
 
 def _h_fmt_signed_z(this, z):
@@ -342,20 +342,20 @@ def _h_shap_bar_pct(this, contribution, drivers):
 
 
 def _h_shap_sign_class(this, contribution):
-    """``shap-pos`` (pushes toward churn / target=1) / ``shap-neg`` (pushes
-    away) / ``shap-zero``. Mirrors the deviation panel's class names so a
-    single CSS rule can paint either bar."""
+    """``cr-shap-pos`` (pushes toward churn / target=1) / ``cr-shap-neg``
+    (pushes away) / ``cr-shap-zero``. Class names are ``cr-`` prefixed to
+    match the CSS selectors in ``default_profile.css``."""
     if _is_missing(contribution):
-        return "shap-zero"
+        return "cr-shap-zero"
     try:
         cf = float(contribution)
     except Exception:
-        return "shap-zero"
+        return "cr-shap-zero"
     if cf > 0:
-        return "shap-pos"
+        return "cr-shap-pos"
     if cf < 0:
-        return "shap-neg"
-    return "shap-zero"
+        return "cr-shap-neg"
+    return "cr-shap-zero"
 
 
 def _h_fmt_signed_shap(this, contribution):

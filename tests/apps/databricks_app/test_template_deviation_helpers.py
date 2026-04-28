@@ -26,10 +26,13 @@ def test_dev_bar_pct_handles_unparseable():
 
 
 def test_dev_sign_class_cases():
-    assert _call("dev_sign_class", 0.5) == "dev-pos"
-    assert _call("dev_sign_class", -0.5) == "dev-neg"
-    assert _call("dev_sign_class", 0.0) == "dev-zero"
-    assert _call("dev_sign_class", None) == "dev-zero"
+    # ``cr-`` prefix matches the CSS selectors in ``default_profile.css``
+    # (``.cr-dev-pos .cr-dev-bar`` etc.) so the bidirectional bars actually
+    # paint at the correct colour.
+    assert _call("dev_sign_class", 0.5) == "cr-dev-pos"
+    assert _call("dev_sign_class", -0.5) == "cr-dev-neg"
+    assert _call("dev_sign_class", 0.0) == "cr-dev-zero"
+    assert _call("dev_sign_class", None) == "cr-dev-zero"
 
 
 def test_fmt_signed_z_formats_with_sigma():
@@ -82,11 +85,14 @@ def test_shap_bar_pct_safe_when_all_drivers_zero():
 
 
 def test_shap_sign_class_cases():
-    assert _call("shap_sign_class", 0.4) == "shap-pos"
-    assert _call("shap_sign_class", -0.4) == "shap-neg"
-    assert _call("shap_sign_class", 0.0) == "shap-zero"
-    assert _call("shap_sign_class", None) == "shap-zero"
-    assert _call("shap_sign_class", "garbage") == "shap-zero"
+    # ``cr-`` prefix matches the CSS selectors in ``default_profile.css``
+    # (``.cr-shap-pos .cr-shap-bar`` etc.) so the bidirectional bars actually
+    # paint at the correct colour.
+    assert _call("shap_sign_class", 0.4) == "cr-shap-pos"
+    assert _call("shap_sign_class", -0.4) == "cr-shap-neg"
+    assert _call("shap_sign_class", 0.0) == "cr-shap-zero"
+    assert _call("shap_sign_class", None) == "cr-shap-zero"
+    assert _call("shap_sign_class", "garbage") == "cr-shap-zero"
 
 
 def test_fmt_signed_shap_uses_three_decimals():
