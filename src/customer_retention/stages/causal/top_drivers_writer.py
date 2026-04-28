@@ -75,6 +75,12 @@ class TopDriversConfig:
     top_drivers_per_row: int = _DEFAULT_TOP_DRIVERS_PER_ROW
     probability_column: str = "churn_probability"
     value_at_risk_column: str = "value_at_risk"
+    # Timestamp column on the gold table used to pick the latest row per
+    # entity. ``None`` (the default) auto-detects: tries ``as_of_date``,
+    # then ``event_timestamp``, then assumes the table is already
+    # entity-grain (one row per entity) and skips the latest-row window
+    # entirely. Set explicitly to override autodetection.
+    gold_timestamp_column: Optional[str] = None
 
 
 @dataclass
@@ -177,13 +183,51 @@ def _select_top_per_slice(config: TopDriversConfig) -> "DataFrame":
     ).distinct()
 
 
+_GOLD_TIMESTAMP_CANDIDATES: tuple[str, ...] = ("as_of_date", "event_timestamp")
+
+
+def _resolve_gold_timestamp_column(
+    config: TopDriversConfig, available_columns: set[str]
+) -> Optional[str]:
+    """Return the column name to order by when picking the latest gold row.
+
+    - When ``config.gold_timestamp_column`` is set explicitly, require it.
+      Failing fast prevents silently falling back to entity-grain on a
+      typo.
+    - Otherwise auto-detect among well-known names (``as_of_date``,
+      ``event_timestamp``).
+    - Returns ``None`` when neither name is present, signalling that the
+      gold table is already entity-grain (one row per entity, no temporal
+      dedupe needed).
+    """
+    explicit = config.gold_timestamp_column
+    if explicit is not None:
+        if explicit not in available_columns:
+            raise ValueError(
+                f"gold_timestamp_column={explicit!r} not present in "
+                f"{config.gold_features_fqn}"
+            )
+        return explicit
+    for candidate in _GOLD_TIMESTAMP_CANDIDATES:
+        if candidate in available_columns:
+            return candidate
+    return None
+
+
 def _join_latest_gold_features(
     config: TopDriversConfig,
     entity_df: "DataFrame",
     feature_columns: List[str],
 ) -> "DataFrame":
     """Inner-join to the most recent gold row per entity. Single windowed
-    select bounded by ``|entities| * |features|`` — no driver collect."""
+    select bounded by ``|entities| * |features|`` — no driver collect.
+
+    When the gold table has no temporal column (e.g. when the upstream
+    pipeline pre-aggregates to one row per entity), the windowed dedupe is
+    skipped and the gold table is used as-is. Multiple rows per entity in
+    that case will fan out the inner join, so a defensive ``dropDuplicates``
+    on the entity key is applied before the join.
+    """
     from pyspark.sql import Window
     from pyspark.sql import functions as F  # noqa: N812
 
@@ -195,14 +239,26 @@ def _join_latest_gold_features(
             f"attribution features missing in {config.gold_features_fqn}: "
             f"{missing[:10]} (+{max(len(missing) - 10, 0)} more)"
         )
-    latest_window = Window.partitionBy(F.col(config.entity_id_column)).orderBy(
-        F.col("as_of_date").desc()
-    )
-    latest = (
-        gold.withColumn("__cr_gold_rank", F.row_number().over(latest_window))
-        .filter(F.col("__cr_gold_rank") == F.lit(1))
-        .drop("__cr_gold_rank")
-    )
+    timestamp_col = _resolve_gold_timestamp_column(config, available)
+    if timestamp_col is not None:
+        latest_window = Window.partitionBy(F.col(config.entity_id_column)).orderBy(
+            F.col(timestamp_col).desc()
+        )
+        latest = (
+            gold.withColumn("__cr_gold_rank", F.row_number().over(latest_window))
+            .filter(F.col("__cr_gold_rank") == F.lit(1))
+            .drop("__cr_gold_rank")
+        )
+    else:
+        # Entity-grain gold: one row per entity already. ``dropDuplicates``
+        # is a guard against accidental duplicates that would otherwise
+        # fan out the inner join.
+        logger.info(
+            "gold table %s has no temporal column (looked for %s); treating as entity-grain",
+            config.gold_features_fqn,
+            ", ".join(_GOLD_TIMESTAMP_CANDIDATES),
+        )
+        latest = gold.dropDuplicates([config.entity_id_column])
     projection = [F.col(config.entity_id_column)] + [
         F.col(c).cast("double").alias(c) for c in feature_columns
     ]

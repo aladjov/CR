@@ -207,6 +207,53 @@ class TestGoldFeaturesContract:
             )
 
 
+class TestGoldTimestampResolution:
+    """Pin the gold-timestamp autodetection so a missing ``as_of_date`` no
+    longer crashes ``_join_latest_gold_features`` with
+    ``UNRESOLVED_COLUMN.WITH_SUGGESTION``. Project-side gold tables that
+    pre-aggregate to one row per entity (no temporal column) flow through
+    cleanly.
+    """
+
+    def test_picks_as_of_date_when_present(self):
+        cfg = _make_config()
+        col = top_drivers_writer._resolve_gold_timestamp_column(
+            cfg, {"entity_id", "as_of_date", "f0"}
+        )
+        assert col == "as_of_date"
+
+    def test_falls_back_to_event_timestamp(self):
+        cfg = _make_config()
+        col = top_drivers_writer._resolve_gold_timestamp_column(
+            cfg, {"entity_id", "event_timestamp", "f0"}
+        )
+        assert col == "event_timestamp"
+
+    def test_returns_none_when_table_is_entity_grain(self):
+        # Mirrors the email-churn cluster shape: gold has entity_id,
+        # feature columns, no temporal column. Must NOT raise.
+        cfg = _make_config()
+        col = top_drivers_writer._resolve_gold_timestamp_column(
+            cfg, {"entity_id", "dow_sin", "dow_cos", "active_span_days"}
+        )
+        assert col is None
+
+    def test_explicit_override_wins_over_autodetect(self):
+        cfg = _make_config(gold_timestamp_column="my_ts")
+        col = top_drivers_writer._resolve_gold_timestamp_column(
+            cfg, {"entity_id", "as_of_date", "my_ts", "f0"}
+        )
+        assert col == "my_ts"
+
+    def test_explicit_override_missing_fails_fast(self):
+        # Typos must not silently fall back to entity-grain.
+        cfg = _make_config(gold_timestamp_column="typo_col")
+        with pytest.raises(ValueError, match="gold_timestamp_column='typo_col'"):
+            top_drivers_writer._resolve_gold_timestamp_column(
+                cfg, {"entity_id", "as_of_date", "f0"}
+            )
+
+
 class TestResultSummary:
     def test_summary_string_carries_counts(self):
         result = top_drivers_writer.TopDriversResult(
