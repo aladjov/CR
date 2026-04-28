@@ -282,10 +282,36 @@ def cluster_centroids_raw(
 
 
 def cluster_size_stats(
-    labelled_df: "DataFrame", cluster_col: str = CLUSTER_COL
+    labelled_df: "DataFrame",
+    cluster_col: str = CLUSTER_COL,
+    entity_col: str = "entity_id",
 ) -> List[Tuple[int, int]]:
-    """Return ``[(cluster_id, size), ...]`` from a single ``groupBy().count()``."""
-    rows = labelled_df.groupBy(cluster_col).count().orderBy(cluster_col).collect()
+    """Return ``[(cluster_id, distinct_entity_count), ...]``.
+
+    Counts distinct entities per cluster, not rows. The training input is
+    keyed on ``(entity_id, as_of_date)`` -- the same entity contributes
+    multiple rows across the snapshot grid -- so a naive
+    ``groupBy().count()`` reports ``rows in cluster`` and the dashboard
+    surfaces an inflated "N customers in this archetype" pill (the
+    archetype card and L2 archetype rollup both render this value).
+
+    Falls back to ``count(*)`` when the entity column is absent (older
+    fixtures, synthetic test DataFrames without an ``entity_id`` field)
+    so existing callers don't break. The signature is backwards-compatible:
+    new ``entity_col`` keyword defaults to ``"entity_id"`` and is ignored
+    when not present in the schema.
+    """
+    from pyspark.sql import functions as F  # noqa: N812
+
+    if entity_col in labelled_df.columns:
+        rows = (
+            labelled_df.groupBy(cluster_col)
+            .agg(F.countDistinct(F.col(entity_col)).alias("count"))
+            .orderBy(cluster_col)
+            .collect()
+        )
+    else:
+        rows = labelled_df.groupBy(cluster_col).count().orderBy(cluster_col).collect()
     return [(int(row[cluster_col]), int(row["count"])) for row in rows]
 
 

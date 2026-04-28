@@ -222,7 +222,7 @@ class _FakeRow:
         return self._data[key]
 
 
-def _make_chain_returning(rows: List[dict]) -> Any:
+def _make_chain_returning(rows: List[dict], columns: List[str] | None = None) -> Any:
     chain = MagicMock(name="DFChain")
     fake_collect = [_FakeRow(r) for r in rows]
     # groupBy(...).agg(...).orderBy(...).collect()
@@ -230,7 +230,11 @@ def _make_chain_returning(rows: List[dict]) -> Any:
     chain.agg.return_value = chain
     chain.orderBy.return_value = chain
     chain.collect.return_value = fake_collect
-    chain.count = MagicMock(return_value=chain)  # for cluster_size_stats: groupBy().count().orderBy().collect()
+    chain.count = MagicMock(return_value=chain)  # for cluster_size_stats fallback path: groupBy().count().orderBy().collect()
+    # ``columns`` is a real list (not a MagicMock attribute) so callers can
+    # control whether ``entity_id in df.columns`` evaluates to True/False
+    # deterministically.
+    chain.columns = list(columns or [])
     return chain
 
 
@@ -245,6 +249,7 @@ def patched_pyspark_sql_functions(monkeypatch):
     fake_functions.lit = MagicMock(side_effect=lambda v: _FakeCol(f"lit({v})"))
     fake_functions.abs = MagicMock(side_effect=lambda c: c)
     fake_functions.stddev_pop = MagicMock(side_effect=lambda c: c)
+    fake_functions.countDistinct = MagicMock(side_effect=lambda c: c)
     fake_sql = MagicMock(name="pyspark.sql")
     fake_sql.functions = fake_functions
     monkeypatch.setitem(sys.modules, "pyspark.sql", fake_sql)
@@ -313,10 +318,33 @@ class TestClusterCentroidsRaw:
 
 class TestClusterSizeStats:
     def test_returns_per_cluster_counts(self, patched_pyspark_sql_functions):
+        # No ``entity_id`` column on the labelled DataFrame -> fall through
+        # to the ``groupBy().count()`` path. Backward-compatible behaviour
+        # for fixtures that don't carry the entity key.
         rows = [{CLUSTER_COL: 0, "count": 50}, {CLUSTER_COL: 1, "count": 75}]
         chain = _make_chain_returning(rows)
         result = clusterer.cluster_size_stats(chain)
         assert result == [(0, 50), (1, 75)]
+        # ``count()`` (no agg() -> path) was the one invoked.
+        chain.count.assert_called_once()
+        chain.agg.assert_not_called()
+
+    def test_counts_distinct_entities_when_entity_column_present(self, patched_pyspark_sql_functions):
+        # When ``entity_id`` IS on the DataFrame, the size must collapse
+        # to distinct entities -- not rows. The training input is keyed
+        # on ``(entity_id, as_of_date)``, so the same entity contributes
+        # multiple snapshot rows; counting rows multi-counts the cluster
+        # by the number of as-of-dates and inflates the dashboard's
+        # ``N customers in this archetype`` pill.
+        rows = [{CLUSTER_COL: 0, "count": 50}, {CLUSTER_COL: 1, "count": 75}]
+        chain = _make_chain_returning(rows, columns=["entity_id", "as_of_date", "f0"])
+        result = clusterer.cluster_size_stats(chain)
+        assert result == [(0, 50), (1, 75)]
+        # countDistinct path: agg() invoked, raw count() path not used.
+        chain.agg.assert_called_once()
+        chain.count.assert_not_called()
+        # ``F.countDistinct`` was the aggregation function chosen.
+        assert patched_pyspark_sql_functions.countDistinct.call_count == 1
 
 
 class TestClusterTargetMeans:

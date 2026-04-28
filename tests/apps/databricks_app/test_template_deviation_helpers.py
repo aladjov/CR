@@ -39,6 +39,72 @@ def test_fmt_signed_z_formats_with_sigma():
     assert _call("fmt_signed_z", None) == "—"
 
 
+# ---------------------------------------------------------------------------
+# SHAP panel helpers
+#
+# The right-hand panel renders ``account_top_shap_features`` (already on the
+# v_account_explanation row) as bidirectional bars. ``shap_bar_pct`` scales
+# each bar relative to the row's largest |contribution|, ``shap_sign_class``
+# colours it by causal direction, and ``fmt_signed_shap`` / ``fmt_shap_value``
+# format the labels.
+# ---------------------------------------------------------------------------
+
+
+_SHAP_DRIVERS = [
+    {"feature": "active_span_days", "value": 4.0, "shap_contribution": 0.40, "direction": "positive"},
+    {"feature": "open_rate",        "value": 0.1, "shap_contribution": -0.20, "direction": "negative"},
+    {"feature": "regularity_score", "value": 0.0, "shap_contribution": 0.10, "direction": "positive"},
+    {"feature": "bounces_total",    "value": 12,  "shap_contribution": None,  "direction": None},
+]
+
+
+def test_shap_bar_pct_normalises_to_row_max():
+    # 0.40 is the largest |contribution|, so it shows at 100%
+    assert _call("shap_bar_pct", 0.40, _SHAP_DRIVERS) == "100.0"
+    # 0.20 is half the local max → 50%
+    assert _call("shap_bar_pct", -0.20, _SHAP_DRIVERS) == "50.0"
+    # 0.10 is a quarter of the local max → 25%
+    assert _call("shap_bar_pct", 0.10, _SHAP_DRIVERS) == "25.0"
+
+
+def test_shap_bar_pct_handles_missing_contribution():
+    assert _call("shap_bar_pct", None, _SHAP_DRIVERS) == "0"
+    assert _call("shap_bar_pct", "not a number", _SHAP_DRIVERS) == "0"
+
+
+def test_shap_bar_pct_safe_when_all_drivers_zero():
+    # Degenerate row (all zero / all None) must not divide by zero --
+    # falls back to a 1.0 cap so the bar renders cleanly at the input
+    # contribution's relative position.
+    drivers = [{"shap_contribution": 0.0}, {"shap_contribution": None}]
+    assert _call("shap_bar_pct", 0.0, drivers) == "0.0"
+    assert _call("shap_bar_pct", 0.5, drivers) == "50.0"
+
+
+def test_shap_sign_class_cases():
+    assert _call("shap_sign_class", 0.4) == "shap-pos"
+    assert _call("shap_sign_class", -0.4) == "shap-neg"
+    assert _call("shap_sign_class", 0.0) == "shap-zero"
+    assert _call("shap_sign_class", None) == "shap-zero"
+    assert _call("shap_sign_class", "garbage") == "shap-zero"
+
+
+def test_fmt_signed_shap_uses_three_decimals():
+    assert _call("fmt_signed_shap", 0.1234) == "+0.123"
+    assert _call("fmt_signed_shap", -0.5) == "-0.500"
+    assert _call("fmt_signed_shap", 0.0) == "+0.000"
+    assert _call("fmt_signed_shap", None) == "—"
+
+
+def test_fmt_shap_value_picks_format_by_magnitude():
+    assert _call("fmt_shap_value", 12.0) == "12"           # whole numbers as ints with thousands
+    assert _call("fmt_shap_value", 1234.0) == "1,234"
+    assert _call("fmt_shap_value", 0.123) == "0.123"        # float
+    assert _call("fmt_shap_value", 0.000456) == "4.56e-04"  # tiny values get scientific
+    assert _call("fmt_shap_value", "Active") == "Active"    # non-numeric pass-through
+    assert _call("fmt_shap_value", None) == "—"
+
+
 def test_data_source_dataclass_defaults():
     ds = DataSource(name="x", source="t", join_key="entity_id")
     assert ds.as_list is False

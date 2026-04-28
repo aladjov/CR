@@ -289,6 +289,106 @@ def _h_fmt_signed_z(this, z):
         return str(z)
 
 
+# SHAP panel — turns a per-feature signed contribution into a bar width
+# (relative to the largest |contribution| in the row) and a sign class so
+# the template can draw bidirectional bars and a signed label.
+#
+# Bar normalization: scaling by the row's own max absolute contribution
+# keeps the panel readable across models with very different SHAP
+# magnitudes (logit vs. probability vs. raw margin) and always shows the
+# top driver at 100%. ``shap_bar_pct(contribution, drivers)`` is the
+# template signature -- we look at every contribution in ``drivers`` to
+# find the local max.
+
+def _shap_max_abs(drivers) -> float:
+    """Largest ``|shap_contribution|`` among the items in ``drivers``.
+
+    Falls back to ``1.0`` so a degenerate row (all zeros / all None) still
+    renders a non-broken bar element instead of dividing by zero.
+    """
+    if not drivers:
+        return 1.0
+    best = 0.0
+    for item in drivers:
+        try:
+            val = item.get("shap_contribution") if hasattr(item, "get") else getattr(item, "shap_contribution", None)
+        except Exception:
+            val = None
+        if val is None:
+            continue
+        try:
+            mag = abs(float(val))
+        except Exception:
+            continue
+        if mag > best:
+            best = mag
+    return best if best > 0 else 1.0
+
+
+def _h_shap_bar_pct(this, contribution, drivers):
+    """Map a signed ``shap_contribution`` to a 0–100% bar width, scaled by
+    the row's own largest absolute contribution. ``drivers`` is the full
+    array of structs (so the template can pass ``account_top_shap_features``
+    as the second argument and the helper figures out the local max).
+    """
+    if _is_missing(contribution):
+        return "0"
+    try:
+        cf = abs(float(contribution))
+    except Exception:
+        return "0"
+    cap = _shap_max_abs(drivers)
+    return f"{min(cf / cap, 1.0) * 100:.1f}"
+
+
+def _h_shap_sign_class(this, contribution):
+    """``shap-pos`` (pushes toward churn / target=1) / ``shap-neg`` (pushes
+    away) / ``shap-zero``. Mirrors the deviation panel's class names so a
+    single CSS rule can paint either bar."""
+    if _is_missing(contribution):
+        return "shap-zero"
+    try:
+        cf = float(contribution)
+    except Exception:
+        return "shap-zero"
+    if cf > 0:
+        return "shap-pos"
+    if cf < 0:
+        return "shap-neg"
+    return "shap-zero"
+
+
+def _h_fmt_signed_shap(this, contribution):
+    """Three-significant-digit signed contribution (e.g. ``+0.142``)."""
+    if _is_missing(contribution):
+        return "—"
+    try:
+        cf = float(contribution)
+        return f"{cf:+.3f}"
+    except Exception:
+        return str(contribution)
+
+
+def _h_fmt_shap_value(this, value):
+    """Raw feature value as displayed alongside its SHAP contribution.
+
+    Uses 3 decimal places for floats / scientific notation for very small
+    values and integer formatting for whole numbers; falls back to
+    ``str()`` for non-numeric values (booleans, categorical strings).
+    """
+    if _is_missing(value):
+        return "—"
+    try:
+        vf = float(value)
+    except Exception:
+        return str(value)
+    if abs(vf - int(vf)) < 1e-9 and abs(vf) < 1e9:
+        return f"{int(vf):,}"
+    if abs(vf) < 1e-3 and vf != 0.0:
+        return f"{vf:.2e}"
+    return f"{vf:.3f}"
+
+
 HELPERS = {
     "fmt_currency":    _h_fmt_currency,
     "fmt_pct":         _h_fmt_pct,
@@ -302,6 +402,10 @@ HELPERS = {
     "dev_bar_pct":     _h_dev_bar_pct,
     "dev_sign_class":  _h_dev_sign_class,
     "fmt_signed_z":    _h_fmt_signed_z,
+    "shap_bar_pct":    _h_shap_bar_pct,
+    "shap_sign_class": _h_shap_sign_class,
+    "fmt_signed_shap": _h_fmt_signed_shap,
+    "fmt_shap_value":  _h_fmt_shap_value,
     "upper":           _h_upper,
     "lower":           _h_lower,
 }

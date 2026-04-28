@@ -517,10 +517,18 @@ details[open] > .cr-summary > .cr-summary-chevron { transform: rotate(90deg); }
   min-width: 0;
 }
 .cr-grid-left  > .cr-customer-profile,
-.cr-grid-right > .cr-deviation {
+.cr-grid-right > .cr-deviation,
+.cr-grid-right > .cr-shap {
   margin: 0;
   padding: 0;
   border: none;
+}
+/* Stack SHAP (primary) above the deviation panel (secondary "vs. peers") */
+.cr-grid-right > .cr-shap + .cr-deviation,
+.cr-grid-right > .cr-shap + .cr-deviation-secondary {
+  margin-top: 1.6rem;
+  padding-top: 1.4rem;
+  border-top: 1px dashed var(--line);
 }
 
 /* Deviation panel — bidirectional bar chart, sign-coloured ---------------- */
@@ -599,6 +607,87 @@ details[open] > .cr-summary > .cr-summary-chevron { transform: rotate(90deg); }
 .cr-dev-pos .cr-dev-score { color: var(--blue-700); }
 .cr-dev-neg .cr-dev-score { color: var(--yellow-800); }
 
+/* SHAP panel — same bidirectional bar layout as deviation, but the sign
+   semantics are causal: positive = pushes the model toward churn (red),
+   negative = pushes away (green). Reuses the deviation row geometry so a
+   single mental model covers both panels. */
+.cr-shap .cr-chapter-lead { margin-bottom: 0.9rem; }
+.cr-shap-pos-token { color: var(--yellow-800); font-weight: 500; }
+.cr-shap-neg-token { color: var(--green-800); font-weight: 500; }
+
+.cr-shap-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.cr-shap-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) auto minmax(80px, 1fr) auto;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.25rem 0;
+  font-family: var(--font-sans);
+  font-size: 0.82rem;
+}
+.cr-shap-name {
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cr-shap-value {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: var(--ink-soft);
+  text-align: right;
+  font-feature-settings: "tnum" 1, "lnum" 1;
+}
+.cr-shap-bar-track {
+  position: relative;
+  height: 14px;
+  background: var(--paper-deep);
+  border-radius: 3px;
+  overflow: hidden;
+  border: 1px solid var(--line-soft);
+}
+.cr-shap-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: block;
+  transition: width 0.18s ease;
+}
+/* Causal direction: positive contribution pushes prediction toward
+   churn (right half, warm colour); negative pulls away (left half,
+   cool/safe colour). */
+.cr-shap-pos  .cr-shap-bar  { left: 50%;  background: var(--yellow-400); }
+.cr-shap-neg  .cr-shap-bar  { right: 50%; background: var(--green-400); }
+.cr-shap-zero .cr-shap-bar  { width: 0; }
+.cr-shap-bar-track::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: -1px;
+  bottom: -1px;
+  width: 1px;
+  background: var(--line);
+}
+.cr-shap-score {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: var(--ink-soft);
+  font-feature-settings: "tnum" 1, "lnum" 1;
+  text-align: right;
+  white-space: nowrap;
+}
+.cr-shap-pos .cr-shap-score { color: var(--yellow-800); }
+.cr-shap-neg .cr-shap-score { color: var(--green-800); }
+
 /* --------------------------------------------------------------------------
    Small screens
    -------------------------------------------------------------------------- */
@@ -611,4 +700,6 @@ details[open] > .cr-summary > .cr-summary-chevron { transform: rotate(90deg); }
   .cr-grid-2col { grid-template-columns: 1fr; }
   .cr-dev-row { grid-template-columns: minmax(0, 1.4fr) minmax(60px, 1fr) auto; }
   .cr-dev-value { display: none; }
+  .cr-shap-row { grid-template-columns: minmax(0, 1.4fr) minmax(60px, 1fr) auto; }
+  .cr-shap-value { display: none; }
 }

@@ -71,12 +71,33 @@ data:
       {{/if}}
     </div>
     <div class="cr-grid-right">
-      {{#if feature_deviation}}
-        <section class="cr-deviation">
+      {{#if account_top_shap_features}}
+        <section class="cr-shap">
           <header class="cr-chapter-head">
-            <span class="cr-chapter-eyebrow">Feature deviation from average</span>
-            <h2 class="cr-chapter-title">Why this customer stands out</h2>
-            <p class="cr-chapter-lead">Placeholder for SHAP — bars show z-score vs. training population (capped at ±3σ).</p>
+            <span class="cr-chapter-eyebrow">Why the model flagged this account</span>
+            <h2 class="cr-chapter-title">Top SHAP drivers</h2>
+            <p class="cr-chapter-lead">Each bar's length shows the magnitude of the feature's contribution to this customer's churn score, normalised to the strongest driver in the row. <span class="cr-shap-pos-token">Red</span> pushes the score toward churn; <span class="cr-shap-neg-token">green</span> pushes it away.</p>
+          </header>
+          <ul class="cr-shap-list">
+            {{#each account_top_shap_features}}
+              <li class="cr-shap-row {{shap_sign_class this.shap_contribution}}">
+                <span class="cr-shap-name" title="{{this.feature}}">{{this.feature}}</span>
+                <span class="cr-shap-value">{{fmt_shap_value this.value}}</span>
+                <span class="cr-shap-bar-track">
+                  <span class="cr-shap-bar" style="width:{{shap_bar_pct this.shap_contribution ../account_top_shap_features}}%"></span>
+                </span>
+                <span class="cr-shap-score">{{fmt_signed_shap this.shap_contribution}}</span>
+              </li>
+            {{/each}}
+          </ul>
+        </section>
+      {{/if}}
+      {{#if feature_deviation}}
+        <section class="cr-deviation cr-deviation-secondary">
+          <header class="cr-chapter-head">
+            <span class="cr-chapter-eyebrow">Vs. training population</span>
+            <h2 class="cr-chapter-title">How this customer compares</h2>
+            <p class="cr-chapter-lead">Bars show z-score vs. the training population (capped at ±3σ). Use as a reality-check on the SHAP drivers above — does the model lean on features where the customer actually deviates?</p>
           </header>
           <ul class="cr-dev-list">
             {{#each feature_deviation}}

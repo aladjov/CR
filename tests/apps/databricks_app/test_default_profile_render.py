@@ -121,7 +121,9 @@ def test_renders_deviation_panel_with_bidirectional_bars(compiled_template, base
     html = compiled_template(base_context, helpers=HELPERS)
     assert "cr-grid cr-grid-2col" in html
     assert "cr-deviation" in html
-    assert "Why this customer stands out" in html
+    # SHAP became the primary right-pane content; deviation now sits in
+    # the secondary "vs. peers" subsection.
+    assert "How this customer compares" in html
     assert "event_count_all_time" in html
     assert "dev-neg" in html
     assert "dev-pos" in html
@@ -135,8 +137,35 @@ def test_renders_deviation_panel_with_bidirectional_bars(compiled_template, base
 def test_no_feature_deviation_data_hides_panel(compiled_template, base_context):
     base_context["feature_deviation"] = []
     html = compiled_template(base_context, helpers=HELPERS)
-    assert "Why this customer stands out" not in html
+    assert "How this customer compares" not in html
     assert "cr-deviation" not in html
+
+
+def test_renders_shap_panel_with_bidirectional_bars(compiled_template, base_context):
+    base_context["account_top_shap_features"] = [
+        {"feature": "active_span_days", "value": 4.0, "shap_contribution":  0.40, "direction": "positive"},
+        {"feature": "open_rate",        "value": 0.1, "shap_contribution": -0.20, "direction": "negative"},
+        {"feature": "regularity_score", "value": 0.0, "shap_contribution":  0.10, "direction": "positive"},
+    ]
+    html = compiled_template(base_context, helpers=HELPERS)
+    assert "cr-shap" in html
+    assert "Top SHAP drivers" in html
+    assert "active_span_days" in html
+    assert "shap-pos" in html
+    assert "shap-neg" in html
+    # Largest absolute contribution → 100% bar; half-magnitude → 50%.
+    assert "width:100.0%" in html
+    assert "width:50.0%" in html
+    # Signed three-decimal SHAP labels.
+    assert "+0.400" in html
+    assert "-0.200" in html
+
+
+def test_no_account_top_shap_features_hides_shap_panel(compiled_template, base_context):
+    base_context["account_top_shap_features"] = []
+    html = compiled_template(base_context, helpers=HELPERS)
+    assert "Top SHAP drivers" not in html
+    assert "cr-shap" not in html
 
 
 def test_customer_left_panel_hidden_when_no_data(compiled_template, base_context):
