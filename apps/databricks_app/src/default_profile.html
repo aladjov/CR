@@ -14,6 +14,16 @@ data:
     as_list: true
 ---
 <article class="cr-card cr-tier-{{risk_tier_class risk_tier}}">
+  {{#if playbook_name}}
+    <nav class="cr-context" aria-label="Customer context">
+      <span class="cr-context-eyebrow">Viewing under</span>
+      <span class="cr-context-pill cr-context-playbook">{{playbook_name}}</span>
+      {{#if archetype_name}}
+        <span class="cr-context-sep" aria-hidden="true">›</span>
+        <span class="cr-context-pill cr-context-archetype">{{archetype_name}}</span>
+      {{/if}}
+    </nav>
+  {{/if}}
   <header class="cr-hero">
     <div class="cr-hero-id">
       <span class="cr-hero-eyebrow">Customer</span>
@@ -85,7 +95,7 @@ data:
     </div>
   </section>
 
-  <details class="cr-card-section cr-action {{#if recommended}}cr-action-ok{{else}}{{#if is_holdout}}cr-action-holdout{{else}}cr-action-warn{{/if}}{{/if}}" open>
+  <details class="cr-card-section cr-action {{#if recommended}}cr-action-ok{{else}}{{#if is_holdout}}cr-action-holdout{{else}}cr-action-warn{{/if}}{{/if}}">
     <summary class="cr-summary">
       <span class="cr-summary-glyph">{{#if recommended}}✓{{else}}◎{{/if}}</span>
       <span class="cr-summary-text">
@@ -134,6 +144,7 @@ data:
 
   <details class="cr-card-section cr-archetype">
     <summary class="cr-summary">
+      <span class="cr-summary-glyph">◇</span>
       <span class="cr-summary-text">
         <span class="cr-summary-eyebrow">Archetype</span>
         <span class="cr-summary-title">{{archetype_name}}</span>

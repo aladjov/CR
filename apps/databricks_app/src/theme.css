@@ -111,14 +111,18 @@ hr, [data-testid="stHorizontalBlock"] + div { border: none; }
   flex-shrink: 0;
 }
 
+/* Brand title sits inline with the small-caps subtitle ("IMMEDIATE RISK -
+   STABLE POSTURE"); use the same metrics so the masthead reads as a single
+   typographic line. Color stays at --ink so the title is the dominant
+   element; the sub-line keeps its --muted tone. */
 .brand-title {
-  font-family: var(--font-serif);
-  font-style: italic;
-  font-weight: 400;
-  font-size: 1.45rem;
-  letter-spacing: -0.015em;
+  font-family: var(--font-sans);
+  font-style: normal;
+  font-weight: 600;
+  font-size: 0.7rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
   color: var(--ink);
-  font-variation-settings: "opsz" 48;
 }
 
 .brand-sub {
@@ -228,17 +232,6 @@ hr, [data-testid="stHorizontalBlock"] + div { border: none; }
   color: var(--blue-700);
   background: linear-gradient(180deg, transparent 60%, var(--yellow-100) 60%, var(--yellow-100) 92%, transparent 92%);
   padding: 0 0.08em;
-}
-/* "in next N days" qualifier inside the L1 title -- same size as the
-   serif headline but in the body sans-serif at a slightly darker tone
-   than --ink-soft, so the horizon reads as a quiet annotation rather
-   than competing with the italic display face. */
-.level-1 .level-title .cr-l1-meta {
-  font-family: var(--font-sans);
-  font-style: normal;
-  font-weight: 400;
-  color: var(--ink-2);
-  letter-spacing: -0.01em;
 }
 .level-2 .level-title,
 .level-3 .level-title,

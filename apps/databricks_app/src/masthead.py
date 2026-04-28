@@ -87,6 +87,10 @@ def l1_title_html(ctx: dict) -> str:
     The objective/posture segments are intentionally NOT appended here --
     they already live in the masthead at the top of the page, and
     repeating them in the L1 hero made the heading feel duplicative.
+
+    The whole horizon phrase is rendered as a single styled run -- the
+    earlier two-tone treatment (italic display face + sans annotation)
+    looked uneven and split the title visually.
     """
     horizon = ctx.get("horizon_days")
     if horizon is None:
@@ -95,4 +99,4 @@ def l1_title_html(ctx: dict) -> str:
         days = int(horizon)
     except (TypeError, ValueError):
         return 'Churn Risk &middot; <em>Actionable insights</em>'
-    return f'Churn Risk <span class="cr-l1-meta">in next {days} days</span>'
+    return f'Churn Risk in next {days} days'

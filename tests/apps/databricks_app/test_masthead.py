@@ -68,11 +68,12 @@ def test_l1_title_html_falls_back_to_actionable_insights_when_no_horizon():
     assert "glance" not in out.lower()
 
 
-def test_l1_title_html_renders_horizon_with_meta_span():
+def test_l1_title_html_renders_horizon_as_single_run():
     # The masthead at the top of the page already shows objective/posture
-    # segments, so the L1 hero stays scoped to the horizon line. The
-    # "in next N days" qualifier is wrapped in a styling hook so the body
-    # font + slightly darker tone can be applied via CSS.
+    # segments, so the L1 hero stays scoped to the horizon line. The whole
+    # horizon phrase renders as one styled run -- the earlier two-tone
+    # treatment (italic display face + sans annotation) split the title
+    # visually, so we revert to a single coherent string.
     ctx = {
         "horizon_days":      270,
         "primary_objective": "immediate_risk",
@@ -80,22 +81,21 @@ def test_l1_title_html_renders_horizon_with_meta_span():
         "model_type":        "xgboost",
     }
     html = l1_title_html(ctx)
-    assert html == 'Churn Risk <span class="cr-l1-meta">in next 270 days</span>'
-    # Objective/posture/model segments must NOT bleed into the L1 -- they
-    # already render in the masthead.
+    assert html == "Churn Risk in next 270 days"
     for token in ("Immediate risk", "Reactive posture", "XGBoost"):
         assert token not in html
     assert "<em>" not in html
+    assert "<span" not in html
 
 
-def test_l1_title_html_horizon_only_uses_meta_span():
+def test_l1_title_html_horizon_only_renders_plain_string():
     html = l1_title_html({"horizon_days": 30})
-    assert html == 'Churn Risk <span class="cr-l1-meta">in next 30 days</span>'
+    assert html == "Churn Risk in next 30 days"
 
 
 def test_l1_title_html_partial_horizon_only_renders_dynamic_no_static():
     out = l1_title_html({"horizon_days": 60})
-    assert out == 'Churn Risk <span class="cr-l1-meta">in next 60 days</span>'
+    assert out == "Churn Risk in next 60 days"
     assert "book" not in out.lower()
 
 
