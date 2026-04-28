@@ -74,6 +74,16 @@ def test_alternate_playbooks_uses_lateral_explode_on_archetype_ids():
     assert "LATERAL VIEW EXPLODE(e.archetype_ids)" in block
 
 
+def test_alternate_playbooks_joins_on_archetype_version_not_archetype_id():
+    # ``eligibility_policy.archetype_ids`` is populated from
+    # ``archetype_row["archetype_version"]`` (see derivation.py). Joining to
+    # ``s.archetype_id`` would never match -- pin the version-based JOIN so
+    # this regression can't recur silently.
+    block = _account_explanation_block(render_dashboard_view_sql("c", "s"))
+    assert "s.archetype_version = aps.archetype_version" in block
+    assert "s.archetype_id = aps.archetype_id" not in block
+
+
 def test_existing_columns_remain_for_backwards_compatibility():
     # Phase 2 must NOT remove any column the dashboard relies on today.
     block = _account_explanation_block(render_dashboard_view_sql("c", "s"))

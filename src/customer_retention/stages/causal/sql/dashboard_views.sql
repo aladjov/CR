@@ -500,19 +500,24 @@ active_policies AS (
     GROUP BY playbook_id
 ),
 exploded_policies AS (
+    -- ``eligibility_policy.archetype_ids`` stores archetype VERSIONS (see
+    -- ``derivation.py`` -- the policy is bound to the exact catalog row that
+    -- produced it). Keep the column name explicit so the JOIN at the bottom
+    -- of the view doesn't accidentally pair it with the snapshot's logical
+    -- ``archetype_id`` -- which would be silent and always-empty.
     SELECT
-        ai AS archetype_id,
+        av AS archetype_version,
         e.playbook_id,
         e.fit_score,
         e.expected_uplift_pct
     FROM {catalog}.{schema}.eligibility_policy e
-    LATERAL VIEW EXPLODE(e.archetype_ids) tbl AS ai
+    LATERAL VIEW EXPLODE(e.archetype_ids) tbl AS av
     WHERE e.status = 'active'
       AND e.archetype_ids IS NOT NULL
 ),
 archetype_playbook_set AS (
     SELECT
-        ep.archetype_id,
+        ep.archetype_version,
         COLLECT_LIST(NAMED_STRUCT(
             'playbook_id', ep.playbook_id,
             'playbook_name', COALESCE(p.name, ep.playbook_id),
@@ -521,7 +526,7 @@ archetype_playbook_set AS (
         )) AS playbooks_all
     FROM exploded_policies ep
     LEFT JOIN {catalog}.{schema}.playbook_catalog p ON ep.playbook_id = p.playbook_id
-    GROUP BY ep.archetype_id
+    GROUP BY ep.archetype_version
 )
 SELECT
     s.entity_id,
@@ -574,7 +579,7 @@ JOIN latest_run lr ON s.scoring_run_id = lr.scoring_run_id
 LEFT JOIN active_archetypes a ON s.archetype_id = a.archetype_id
 LEFT JOIN active_playbooks p ON s.playbook_id = p.playbook_id
 LEFT JOIN active_policies pol ON s.playbook_id = pol.playbook_id
-LEFT JOIN archetype_playbook_set aps ON s.archetype_id = aps.archetype_id
+LEFT JOIN archetype_playbook_set aps ON s.archetype_version = aps.archetype_version
 WHERE COALESCE(s.is_dashboard_visible, TRUE) = TRUE;
 
 -- ============================================================================
