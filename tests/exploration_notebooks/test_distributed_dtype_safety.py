@@ -60,3 +60,25 @@ class TestSingleColumnToNumpyCastsToFloat:
     def test_nb11_y_true_cast(self):
         src = _cell_source("11_scoring_validation.ipynb", "ee54d054")
         assert "scoring_features[ORIGINAL_COLUMN].astype(\"float64\").to_numpy()" in src
+
+
+class TestNB05LoadCoercesStringTargetToNumeric:
+    """Silver_merged sometimes stores the binary target as `StringType` because
+    of a NaN-padded-integer schema-inference fallthrough in the silver write
+    path. NB05 must coerce the target to float64 at load so downstream
+    `.mean()`, correlation, and effect-size calls don't trip pyspark.pandas's
+    NumericType guard. Coercion failures raise — they don't silently mask a
+    genuinely non-numeric target.
+    """
+
+    def test_load_findings_coerces_target_when_object_dtype(self):
+        src = _cell_source("05_relationship_analysis.ipynb", "09b14f1e")
+        assert "_t_dtype" in src
+        assert "if \"object\" in _t_dtype or \"string\" in _t_dtype:" in src
+        assert "df[_t] = df[_t].astype(\"float64\")" in src
+
+    def test_load_findings_fails_fast_on_uncoercible_target(self):
+        src = _cell_source("05_relationship_analysis.ipynb", "09b14f1e")
+        assert "raise RuntimeError(" in src
+        assert "Target column" in src
+        assert "TemporalMerger" in src
