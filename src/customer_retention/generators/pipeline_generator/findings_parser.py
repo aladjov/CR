@@ -977,6 +977,25 @@ class FindingsParser:
         self._apply_filter_recommendations(config, registry)
         self._apply_landing_recommendations(config, registry)
 
+    @staticmethod
+    def _coerce_lifecycle_override_value(value: Any) -> Dict[str, Any]:
+        if value is None:
+            return {}
+        if isinstance(value, dict):
+            return dict(value)
+        if hasattr(value, "to_dict") and callable(value.to_dict):
+            coerced = value.to_dict()
+            if isinstance(coerced, dict):
+                return dict(coerced)
+        from dataclasses import asdict, is_dataclass
+        if is_dataclass(value) and not isinstance(value, type):
+            return asdict(value)
+        raise TypeError(
+            "landing_lifecycle_overrides values must be a "
+            "LifecycleEnrichmentConfig instance, a dataclass with .to_dict(), "
+            f"or a plain dict; got {type(value).__name__}: {value!r}"
+        )
+
     def _apply_landing_overrides(self, config: PipelineConfig) -> None:
         """Inject NB10-time landing filters / lifecycle enrichments per dataset.
 
@@ -1017,10 +1036,13 @@ class FindingsParser:
                     dataset, sorted(config.landing.keys()),
                 )
                 continue
+            coerced_cfg = self._coerce_lifecycle_override_value(lifecycle_cfg)
+            if not coerced_cfg:
+                continue
             target.lifecycle_enrichments.append(TransformationStep(
                 type=PipelineTransformationType.LANDING_LIFECYCLE_ENRICHMENT,
                 column=dataset,
-                parameters={"config": dict(lifecycle_cfg)},
+                parameters={"config": coerced_cfg},
                 rationale="NB10 LANDING_LIFECYCLE_OVERRIDES",
                 source_notebook="NB10",
             ))

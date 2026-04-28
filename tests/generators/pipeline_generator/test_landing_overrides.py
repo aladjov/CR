@@ -196,6 +196,51 @@ class TestApplyLandingOverrides:
         config = parser.parse()
         assert config.landing["request"].filters == []
 
+    def test_lifecycle_override_accepts_dataclass_instance(self, tmp_path):
+        """Operators paste `LifecycleEnrichmentConfig(...)` verbatim from
+        `sps_notebook_registered_overrides.md`. The override must coerce
+        a dataclass instance the same as a plain dict — otherwise the
+        natural paste path raises `cannot convert dictionary update
+        sequence element #0 to a sequence` from `dict(<dataclass>)`."""
+        from customer_retention.stages.lifecycle.config import LifecycleEnrichmentConfig
+
+        ns = _fake_namespace(tmp_path)
+        _write_event_findings(ns, "contract", "ml_catalog.retention.contract_raw")
+        cfg = LifecycleEnrichmentConfig(
+            enriched_view_name="sps_enriched_contract",
+            parent_entity_key="ACCOUNT_ID",
+            sub_entity_key="CONTRACT_ID",
+            valid_from_column="CONTRACT_START_DATE",
+            valid_to_columns=("CONTRACT_END_DATE",),
+        )
+        parser = FindingsParser(
+            findings_dir=str(ns.merged_dir), namespace=ns,
+            landing_lifecycle_overrides={"contract": cfg},
+        )
+        config = parser.parse()
+        steps = config.landing["contract"].lifecycle_enrichments
+        assert len(steps) == 1
+        coerced = steps[0].parameters["config"]
+        assert isinstance(coerced, dict)
+        assert coerced["enriched_view_name"] == "sps_enriched_contract"
+        assert coerced["valid_from_column"] == "CONTRACT_START_DATE"
+        # tuples are normalized via dataclasses.asdict -> tuple stays tuple,
+        # but to_dict() lists them. Either is acceptable downstream because
+        # `LifecycleEnrichmentConfig.from_dict(...)` re-tuples them.
+        assert list(coerced["valid_to_columns"]) == ["CONTRACT_END_DATE"]
+
+    def test_lifecycle_override_rejects_non_mappable(self, tmp_path):
+        import pytest
+
+        ns = _fake_namespace(tmp_path)
+        _write_event_findings(ns, "contract", "ml_catalog.retention.contract_raw")
+        parser = FindingsParser(
+            findings_dir=str(ns.merged_dir), namespace=ns,
+            landing_lifecycle_overrides={"contract": ["not", "a", "dict"]},
+        )
+        with pytest.raises(TypeError, match="LifecycleEnrichmentConfig"):
+            parser.parse()
+
 
 class TestGeneratorForwardsLandingOverrides:
     def test_pipeline_generator_forwards(self, tmp_path):
