@@ -117,3 +117,51 @@ def test_publish_without_composite_name_keeps_original_count():
         if "CREATE OR REPLACE VIEW" in call.args[0]
     ]
     assert len(view_calls) == len(DASHBOARD_VIEW_NAMES)
+
+
+def test_publish_skips_deviation_when_population_stats_table_missing():
+    # Cluster shape where ``feature_population_stats`` lives as a JSON
+    # sidecar on Volume rather than as a UC Delta table. The deviation
+    # views reference the UC table and would crash with
+    # ``[TABLE_OR_VIEW_NOT_FOUND]`` at CREATE time. The publisher must
+    # detect the missing prerequisite and silently skip just the deviation
+    # block, leaving the rest of the dashboard publishable.
+    spark = MagicMock()
+
+    def _exists(fqn):
+        return "feature_population_stats" not in fqn
+
+    spark.catalog.tableExists.side_effect = _exists
+
+    publish_dashboard_views(spark, "c", "s", composite_name="cn1")
+    view_calls = [
+        call for call in spark.sql.call_args_list
+        if "CREATE OR REPLACE VIEW" in call.args[0]
+    ]
+    submitted = "\n".join(call.args[0] for call in view_calls)
+    # The non-deviation views still get published.
+    assert len(view_calls) == len(DASHBOARD_VIEW_NAMES)
+    # Neither deviation view body reaches Spark.
+    for name in DASHBOARD_DEVIATION_VIEW_NAMES:
+        assert name not in submitted
+
+
+def test_publish_skips_deviation_when_gold_features_table_missing():
+    # Same skip behaviour when the per-run gold table is absent (e.g.
+    # composite_name was supplied but the gold step never ran).
+    spark = MagicMock()
+
+    def _exists(fqn):
+        return "gold_features_" not in fqn
+
+    spark.catalog.tableExists.side_effect = _exists
+
+    publish_dashboard_views(spark, "c", "s", composite_name="cn1")
+    view_calls = [
+        call for call in spark.sql.call_args_list
+        if "CREATE OR REPLACE VIEW" in call.args[0]
+    ]
+    submitted = "\n".join(call.args[0] for call in view_calls)
+    assert len(view_calls) == len(DASHBOARD_VIEW_NAMES)
+    for name in DASHBOARD_DEVIATION_VIEW_NAMES:
+        assert name not in submitted

@@ -181,6 +181,33 @@ def split_view_statements(sql_text: str) -> List[str]:
     return statements
 
 
+_DEVIATION_PREREQ_TABLES: tuple[str, ...] = ("feature_population_stats",)
+
+
+def _deviation_prerequisites_present(
+    spark: "SparkSession", catalog: str, schema: str, composite_name: str
+) -> tuple[bool, list[str]]:
+    """Return ``(ok, missing)`` for the tables the deviation views read.
+
+    The deviation views reference both ``feature_population_stats`` and
+    ``gold_features_<composite_name>``. On clusters where population stats
+    live as a JSON sidecar (the framework's run-namespace layout) rather
+    than a UC Delta table, attempting ``CREATE OR REPLACE VIEW`` blows up
+    at DDL parse time with ``[TABLE_OR_VIEW_NOT_FOUND]``. Skipping the
+    deviation block when either prerequisite is absent keeps the rest of
+    the dashboard publishable instead of failing the whole call.
+    """
+    missing: list[str] = []
+    for tbl in _DEVIATION_PREREQ_TABLES:
+        fqn = f"{catalog}.{schema}.{tbl}"
+        if not spark.catalog.tableExists(fqn):
+            missing.append(fqn)
+    gold_fqn = f"{catalog}.{schema}.gold_features_{composite_name}"
+    if not spark.catalog.tableExists(gold_fqn):
+        missing.append(gold_fqn)
+    return (not missing), missing
+
+
 def publish_dashboard_views(
     spark: "SparkSession",
     catalog: str,
@@ -200,22 +227,38 @@ def publish_dashboard_views(
     time, so this makes publish order-independent from the per-run
     ``write_run_context`` write.
 
-    When ``composite_name`` is supplied, the deviation views
-    (``v_account_feature_deviation`` / ``_topn``) are also published.  When
-    omitted, those views are skipped — the gold table FQN is per-run and
-    cannot be inferred from ``catalog`` / ``schema`` alone.
+    When ``composite_name`` is supplied AND the deviation prerequisites
+    (``feature_population_stats`` UC table + ``gold_features_<cn>`` UC
+    table) are present, the deviation views (``v_account_feature_deviation``
+    / ``_topn``) are also published. When the prerequisites are missing
+    (e.g. population stats live as a JSON sidecar on Volume rather than a
+    UC table), the deviation block is skipped with a logged warning so
+    the rest of the dashboard publishes successfully.
     """
     from .run_context_writer import ensure_run_context_table
 
     ensure_run_context_table(spark, f"{catalog}.{schema}.run_context")
-    rendered = render_dashboard_view_sql(catalog, schema, composite_name=composite_name)
+
+    effective_composite = composite_name
+    if composite_name:
+        ok, missing = _deviation_prerequisites_present(spark, catalog, schema, composite_name)
+        if not ok:
+            logger.warning(
+                "deviation views skipped: missing prerequisite table(s) %s; "
+                "publishing the rest of the dashboard. Populate the missing "
+                "table(s) (or pass composite_name=None) to silence this notice.",
+                ", ".join(missing),
+            )
+            effective_composite = None
+
+    rendered = render_dashboard_view_sql(catalog, schema, composite_name=effective_composite)
     statements = split_view_statements(rendered)
     submitted: List[str] = []
     for stmt in statements:
         spark.sql(stmt)
         submitted.append(stmt)
         logger.info("published dashboard view (%d chars)", len(stmt))
-    if composite_name is None:
+    if effective_composite is None and composite_name is None:
         logger.info(
             "deviation views skipped (no composite_name supplied; pass composite_name= to enable)"
         )
