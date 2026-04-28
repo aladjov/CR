@@ -182,6 +182,51 @@ def split_view_statements(sql_text: str) -> List[str]:
 
 
 _DEVIATION_PREREQ_TABLES: tuple[str, ...] = ("feature_population_stats",)
+_POPULATION_STATS_SIDECAR_FILENAME = "feature_population_stats.json"
+
+
+def _try_materialize_population_stats_from_sidecar(
+    spark: "SparkSession", catalog: str, schema: str
+) -> bool:
+    """Best-effort: materialize the population-stats JSON sidecar into UC.
+
+    The framework writes population stats to a JSON sidecar in the run
+    namespace; the deviation views read a UC Delta table. When the table
+    is missing but the sidecar exists, materializing it on the fly lets
+    ``publish_dashboard_views`` continue without operator intervention.
+
+    Returns ``True`` when the table now exists (whether already-present
+    or just-materialized), ``False`` when neither the table nor a
+    discoverable sidecar is available.
+    """
+    fqn = f"{catalog}.{schema}.feature_population_stats"
+    if spark.catalog.tableExists(fqn):
+        return True
+    try:
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+    except ImportError:
+        return False
+    try:
+        ns = RunNamespace.from_env_or_latest()
+    except Exception:  # noqa: BLE001 -- best-effort, never fail the publish
+        ns = None
+    if ns is None:
+        return False
+    sidecar = ns.feature_population_stats_dir / _POPULATION_STATS_SIDECAR_FILENAME
+    if not sidecar.exists():
+        return False
+    try:
+        from .population_stats import materialize_population_stats_from_sidecar
+
+        materialize_population_stats_from_sidecar(spark, sidecar, fqn)
+    except Exception as exc:  # noqa: BLE001 -- log + degrade
+        logger.warning(
+            "auto-materialization of %s from sidecar %s failed: %s. "
+            "Deviation views will be skipped this run.",
+            fqn, sidecar, exc,
+        )
+        return spark.catalog.tableExists(fqn)
+    return spark.catalog.tableExists(fqn)
 
 
 def _deviation_prerequisites_present(
@@ -192,16 +237,15 @@ def _deviation_prerequisites_present(
     The deviation views reference both ``feature_population_stats`` and
     ``gold_features_<composite_name>``. On clusters where population stats
     live as a JSON sidecar (the framework's run-namespace layout) rather
-    than a UC Delta table, attempting ``CREATE OR REPLACE VIEW`` blows up
-    at DDL parse time with ``[TABLE_OR_VIEW_NOT_FOUND]``. Skipping the
-    deviation block when either prerequisite is absent keeps the rest of
-    the dashboard publishable instead of failing the whole call.
+    than a UC Delta table, the publisher first tries to materialize the
+    sidecar to UC; if that succeeds the table is considered present. If
+    the sidecar is unreachable too, the deviation block is skipped so
+    the rest of the dashboard publishes successfully instead of failing
+    the whole call with ``[TABLE_OR_VIEW_NOT_FOUND]`` at DDL parse time.
     """
     missing: list[str] = []
-    for tbl in _DEVIATION_PREREQ_TABLES:
-        fqn = f"{catalog}.{schema}.{tbl}"
-        if not spark.catalog.tableExists(fqn):
-            missing.append(fqn)
+    if not _try_materialize_population_stats_from_sidecar(spark, catalog, schema):
+        missing.append(f"{catalog}.{schema}.feature_population_stats")
     gold_fqn = f"{catalog}.{schema}.gold_features_{composite_name}"
     if not spark.catalog.tableExists(gold_fqn):
         missing.append(gold_fqn)

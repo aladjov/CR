@@ -1,6 +1,7 @@
 """Tests for ``population_stats`` — compute helpers, row projection, MERGE wiring."""
 from __future__ import annotations
 
+import json
 import sys
 import types
 from datetime import datetime, timezone
@@ -239,6 +240,96 @@ class TestWritePopulationStats:
             PopulationStatsConfig(spark=spark, table_fqn="c.s.population_stats", run_id="r1", rows=rows)
         )
         assert n == 1
+
+        create_sql = spark.sql.call_args.args[0]
+        assert "CREATE TABLE IF NOT EXISTS c.s.population_stats" in create_sql
+        assert "USING DELTA" in create_sql
+
+        merge_condition = merge_builder.merge.call_args.args[1]
+        assert "t.run_id = s.run_id" in merge_condition
+        assert "t.feature_name = s.feature_name" in merge_condition
+
+
+class TestMaterializePopulationStatsFromSidecar:
+    """The dashboard's deviation views read a UC Delta table; the framework
+    writes population stats to a JSON sidecar on Volume. This bridge
+    helper materializes the sidecar into the UC table on demand so the
+    publisher doesn't have to skip the deviation block.
+    """
+
+    def test_missing_sidecar_returns_zero_without_write(self, tmp_path):
+        from customer_retention.stages.causal.population_stats import (
+            materialize_population_stats_from_sidecar,
+        )
+
+        spark = MagicMock()
+        n = materialize_population_stats_from_sidecar(
+            spark, tmp_path / "no_such.json", "c.s.population_stats"
+        )
+        assert n == 0
+        spark.sql.assert_not_called()
+
+    def test_empty_rows_is_noop(self, tmp_path):
+        from customer_retention.stages.causal.population_stats import (
+            materialize_population_stats_from_sidecar,
+        )
+
+        sidecar = tmp_path / "feature_population_stats.json"
+        sidecar.write_text(json.dumps({"rows": []}), encoding="utf-8")
+        spark = MagicMock()
+        n = materialize_population_stats_from_sidecar(
+            spark, sidecar, "c.s.population_stats"
+        )
+        assert n == 0
+        spark.sql.assert_not_called()
+
+    def test_materialises_rows_and_merges_keyed_on_run_id_feature_name(
+        self, tmp_path, monkeypatch,
+    ):
+        pytest.importorskip("pyspark")
+        delta_tables_module = types.ModuleType("delta.tables")
+        delta_module = types.ModuleType("delta")
+        merge_builder = MagicMock()
+        merge_builder.merge.return_value = merge_builder
+        merge_builder.whenMatchedUpdateAll.return_value = merge_builder
+        merge_builder.whenNotMatchedInsertAll.return_value = merge_builder
+        target_table = MagicMock()
+        target_table.alias.return_value = merge_builder
+        delta_table_cls = MagicMock()
+        delta_table_cls.forName.return_value = target_table
+        delta_tables_module.DeltaTable = delta_table_cls
+        delta_module.tables = delta_tables_module
+        monkeypatch.setitem(sys.modules, "delta", delta_module)
+        monkeypatch.setitem(sys.modules, "delta.tables", delta_tables_module)
+
+        from customer_retention.stages.causal.population_stats import (
+            materialize_population_stats_from_sidecar,
+        )
+
+        sidecar = tmp_path / "feature_population_stats.json"
+        sidecar.write_text(
+            json.dumps({"rows": [
+                {
+                    "run_id": "r1", "feature_name": "nps", "dtype": "numeric",
+                    "mean": 7.0, "stddev": 1.5,
+                    "q05": 4.0, "q25": 6.0, "q50": 7.0, "q75": 8.0, "q95": 9.5,
+                    "count_nonnull": 1000,
+                    "computed_at": "2026-04-28 10:30:00+00:00",
+                },
+                {
+                    "run_id": "r1", "feature_name": "active_span_days",
+                    "dtype": "numeric",
+                    "mean": 42.0, "stddev": 12.0,
+                },
+            ]}),
+            encoding="utf-8",
+        )
+
+        spark = MagicMock()
+        n = materialize_population_stats_from_sidecar(
+            spark, sidecar, "c.s.population_stats"
+        )
+        assert n == 2
 
         create_sql = spark.sql.call_args.args[0]
         assert "CREATE TABLE IF NOT EXISTS c.s.population_stats" in create_sql
