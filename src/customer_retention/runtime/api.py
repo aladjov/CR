@@ -9,5 +9,9 @@ from __future__ import annotations
 from .decorator import register
 from .logging import in_notebook, log, log_table
 from .registry import registry
+from .replay import replay_registered_landing_steps
 
-__all__ = ["register", "log", "log_table", "in_notebook", "registry"]
+__all__ = [
+    "register", "log", "log_table", "in_notebook", "registry",
+    "replay_registered_landing_steps",
+]

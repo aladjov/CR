@@ -126,15 +126,23 @@ class TestGuardRuntimeBehavior:
         assert "ml_catalog.retention.case_raw" in result
 
 
-class TestNB00BuildRegistryPrefersOriginalDatasets:
-    """Verify NB00 cell `915bcef8` reads from `_namespace.original_datasets`.
+class TestNB00RegistryAndOriginalDatasetsSeparation:
+    """Verify NB00 keeps exploration-side and production-side lineage separated.
 
-    This is a static check on the notebook source (the cell is exploration-
-    notebook code, not framework Python). Lifting the regression into a unit
-    test catches accidental reverts of the lineage source.
+    Contract:
+      - Cell `915bcef8 build_dataset_registry` records the post-mutation
+        `datasets[name]` as the registry path. NB01a needs this so
+        fingerprinting sees the lifecycle-enriched / filtered view.
+      - The same cell still guards against `global_temp.*` leaking into
+        the registry without an upstream entry in
+        `_namespace.original_datasets` — that condition would leave NB10
+        codegen with no upstream to replay landing from.
+      - Cell `e2c1f9a3 replay_registered_landing` auto-applies registered
+        landing-time transforms to `datasets[name]` so the operator can
+        skip Lane-2 mutation cells.
     """
 
-    def test_cell_reads_from_original_datasets(self):
+    def test_registry_path_uses_post_mutation_datasets(self):
         import json
         from pathlib import Path
         nb_path = Path(__file__).resolve().parents[3] / "exploration_notebooks" / "00_start_here.ipynb"
@@ -142,9 +150,8 @@ class TestNB00BuildRegistryPrefersOriginalDatasets:
         cell = next((c for c in nb["cells"] if c.get("id") == "915bcef8"), None)
         assert cell is not None, "build_dataset_registry cell not found"
         src = "".join(cell["source"])
-        assert "_namespace.original_datasets" in src
-        assert "_originals" in src
-        assert "_originals.get(name, datasets[name])" in src
+        assert "source = datasets[name]" in src
+        assert "_originals.get(name, datasets[name])" not in src
 
     def test_cell_fails_fast_on_unrecoverable_global_temp_leak(self):
         import json
@@ -155,4 +162,15 @@ class TestNB00BuildRegistryPrefersOriginalDatasets:
         src = "".join(cell["source"])
         assert 'startswith("global_temp.")' in src
         assert "raise RuntimeError" in src
-        assert "add_landing_filter" in src
+        assert "_namespace.original_datasets" in src
+
+    def test_replay_registered_landing_cell_present(self):
+        import json
+        from pathlib import Path
+        nb_path = Path(__file__).resolve().parents[3] / "exploration_notebooks" / "00_start_here.ipynb"
+        nb = json.loads(nb_path.read_text())
+        cell = next((c for c in nb["cells"] if c.get("id") == "e2c1f9a3"), None)
+        assert cell is not None, "replay_registered_landing cell not found"
+        src = "".join(cell["source"])
+        assert "replay_registered_landing_steps" in src
+        assert "from customer_retention.runtime import cr" in src
