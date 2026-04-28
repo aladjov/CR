@@ -94,28 +94,37 @@ class TestParserConstruction:
         parser = FindingsParser(findings_dir=str(tmp_path))
         assert parser.landing_lifecycle_overrides == {}
         assert parser.landing_filter_overrides == {}
+        assert parser.landing_drop_columns_overrides == {}
 
     def test_explicit_overrides_accepted(self, tmp_path):
         parser = FindingsParser(
             findings_dir=str(tmp_path),
             landing_lifecycle_overrides={"contract": _LIFECYCLE_CFG},
             landing_filter_overrides={"request": "ACCOUNT_ID IS NOT NULL"},
+            landing_drop_columns_overrides={"opportunity_product": ["opportunity_id"]},
         )
         assert parser.landing_lifecycle_overrides == {"contract": _LIFECYCLE_CFG}
         assert parser.landing_filter_overrides == {"request": "ACCOUNT_ID IS NOT NULL"}
+        assert parser.landing_drop_columns_overrides == {"opportunity_product": ["opportunity_id"]}
 
     def test_property_returns_copy(self, tmp_path):
         parser = FindingsParser(
             findings_dir=str(tmp_path),
             landing_lifecycle_overrides={"contract": _LIFECYCLE_CFG},
             landing_filter_overrides={"request": "ACCOUNT_ID IS NOT NULL"},
+            landing_drop_columns_overrides={"opportunity_product": ["opportunity_id"]},
         )
         ret_lc = parser.landing_lifecycle_overrides
         ret_lc["mutated"] = {}
         ret_f = parser.landing_filter_overrides
         ret_f["mutated"] = "x"
+        ret_d = parser.landing_drop_columns_overrides
+        ret_d["mutated"] = ["x"]
+        ret_d["opportunity_product"].append("mutated_inner")
         assert "mutated" not in parser.landing_lifecycle_overrides
         assert "mutated" not in parser.landing_filter_overrides
+        assert "mutated" not in parser.landing_drop_columns_overrides
+        assert parser.landing_drop_columns_overrides["opportunity_product"] == ["opportunity_id"]
 
 
 class TestApplyLandingOverrides:
@@ -242,6 +251,147 @@ class TestApplyLandingOverrides:
             parser.parse()
 
 
+class TestApplyLandingDropColumnsOverrides:
+    """`landing_drop_columns_overrides` — drop case-variant duplicates from
+    upstream UC tables BEFORE rename / filter / lifecycle / derivation steps.
+
+    Snowflake quoted-identifier columns (`"opportunity_id"`) and case-folded
+    siblings (`OPPORTUNITY_ID`) coexist in the source table; Spark's default
+    `caseSensitive=false` rejects the Delta `saveAsTable` with
+    `[COLUMN_ALREADY_EXISTS]`. This override drops the unwanted variant
+    case-EXACTLY via `df.select(...)` rather than case-insensitive `df.drop()`.
+    """
+
+    def test_drop_columns_override_appends_to_landing_config(self, tmp_path):
+        ns = _fake_namespace(tmp_path)
+        _write_event_findings(ns, "opportunity_product", "ml_catalog.retention.opportunity_product")
+        parser = FindingsParser(
+            findings_dir=str(ns.merged_dir), namespace=ns,
+            landing_drop_columns_overrides={"opportunity_product": ["opportunity_id"]},
+        )
+        config = parser.parse()
+        assert config.landing["opportunity_product"].drop_columns == ["opportunity_id"]
+
+    def test_default_no_drop_columns(self, tmp_path):
+        ns = _fake_namespace(tmp_path)
+        _write_event_findings(ns, "opportunity_product", "ml_catalog.retention.opportunity_product")
+        parser = FindingsParser(findings_dir=str(ns.merged_dir), namespace=ns)
+        config = parser.parse()
+        assert config.landing["opportunity_product"].drop_columns == []
+
+    def test_unknown_dataset_warns_but_does_not_raise(self, tmp_path, caplog):
+        ns = _fake_namespace(tmp_path)
+        _write_event_findings(ns, "opportunity_product", "ml_catalog.retention.opportunity_product")
+        parser = FindingsParser(
+            findings_dir=str(ns.merged_dir), namespace=ns,
+            landing_drop_columns_overrides={"unknown_ds": ["foo"]},
+        )
+        with caplog.at_level(logging.WARNING, logger="customer_retention.generators.pipeline_generator.findings_parser"):
+            config = parser.parse()
+        assert "unknown_ds" in " ".join(rec.message for rec in caplog.records)
+        assert config.landing["opportunity_product"].drop_columns == []
+
+    def test_empty_drop_list_is_skipped(self, tmp_path):
+        ns = _fake_namespace(tmp_path)
+        _write_event_findings(ns, "opportunity_product", "ml_catalog.retention.opportunity_product")
+        parser = FindingsParser(
+            findings_dir=str(ns.merged_dir), namespace=ns,
+            landing_drop_columns_overrides={"opportunity_product": []},
+        )
+        config = parser.parse()
+        assert config.landing["opportunity_product"].drop_columns == []
+
+    def test_drop_columns_dedup_preserves_existing(self, tmp_path):
+        """Re-applying the same column is a no-op; first-seen order kept."""
+        ns = _fake_namespace(tmp_path)
+        _write_event_findings(ns, "opportunity_product", "ml_catalog.retention.opportunity_product")
+        parser = FindingsParser(
+            findings_dir=str(ns.merged_dir), namespace=ns,
+            landing_drop_columns_overrides={
+                "opportunity_product": ["opportunity_id", "opportunity_id", "extra_col"],
+            },
+        )
+        config = parser.parse()
+        assert config.landing["opportunity_product"].drop_columns == ["opportunity_id", "extra_col"]
+
+    def test_drop_columns_iterable_input_accepted(self, tmp_path):
+        """Operator may pass a tuple — parser must accept any Iterable[str]."""
+        ns = _fake_namespace(tmp_path)
+        _write_event_findings(ns, "opportunity_product", "ml_catalog.retention.opportunity_product")
+        parser = FindingsParser(
+            findings_dir=str(ns.merged_dir), namespace=ns,
+            landing_drop_columns_overrides={"opportunity_product": ("opportunity_id",)},
+        )
+        config = parser.parse()
+        assert config.landing["opportunity_product"].drop_columns == ["opportunity_id"]
+
+
+class TestDatabricksRendererEmitsDropColumns:
+    """The generated Databricks landing script must use case-EXACT drops via
+    `df.select(...)`, not case-insensitive `df.drop(...)`. The drop block
+    runs BEFORE rename / filter steps so subsequent stages don't see the
+    dropped columns."""
+
+    def _make_landing(self, drop_columns):
+        from customer_retention.generators.pipeline_generator.models import (
+            LandingLayerConfig,
+            SourceConfig,
+        )
+        return LandingLayerConfig(
+            source=SourceConfig(
+                name="opportunity_product",
+                path="ml_catalog.retention.opportunity_product",
+                format="delta",
+                entity_key="entity_id",
+                raw_source_path="ml_catalog.retention.opportunity_product",
+                time_column="event_timestamp",
+                is_event_level=True,
+            ),
+            raw_source_path="ml_catalog.retention.opportunity_product",
+            raw_source_format="delta",
+            entity_column="entity_id",
+            time_column="event_timestamp",
+            target_column="churn",
+            drop_columns=list(drop_columns),
+        )
+
+    def test_drop_columns_emits_case_exact_select(self):
+        from customer_retention.generators.pipeline_generator.databricks_renderer import (
+            DatabricksCodeRenderer,
+        )
+
+        landing = self._make_landing(["opportunity_id"])
+        rendered = DatabricksCodeRenderer().render_landing("opportunity_product", landing)
+        assert "_drop_set = set(['opportunity_id'])" in rendered
+        assert "df.select(*[c for c in df.columns if c not in _drop_set])" in rendered
+        assert ".drop(\"opportunity_id\")" not in rendered
+        assert ".drop('opportunity_id')" not in rendered
+
+    def test_no_drop_block_when_empty(self):
+        from customer_retention.generators.pipeline_generator.databricks_renderer import (
+            DatabricksCodeRenderer,
+        )
+
+        landing = self._make_landing([])
+        rendered = DatabricksCodeRenderer().render_landing("opportunity_product", landing)
+        assert "_drop_set" not in rendered
+
+    def test_drop_runs_before_rename(self):
+        """drop_columns must execute BEFORE column renames so the rename
+        target survives even if the duplicate variant uses the time column's
+        spelling."""
+        from customer_retention.generators.pipeline_generator.databricks_renderer import (
+            DatabricksCodeRenderer,
+        )
+
+        landing = self._make_landing(["opportunity_id"])
+        landing.raw_time_column = "raw_event_ts"
+        rendered = DatabricksCodeRenderer().render_landing("opportunity_product", landing)
+        drop_idx = rendered.index("_drop_set")
+        rename_idx = rendered.index("withColumnRenamed")
+        assert drop_idx < rename_idx
+
+
 class TestGeneratorForwardsLandingOverrides:
     def test_pipeline_generator_forwards(self, tmp_path):
         from customer_retention.generators.pipeline_generator.generator import PipelineGenerator
@@ -251,9 +401,11 @@ class TestGeneratorForwardsLandingOverrides:
             pipeline_name="p",
             landing_lifecycle_overrides={"contract": _LIFECYCLE_CFG},
             landing_filter_overrides={"request": "x=1"},
+            landing_drop_columns_overrides={"opportunity_product": ["opportunity_id"]},
         )
         assert gen._parser.landing_lifecycle_overrides == {"contract": _LIFECYCLE_CFG}
         assert gen._parser.landing_filter_overrides == {"request": "x=1"}
+        assert gen._parser.landing_drop_columns_overrides == {"opportunity_product": ["opportunity_id"]}
 
     def test_databricks_generator_forwards(self, tmp_path):
         from customer_retention.generators.pipeline_generator.databricks_generator import (
@@ -265,9 +417,11 @@ class TestGeneratorForwardsLandingOverrides:
             pipeline_name="p",
             landing_lifecycle_overrides={"contract": _LIFECYCLE_CFG},
             landing_filter_overrides={"request": "x=1"},
+            landing_drop_columns_overrides={"opportunity_product": ["opportunity_id"]},
         )
         assert gen._parser.landing_lifecycle_overrides == {"contract": _LIFECYCLE_CFG}
         assert gen._parser.landing_filter_overrides == {"request": "x=1"}
+        assert gen._parser.landing_drop_columns_overrides == {"opportunity_product": ["opportunity_id"]}
 
     def test_pipeline_generator_default_is_empty(self, tmp_path):
         from customer_retention.generators.pipeline_generator.generator import PipelineGenerator
@@ -278,3 +432,4 @@ class TestGeneratorForwardsLandingOverrides:
         )
         assert gen._parser.landing_lifecycle_overrides == {}
         assert gen._parser.landing_filter_overrides == {}
+        assert gen._parser.landing_drop_columns_overrides == {}

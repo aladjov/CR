@@ -276,6 +276,7 @@ class LandingLayerConfig:
     key_resolution_steps: List[KeyResolutionStepConfig] = field(default_factory=list)
     filters: List[TransformationStep] = field(default_factory=list)
     lifecycle_enrichments: List[TransformationStep] = field(default_factory=list)
+    drop_columns: List[str] = field(default_factory=list)
 
 
 @dataclass

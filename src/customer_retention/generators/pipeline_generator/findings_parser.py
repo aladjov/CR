@@ -214,6 +214,7 @@ class FindingsParser:
         raw_source_path_overrides: Optional[Dict[str, str]] = None,
         landing_lifecycle_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
         landing_filter_overrides: Optional[Dict[str, str]] = None,
+        landing_drop_columns_overrides: Optional[Dict[str, Iterable[str]]] = None,
     ):
         self._findings_dir = Path(findings_dir)
         self._namespace = namespace
@@ -250,6 +251,18 @@ class FindingsParser:
         self._landing_filter_overrides: Dict[str, str] = (
             dict(landing_filter_overrides) if landing_filter_overrides else {}
         )
+        # `landing_drop_columns_overrides[<ds>]` carries a list of exact column
+        # names to drop from the upstream UC table at landing time, after the
+        # raw read and any rename / filter / lifecycle step. Drops are
+        # case-exact (`df.select(*[c for c in df.columns if c not in set])`)
+        # so a Snowflake quoted-identifier `"opportunity_id"` and the
+        # case-folded `OPPORTUNITY_ID` can be disambiguated rather than both
+        # silently dropped by Spark's case-insensitive `df.drop("...")`.
+        self._landing_drop_columns_overrides: Dict[str, List[str]] = {
+            ds: [str(c) for c in cols]
+            for ds, cols in (landing_drop_columns_overrides or {}).items()
+            if cols
+        }
         self._source_findings_paths: Dict[str, Path] = {}
         self._landing_sibling_findings: Dict[str, ExplorationFindings] = {}
         self._raw_source_columns: Dict[str, Set[str]] = {}
@@ -290,6 +303,10 @@ class FindingsParser:
     @property
     def landing_filter_overrides(self) -> Dict[str, str]:
         return dict(self._landing_filter_overrides)
+
+    @property
+    def landing_drop_columns_overrides(self) -> Dict[str, List[str]]:
+        return {k: list(v) for k, v in self._landing_drop_columns_overrides.items()}
 
     def _resolve_raw_source(self, name: str, fallback: Optional[str]) -> Optional[str]:
         """Apply the operator-supplied raw_source_path override for ``name``.
@@ -1046,6 +1063,21 @@ class FindingsParser:
                 rationale="NB10 LANDING_LIFECYCLE_OVERRIDES",
                 source_notebook="NB10",
             ))
+        for dataset, drop_cols in self._landing_drop_columns_overrides.items():
+            if not drop_cols:
+                continue
+            target = config.landing.get(dataset)
+            if target is None:
+                logger.warning(
+                    "landing_drop_columns_overrides: unknown dataset %r (known landing keys: %s); skipping.",
+                    dataset, sorted(config.landing.keys()),
+                )
+                continue
+            existing = set(target.drop_columns)
+            for col in drop_cols:
+                if col not in existing:
+                    target.drop_columns.append(col)
+                    existing.add(col)
 
     def _apply_landing_recommendations(
         self, config: PipelineConfig, registry: RecommendationRegistry

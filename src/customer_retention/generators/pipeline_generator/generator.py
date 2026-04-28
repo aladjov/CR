@@ -31,6 +31,7 @@ class PipelineGenerator(PipelineGeneratorBase):
         raw_source_path_overrides: Optional[Dict[str, str]] = None,
         landing_lifecycle_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
         landing_filter_overrides: Optional[Dict[str, str]] = None,
+        landing_drop_columns_overrides: Optional[Dict[str, Iterable[str]]] = None,
     ):
         self._findings_dir = Path(findings_dir)
         self._output_dir = Path(output_dir)
@@ -52,6 +53,7 @@ class PipelineGenerator(PipelineGeneratorBase):
             raw_source_path_overrides=raw_source_path_overrides,
             landing_lifecycle_overrides=landing_lifecycle_overrides,
             landing_filter_overrides=landing_filter_overrides,
+            landing_drop_columns_overrides=landing_drop_columns_overrides,
         )
         self._renderer = CodeRenderer()
         self._harvest_result = harvest_result

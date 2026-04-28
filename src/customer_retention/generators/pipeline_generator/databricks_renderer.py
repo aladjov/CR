@@ -2548,6 +2548,15 @@ def resolve_entity_key(df):
 
 def run_landing():
     df = load_source()
+{%- if config.drop_columns %}
+    # Case-EXACT drops (NB10 LANDING_DROP_COLUMNS_OVERRIDES). `df.drop(name)` is
+    # case-INSENSITIVE under default `spark.sql.caseSensitive=false`; using
+    # `df.select(*[c for c in df.columns if c not in <set>])` lets a Snowflake
+    # quoted-identifier `"opportunity_id"` be dropped without also dropping
+    # the case-folded `OPPORTUNITY_ID`.
+    _drop_set = set({{ config.drop_columns | python_repr }})
+    df = df.select(*[c for c in df.columns if c not in _drop_set])
+{%- endif %}
 {%- if config.raw_time_column %}
     df = df.withColumnRenamed("{{ config.raw_time_column }}", TIME_COLUMN)
 {%- endif %}
