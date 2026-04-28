@@ -531,6 +531,34 @@ details[open] > .cr-summary > .cr-summary-chevron { transform: rotate(90deg); }
   border-top: 1px dashed var(--line);
 }
 
+/* Empty-state for the left customer panel: visible explanation when no
+   ``customer`` data source is wired. Distinct from a regular profile so
+   it's obvious the panel is unconfigured rather than just empty. */
+.cr-customer-empty {
+  background: var(--paper-deep);
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 1.25rem 1.5rem;
+}
+.cr-customer-empty .cr-chapter-eyebrow { color: var(--yellow-800); }
+.cr-empty-checklist {
+  margin: 0.6rem 0 0.9rem 1.2rem;
+  padding: 0;
+  font-size: 0.95rem;
+  line-height: 1.55;
+  color: var(--ink-soft);
+}
+.cr-empty-checklist li { margin-bottom: 0.45rem; }
+.cr-empty-checklist code,
+.cr-customer-empty .cr-chapter-lead code {
+  font-family: var(--font-mono);
+  font-size: 0.82em;
+  background: var(--paper);
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  padding: 0.05em 0.35em;
+}
+
 /* Deviation panel — bidirectional bar chart, sign-coloured ---------------- */
 .cr-deviation .cr-chapter-lead { margin-bottom: 0.9rem; }
 

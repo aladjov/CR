@@ -168,10 +168,26 @@ def test_no_account_top_shap_features_hides_shap_panel(compiled_template, base_c
     assert "cr-shap" not in html
 
 
-def test_customer_left_panel_hidden_when_no_data(compiled_template, base_context):
+def test_customer_left_panel_shows_setup_hint_when_no_data(compiled_template, base_context):
+    # The default template renders a self-explanatory empty state when no
+    # ``customer`` data source is wired -- pointing the operator at the
+    # CR_PROFILE_TEMPLATE_PATH env var and the override docs. Previously
+    # the panel rendered nothing at all, which made the cause invisible.
     base_context.pop("customer", None)
     html = compiled_template(base_context, helpers=HELPERS)
-    assert "cr-customer-profile" not in html
+    assert "cr-customer-empty" in html
+    assert "CR_PROFILE_TEMPLATE_PATH" in html
+    assert "apply_profile_override" in html
+
+
+def test_customer_left_panel_renders_real_data_when_provided(compiled_template, base_context):
+    # When a dataset-specific template HAS wired the ``customer`` source
+    # (so its frontmatter populated this field), the empty-state hint
+    # must NOT show -- otherwise both blocks would stack.
+    base_context["customer"] = {"customer_since": "2024-01-15", "lifecycle_quadrant": "Active"}
+    html = compiled_template(base_context, helpers=HELPERS)
+    assert "cr-customer-empty" not in html
+    assert "Dataset-specific panel pending" not in html
 
 
 def test_two_column_grid_always_present(compiled_template, base_context):

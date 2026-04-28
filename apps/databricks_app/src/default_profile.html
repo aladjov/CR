@@ -66,7 +66,20 @@ data:
             <span class="cr-chapter-eyebrow">Customer</span>
             <h2 class="cr-chapter-title">Profile</h2>
           </header>
-          <p class="cr-chapter-lead">Override <code>CR_PROFILE_TEMPLATE_PATH</code> with a dataset-specific template to populate this panel from the project's own profile view.</p>
+          <p class="cr-chapter-lead">A dataset-specific template is loaded but did not declare any visible fields. Edit the template's frontmatter and HTML to surface the fields your CSMs need.</p>
+        </section>
+      {{else}}
+        <section class="cr-customer-profile cr-customer-empty">
+          <header class="cr-chapter-head">
+            <span class="cr-chapter-eyebrow">Customer profile not configured</span>
+            <h2 class="cr-chapter-title">Dataset-specific panel pending</h2>
+          </header>
+          <p class="cr-chapter-lead">No <code>customer</code> data source is declared in the active template. Two things to check:</p>
+          <ol class="cr-empty-checklist">
+            <li>The <code>apply_profile_override(...)</code> cell in <code>c05_snapshot_and_dashboard</code> has run on the cluster, so the per-dataset HTML is published at <code>/Volumes/&lt;cat&gt;/&lt;sch&gt;/dashboard_templates/&lt;dataset&gt;_profile.html</code>. The app auto-discovers the newest <code>.html</code> there — no env var needed.</li>
+            <li>If you want to pin a specific file, set the Databricks App env var <code>CR_PROFILE_TEMPLATE_PATH</code> — it overrides the auto-discovered template.</li>
+          </ol>
+          <p class="cr-chapter-lead">See <code>docs/ech_notebook_ux_overrides.md</code> (email-churn) or <code>docs/sps_notebook_ux_overrides.md</code> (SPS) for the ready-to-paste cells.</p>
         </section>
       {{/if}}
     </div>
