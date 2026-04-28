@@ -38,6 +38,107 @@ class TestRenderDashboardViewSql:
         assert rendered1 == rendered2
 
 
+def _view_block(rendered: str, view_name: str) -> str:
+    """Return the SQL chunk that defines ``view_name`` (CREATE OR REPLACE
+    VIEW ... up to its terminating ``;``)."""
+    import re as _re
+
+    m = _re.search(
+        rf"CREATE OR REPLACE VIEW [^\s]*\.{view_name} AS(.*?);",
+        rendered,
+        _re.DOTALL,
+    )
+    assert m, f"view {view_name!r} not found in rendered SQL"
+    return m.group(0)
+
+
+class TestEntityGrainSemantics:
+    """Pin the per-account semantics of the dashboard surface.
+
+    ``eligibility_snapshot`` is keyed on ``(scoring_run_id, entity_id,
+    playbook_id)`` -- naively summing rows multi-counts every account that
+    matches more than one play. The dashboard collapses to the primary
+    play per entity via ``v_account_primary_recommendation`` and routes
+    every entity-grain rollup through it. These tests catch the regression
+    where a future edit reverts to row-grain.
+    """
+
+    def test_primary_recommendation_view_exists(self):
+        rendered = render_dashboard_view_sql("c", "s")
+        assert "c.s.v_account_primary_recommendation" in rendered
+
+    def test_primary_recommendation_view_partitions_by_entity(self):
+        block = _view_block(
+            render_dashboard_view_sql("c", "s"),
+            "v_account_primary_recommendation",
+        )
+        # Entity-grain collapse: ROW_NUMBER() OVER (PARTITION BY entity_id)
+        # picks one row per entity, then WHERE entity_rank = 1 enforces it.
+        assert "PARTITION BY entity_id" in block
+        assert "entity_rank = 1" in block
+
+    def test_primary_recommendation_view_carries_alternates_array(self):
+        block = _view_block(
+            render_dashboard_view_sql("c", "s"),
+            "v_account_primary_recommendation",
+        )
+        # Plays the account also passed eligibility for ride along on the
+        # primary row as an array of structs (playbook_name + scoring) so
+        # the dashboard never has to fan out to multi-grain rows.
+        assert "alternates" in block
+        assert "alternate_count" in block
+        assert "COLLECT_LIST" in block
+        for field in (
+            "'playbook_id'",
+            "'playbook_name'",
+            "'churn_probability'",
+            "'fit_score'",
+            "'expected_uplift_pct'",
+        ):
+            assert field in block, f"alternates struct missing field {field}"
+
+    def test_primary_recommendation_ranks_recommended_first(self):
+        block = _view_block(
+            render_dashboard_view_sql("c", "s"),
+            "v_account_primary_recommendation",
+        )
+        # When an account is recommended for one play and merely eligible
+        # for another, the recommended one wins as primary.
+        assert "CASE WHEN recommended THEN 0 ELSE 1 END" in block
+
+    def test_portfolio_risk_matrix_sources_from_primary_view(self):
+        # The L1 KPI tiles route through the entity-grain view so summing
+        # eligible_count == DISTINCT entity count, never row count.
+        block = _view_block(
+            render_dashboard_view_sql("c", "s"),
+            "v_portfolio_risk_matrix",
+        )
+        assert "v_account_primary_recommendation" in block
+        # Must NOT touch eligibility_snapshot directly -- doing so would
+        # reintroduce the multi-counting bug.
+        assert "eligibility_snapshot" not in block
+
+    def test_playbook_archetype_rollup_sources_from_primary_view(self):
+        block = _view_block(
+            render_dashboard_view_sql("c", "s"),
+            "v_playbook_archetype_rollup",
+        )
+        assert "v_account_primary_recommendation" in block
+        assert "eligibility_snapshot" not in block
+
+    def test_eligible_all_playbooks_sources_from_primary_view(self):
+        # L3 cohort drill is also entity-grain: drilling into a playbook
+        # shows accounts whose PRIMARY play is that playbook (others ride
+        # on the alternates array). The user-facing question "which
+        # customers should I act on under play X" is per-account.
+        block = _view_block(
+            render_dashboard_view_sql("c", "s"),
+            "v_eligible_all_playbooks",
+        )
+        assert "v_account_primary_recommendation" in block
+        assert "eligibility_snapshot" not in block
+
+
 class TestSplitViewStatements:
     def test_splits_one_statement_per_named_view(self):
         rendered = render_dashboard_view_sql("c", "s")

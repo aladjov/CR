@@ -38,6 +38,7 @@ DASHBOARD_VIEW_NAMES: tuple[str, ...] = (
     "v_holdout_assignments",
     "v_capacity_utilization",
     "v_run_anchor_history",
+    "v_account_primary_recommendation",
     "v_portfolio_risk_matrix",
     "v_playbook_archetype_rollup",
     "v_eligible_all_playbooks",

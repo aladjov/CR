@@ -260,41 +260,184 @@ ORDER BY as_of_date DESC;
 -- ============================================================================
 
 -- ============================================================================
--- 7. v_portfolio_risk_matrix (L1 — portfolio)
+-- 6b. v_account_primary_recommendation (entity-grain anchor for the dashboard)
 -- ----------------------------------------------------------------------------
--- Pre-aggregated (playbook, risk_tier) matrix for the latest scoring run.
--- Powers the landing-page heat-map, the "total value at risk by playbook"
--- bar, and the KPI cards. Computed on the full snapshot (no visibility
--- filter) so portfolio totals stay truthful — account-grain drill-downs apply
--- the visibility flag downstream.
+-- One row per (scoring_run_id, entity_id) for the latest scoring run -- the
+-- account's PRIMARY play (recommended-first, then policy_rank ASC, then
+-- expected_loss DESC) plus an ``alternates`` array of every other play the
+-- account passed eligibility for, with playbook_name / fit_score /
+-- churn_probability / expected_uplift attached.
+--
+-- Source of truth for portfolio KPIs and every entity-grain aggregation in
+-- the app. ``v_portfolio_risk_matrix`` and ``v_playbook_archetype_rollup``
+-- are rewritten to source from this view so SUM(eligible_count) at any
+-- partition collapses to a DISTINCT entity count instead of an
+-- account-x-playbook row count.
 -- ============================================================================
-CREATE OR REPLACE VIEW {catalog}.{schema}.v_portfolio_risk_matrix AS
+CREATE OR REPLACE VIEW {catalog}.{schema}.v_account_primary_recommendation AS
 WITH latest_run AS (
     SELECT scoring_run_id
     FROM {catalog}.{schema}.eligibility_snapshot
     WHERE as_of_date = (SELECT MAX(as_of_date) FROM {catalog}.{schema}.eligibility_snapshot)
     LIMIT 1
 ),
+archetype_names AS (
+    SELECT archetype_id, MAX(name) AS archetype_name
+    FROM {catalog}.{schema}.archetype_catalog
+    WHERE status = 'active'
+    GROUP BY archetype_id
+),
 playbook_names AS (
     SELECT playbook_id, MAX(name) AS playbook_name
     FROM {catalog}.{schema}.playbook_catalog
     GROUP BY playbook_id
+),
+active_policies AS (
+    SELECT
+        playbook_id,
+        MAX(fit_score) AS fit_score,
+        MAX(expected_uplift_pct) AS expected_uplift_pct
+    FROM {catalog}.{schema}.eligibility_policy
+    WHERE status = 'active'
+    GROUP BY playbook_id
+),
+joined AS (
+    SELECT
+        s.entity_id,
+        s.playbook_id,
+        s.playbook_version,
+        COALESCE(pn.playbook_name, s.playbook_id) AS playbook_name,
+        s.archetype_id,
+        s.archetype_version,
+        COALESCE(an.archetype_name, s.archetype_id) AS archetype_name,
+        s.risk_tier,
+        s.churn_probability,
+        s.value_at_risk,
+        COALESCE(s.churn_probability, 0.0) * COALESCE(s.value_at_risk, 0.0) AS expected_loss,
+        s.policy_rank_among_eligible,
+        s.priority_rank_within_cohort,
+        s.eligible_playbook_count,
+        s.eligibility_evidence,
+        s.top_shap_features,
+        s.recommended,
+        s.is_holdout,
+        s.playbook_suppressed_reason,
+        ap.fit_score,
+        ap.expected_uplift_pct,
+        s.eligibility_policy_id,
+        s.decision_policy_id,
+        s.model_name,
+        s.model_version,
+        s.scoring_run_id,
+        s.as_of_date
+    FROM {catalog}.{schema}.eligibility_snapshot s
+    JOIN latest_run lr ON s.scoring_run_id = lr.scoring_run_id
+    LEFT JOIN archetype_names an ON s.archetype_id = an.archetype_id
+    LEFT JOIN playbook_names pn ON s.playbook_id = pn.playbook_id
+    LEFT JOIN active_policies ap ON ap.playbook_id = s.playbook_id
+    WHERE COALESCE(s.is_dashboard_visible, TRUE) = TRUE
+),
+ranked AS (
+    SELECT
+        joined.*,
+        ROW_NUMBER() OVER (
+            PARTITION BY entity_id
+            ORDER BY
+                -- Recommended plays beat eligible-but-not-recommended.
+                CASE WHEN recommended THEN 0 ELSE 1 END,
+                -- Lower policy_rank wins (1 = top).
+                COALESCE(policy_rank_among_eligible, 2147483647) ASC,
+                -- Highest expected loss as tiebreak.
+                COALESCE(expected_loss, -1.0) DESC,
+                -- Stable final tiebreak so the choice is deterministic.
+                playbook_id ASC
+        ) AS entity_rank
+    FROM joined
+),
+alternates_collected AS (
+    SELECT
+        entity_id,
+        COLLECT_LIST(NAMED_STRUCT(
+            'playbook_id',                playbook_id,
+            'playbook_name',              playbook_name,
+            'risk_tier',                  risk_tier,
+            'churn_probability',          churn_probability,
+            'expected_loss',              expected_loss,
+            'fit_score',                  fit_score,
+            'expected_uplift_pct',        expected_uplift_pct,
+            'policy_rank_among_eligible', policy_rank_among_eligible,
+            'recommended',                recommended
+        )) AS alternates
+    FROM ranked
+    WHERE entity_rank > 1
+    GROUP BY entity_id
 )
 SELECT
-    s.playbook_id,
-    COALESCE(pn.playbook_name, s.playbook_id) AS playbook_name,
-    s.risk_tier,
+    p.entity_id,
+    p.playbook_id,
+    p.playbook_version,
+    p.playbook_name,
+    p.archetype_id,
+    p.archetype_version,
+    p.archetype_name,
+    p.risk_tier,
+    p.churn_probability,
+    p.value_at_risk,
+    p.expected_loss,
+    p.policy_rank_among_eligible,
+    p.priority_rank_within_cohort,
+    p.eligible_playbook_count,
+    p.eligibility_evidence,
+    p.top_shap_features,
+    p.recommended,
+    p.is_holdout,
+    p.playbook_suppressed_reason,
+    p.fit_score,
+    p.expected_uplift_pct,
+    p.eligibility_policy_id,
+    p.decision_policy_id,
+    p.model_name,
+    p.model_version,
+    -- Other plays the account also passed eligibility for, sorted by
+    -- expected_loss DESC so the most-impactful alternate sits first.
+    ARRAY_SORT(
+        COALESCE(alts.alternates, ARRAY()),
+        (a1, a2) ->
+            CASE
+                WHEN COALESCE(a1.expected_loss, -1.0) > COALESCE(a2.expected_loss, -1.0) THEN -1
+                WHEN COALESCE(a1.expected_loss, -1.0) < COALESCE(a2.expected_loss, -1.0) THEN 1
+                ELSE 0
+            END
+    ) AS alternates,
+    SIZE(COALESCE(alts.alternates, ARRAY())) AS alternate_count,
+    p.scoring_run_id,
+    p.as_of_date
+FROM ranked p
+LEFT JOIN alternates_collected alts ON alts.entity_id = p.entity_id
+WHERE p.entity_rank = 1;
+
+-- ============================================================================
+-- 7. v_portfolio_risk_matrix (L1 — portfolio)
+-- ----------------------------------------------------------------------------
+-- Per-account (primary playbook, risk_tier) matrix for the latest scoring
+-- run. Each row in the source view ``v_account_primary_recommendation`` is
+-- one ENTITY -- so SUM(eligible_count) over the whole view = number of
+-- accounts in scope, never multi-counted.
+-- ============================================================================
+CREATE OR REPLACE VIEW {catalog}.{schema}.v_portfolio_risk_matrix AS
+SELECT
+    p.playbook_id,
+    p.playbook_name,
+    p.risk_tier,
     COUNT(*) AS eligible_count,
-    SUM(CASE WHEN s.recommended THEN 1 ELSE 0 END) AS recommended_count,
-    SUM(CASE WHEN s.is_holdout THEN 1 ELSE 0 END) AS holdout_count,
-    SUM(CASE WHEN s.playbook_suppressed_reason IS NOT NULL THEN 1 ELSE 0 END) AS suppressed_count,
-    SUM(COALESCE(s.value_at_risk, 0)) AS total_value_at_risk,
-    AVG(s.churn_probability) AS mean_churn_probability,
-    s.scoring_run_id
-FROM {catalog}.{schema}.eligibility_snapshot s
-JOIN latest_run lr ON s.scoring_run_id = lr.scoring_run_id
-LEFT JOIN playbook_names pn ON s.playbook_id = pn.playbook_id
-GROUP BY s.playbook_id, pn.playbook_name, s.risk_tier, s.scoring_run_id;
+    SUM(CASE WHEN p.recommended THEN 1 ELSE 0 END) AS recommended_count,
+    SUM(CASE WHEN p.is_holdout THEN 1 ELSE 0 END) AS holdout_count,
+    SUM(CASE WHEN p.playbook_suppressed_reason IS NOT NULL THEN 1 ELSE 0 END) AS suppressed_count,
+    SUM(COALESCE(p.value_at_risk, 0)) AS total_value_at_risk,
+    AVG(p.churn_probability) AS mean_churn_probability,
+    p.scoring_run_id
+FROM {catalog}.{schema}.v_account_primary_recommendation p
+GROUP BY p.playbook_id, p.playbook_name, p.risk_tier, p.scoring_run_id;
 
 -- ============================================================================
 -- 8. v_playbook_archetype_rollup (L2 — playbook drill)
@@ -306,149 +449,85 @@ GROUP BY s.playbook_id, pn.playbook_name, s.risk_tier, s.scoring_run_id;
 -- chosen archetype + tier and hands off to v_eligible_all_playbooks.
 -- ============================================================================
 CREATE OR REPLACE VIEW {catalog}.{schema}.v_playbook_archetype_rollup AS
-WITH latest_run AS (
-    SELECT scoring_run_id
-    FROM {catalog}.{schema}.eligibility_snapshot
-    WHERE as_of_date = (SELECT MAX(as_of_date) FROM {catalog}.{schema}.eligibility_snapshot)
-    LIMIT 1
-),
-archetype_names AS (
-    SELECT archetype_id, MAX(name) AS archetype_name
-    FROM {catalog}.{schema}.archetype_catalog
-    WHERE status = 'active'
-    GROUP BY archetype_id
-),
-playbook_names AS (
-    SELECT playbook_id, MAX(name) AS playbook_name
-    FROM {catalog}.{schema}.playbook_catalog
-    GROUP BY playbook_id
-)
 SELECT
-    s.playbook_id,
-    COALESCE(pn.playbook_name, s.playbook_id) AS playbook_name,
-    s.archetype_id,
-    COALESCE(an.archetype_name, s.archetype_id) AS archetype_name,
-    s.risk_tier,
+    p.playbook_id,
+    p.playbook_name,
+    p.archetype_id,
+    p.archetype_name,
+    p.risk_tier,
     COUNT(*) AS account_count,
-    SUM(CASE WHEN s.recommended THEN 1 ELSE 0 END) AS recommended_count,
-    SUM(CASE WHEN s.is_holdout THEN 1 ELSE 0 END) AS holdout_count,
-    AVG(s.churn_probability) AS mean_churn_probability,
-    SUM(COALESCE(s.value_at_risk, 0)) AS total_value_at_risk,
-    s.scoring_run_id
-FROM {catalog}.{schema}.eligibility_snapshot s
-JOIN latest_run lr ON s.scoring_run_id = lr.scoring_run_id
-LEFT JOIN archetype_names an ON s.archetype_id = an.archetype_id
-LEFT JOIN playbook_names pn ON s.playbook_id = pn.playbook_id
+    SUM(CASE WHEN p.recommended THEN 1 ELSE 0 END) AS recommended_count,
+    SUM(CASE WHEN p.is_holdout THEN 1 ELSE 0 END) AS holdout_count,
+    AVG(p.churn_probability) AS mean_churn_probability,
+    SUM(COALESCE(p.value_at_risk, 0)) AS total_value_at_risk,
+    p.scoring_run_id
+FROM {catalog}.{schema}.v_account_primary_recommendation p
 GROUP BY
-    s.playbook_id,
-    pn.playbook_name,
-    s.archetype_id,
-    an.archetype_name,
-    s.risk_tier,
-    s.scoring_run_id;
+    p.playbook_id,
+    p.playbook_name,
+    p.archetype_id,
+    p.archetype_name,
+    p.risk_tier,
+    p.scoring_run_id;
 
 -- ============================================================================
--- 9. v_eligible_all_playbooks (L3 — account cohort)
+-- 9. v_eligible_all_playbooks (L3 — account cohort, entity-grain)
 -- ----------------------------------------------------------------------------
--- Per-account rows for the latest scoring run, one per (entity, playbook)
--- eligibility match — unlike v_ranked_at_risk_customers, NOT filtered to
--- policy_rank_among_eligible = 1. Enables honest playbook-scoped cohorts
--- (an account eligible under three playbooks appears three times so
--- drilling into any of those playbooks sees its full cohort).
+-- Per-account rows for the latest scoring run -- one row per ENTITY at its
+-- PRIMARY play, sourced from ``v_account_primary_recommendation``. This is
+-- a deliberate semantic shift from the older multi-grain version (one row
+-- per (entity, playbook) eligibility match): the dashboard answers "of all
+-- customers right now, which ones should the CSM act on?" and that answer
+-- is per-account. Other plays an account also passed eligibility for ride
+-- along on the ``alternates`` array.
 --
--- Row cap: rows surface only when ``top_shap_features`` is populated. The
--- per-slice top-K writer (``top_drivers_writer.py``, c05 step 5.2) emits
--- SHAP for the top K accounts of every (playbook, archetype, risk_tier)
--- slice ranked by expected_loss = churn_probability × value_at_risk; the
--- COALESCE join below pulls those drivers in. Slices without SHAP simply
--- return zero rows — there is no second cap fighting the writer's K.
+-- Row cap: ``slice_rank`` ranks accounts within (playbook, archetype,
+-- risk_tier) by expected_loss DESC then churn_probability DESC, so the
+-- caller can ``WHERE slice_rank <= K`` for top-K-per-slice surfaces. SHAP
+-- drivers come from ``top_shap_features`` on the snapshot row when present
+-- and fall back to ``top_shap_drivers`` model-keyed rows otherwise.
 --
--- Visibility: respects is_dashboard_visible with COALESCE(..., TRUE) so
--- rows written before the flag existed still surface.
+-- Visibility honored upstream by ``v_account_primary_recommendation``.
 -- ============================================================================
 CREATE OR REPLACE VIEW {catalog}.{schema}.v_eligible_all_playbooks AS
-WITH latest_run AS (
-    SELECT scoring_run_id
-    FROM {catalog}.{schema}.eligibility_snapshot
-    WHERE as_of_date = (SELECT MAX(as_of_date) FROM {catalog}.{schema}.eligibility_snapshot)
-    LIMIT 1
-),
-archetype_names AS (
-    SELECT archetype_id, MAX(name) AS archetype_name
-    FROM {catalog}.{schema}.archetype_catalog
-    WHERE status = 'active'
-    GROUP BY archetype_id
-),
-playbook_names AS (
-    SELECT playbook_id, MAX(name) AS playbook_name
-    FROM {catalog}.{schema}.playbook_catalog
-    GROUP BY playbook_id
-),
-joined AS (
+WITH base AS (
     SELECT
-        s.entity_id,
-        s.playbook_id,
-        s.playbook_version,
-        COALESCE(pn.playbook_name, s.playbook_id) AS playbook_name,
-        s.archetype_id,
-        COALESCE(an.archetype_name, s.archetype_id) AS archetype_name,
-        s.risk_tier,
-        s.churn_probability,
-        s.value_at_risk,
-        COALESCE(s.churn_probability, 0.0) * COALESCE(s.value_at_risk, 0.0) AS expected_loss,
-        s.policy_rank_among_eligible,
-        s.priority_rank_within_cohort,
-        s.eligible_playbook_count,
-        s.eligibility_evidence,
-        COALESCE(s.top_shap_features, d.top_drivers) AS top_shap_features,
-        s.recommended,
-        s.is_holdout,
-        s.playbook_suppressed_reason,
-        s.scoring_run_id,
-        s.as_of_date
-    FROM {catalog}.{schema}.eligibility_snapshot s
-    JOIN latest_run lr ON s.scoring_run_id = lr.scoring_run_id
-    LEFT JOIN archetype_names an ON s.archetype_id = an.archetype_id
-    LEFT JOIN playbook_names pn ON s.playbook_id = pn.playbook_id
+        p.entity_id,
+        p.playbook_id,
+        p.playbook_version,
+        p.playbook_name,
+        p.archetype_id,
+        p.archetype_name,
+        p.risk_tier,
+        p.churn_probability,
+        p.value_at_risk,
+        p.expected_loss,
+        p.policy_rank_among_eligible,
+        p.priority_rank_within_cohort,
+        p.eligible_playbook_count,
+        p.eligibility_evidence,
+        COALESCE(p.top_shap_features, d.top_drivers) AS top_shap_features,
+        p.recommended,
+        p.is_holdout,
+        p.playbook_suppressed_reason,
+        p.alternates,
+        p.alternate_count,
+        p.scoring_run_id,
+        p.as_of_date
+    FROM {catalog}.{schema}.v_account_primary_recommendation p
     LEFT JOIN {catalog}.{schema}.top_shap_drivers d
-           ON d.model_name = s.model_name
-          AND d.model_version = s.model_version
-          AND d.entity_id = s.entity_id
-    WHERE COALESCE(s.is_dashboard_visible, TRUE) = TRUE
-),
-ranked AS (
-    SELECT
-        joined.*,
-        ROW_NUMBER() OVER (
-            PARTITION BY playbook_id, archetype_id, risk_tier
-            ORDER BY expected_loss DESC, churn_probability DESC
-        ) AS slice_rank
-    FROM joined
-    WHERE top_shap_features IS NOT NULL
+           ON d.model_name = p.model_name
+          AND d.model_version = p.model_version
+          AND d.entity_id = p.entity_id
 )
 SELECT
-    entity_id,
-    playbook_id,
-    playbook_version,
-    playbook_name,
-    archetype_id,
-    archetype_name,
-    risk_tier,
-    churn_probability,
-    value_at_risk,
-    expected_loss,
-    policy_rank_among_eligible,
-    priority_rank_within_cohort,
-    eligible_playbook_count,
-    eligibility_evidence,
-    top_shap_features,
-    recommended,
-    is_holdout,
-    playbook_suppressed_reason,
-    scoring_run_id,
-    as_of_date,
-    slice_rank
-FROM ranked;
+    base.*,
+    ROW_NUMBER() OVER (
+        PARTITION BY playbook_id, archetype_id, risk_tier
+        ORDER BY expected_loss DESC, churn_probability DESC
+    ) AS slice_rank
+FROM base
+WHERE top_shap_features IS NOT NULL;
 
 -- ============================================================================
 -- 10. v_account_explanation (L4 — per-account interpretation)
