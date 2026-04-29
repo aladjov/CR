@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from customer_retention.stages.causal.dashboard_views import (
+    DASHBOARD_PROVENANCE_VIEW_NAMES,
     DASHBOARD_VIEW_NAMES,
     load_dashboard_view_sql,
     publish_dashboard_views,
@@ -143,7 +144,10 @@ class TestSplitViewStatements:
     def test_splits_one_statement_per_named_view(self):
         rendered = render_dashboard_view_sql("c", "s")
         statements = split_view_statements(rendered)
-        assert len(statements) == len(DASHBOARD_VIEW_NAMES)
+        # Default render includes the (gated-at-publish-time) provenance view.
+        assert len(statements) == len(DASHBOARD_VIEW_NAMES) + len(
+            DASHBOARD_PROVENANCE_VIEW_NAMES
+        )
         for stmt in statements:
             assert "CREATE OR REPLACE VIEW" in stmt
 
@@ -190,7 +194,10 @@ class TestPublishDashboardViews:
     def test_publishes_one_statement_per_named_view(self):
         spark = MagicMock()
         statements = publish_dashboard_views(spark, "c", "s")
-        expected = len(DASHBOARD_VIEW_NAMES)
+        # MagicMock's tableExists returns truthy for the provenance prereqs
+        # (feature_meta + column_descriptions), so the publisher includes the
+        # provenance view too.
+        expected = len(DASHBOARD_VIEW_NAMES) + len(DASHBOARD_PROVENANCE_VIEW_NAMES)
         assert len(statements) == expected
         # publish_dashboard_views also issues a CREATE TABLE IF NOT EXISTS for
         # run_context (the v_run_context view references it and Spark validates

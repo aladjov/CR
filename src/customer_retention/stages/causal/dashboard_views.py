@@ -31,6 +31,13 @@ _VIEW_FILE_NAME = "dashboard_views.sql"
 _DEVIATION_BLOCK_OPEN = "-- @cr:deviation-block:open"
 _DEVIATION_BLOCK_CLOSE = "-- @cr:deviation-block:close"
 
+# Sentinel-delimited block for v_feature_provenance — gated on the optional
+# feature_meta + column_descriptions tables existing in UC. Older causal-track
+# builds did not produce these tables; the view's CREATE OR REPLACE would fail
+# at validation time on those clusters and take the whole publish call down.
+_PROVENANCE_BLOCK_OPEN = "-- @cr:provenance-block:open"
+_PROVENANCE_BLOCK_CLOSE = "-- @cr:provenance-block:close"
+
 DASHBOARD_VIEW_NAMES: tuple[str, ...] = (
     "v_ranked_at_risk_customers",
     "v_archetype_overview",
@@ -44,11 +51,13 @@ DASHBOARD_VIEW_NAMES: tuple[str, ...] = (
     "v_eligible_all_playbooks",
     "v_account_explanation",
     "v_run_context",
-    "v_feature_provenance",
 )
 DASHBOARD_DEVIATION_VIEW_NAMES: tuple[str, ...] = (
     "v_account_feature_deviation",
     "v_account_feature_deviation_topn",
+)
+DASHBOARD_PROVENANCE_VIEW_NAMES: tuple[str, ...] = (
+    "v_feature_provenance",
 )
 
 
@@ -82,25 +91,50 @@ def _strip_deviation_markers(sql_text: str) -> str:
     )
 
 
+def _strip_provenance_block(sql_text: str) -> str:
+    """Drop the ``@cr:provenance-block`` section so the rendered SQL parses
+    on clusters that don't yet have ``feature_meta`` / ``column_descriptions``.
+    """
+    pattern = re.compile(
+        re.escape(_PROVENANCE_BLOCK_OPEN) + r".*?" + re.escape(_PROVENANCE_BLOCK_CLOSE),
+        re.DOTALL,
+    )
+    return pattern.sub("", sql_text)
+
+
+def _strip_provenance_markers(sql_text: str) -> str:
+    return "\n".join(
+        line for line in sql_text.splitlines()
+        if line.strip() not in (_PROVENANCE_BLOCK_OPEN, _PROVENANCE_BLOCK_CLOSE)
+    )
+
+
 def render_dashboard_view_sql(
     catalog: str,
     schema: str,
     *,
     composite_name: Optional[str] = None,
+    include_provenance: bool = True,
 ) -> str:
     """Substitute ``{catalog}`` / ``{schema}`` (and optionally ``{composite_name}``)
     into the raw SQL template.
 
     When ``composite_name`` is omitted, the deviation views (which reference
     ``gold_features_{composite_name}``) are stripped from the output so the
-    remaining DDL stays parseable.  Existing callers that don't supply the
-    parameter keep their previous behaviour.
+    remaining DDL stays parseable. ``include_provenance=False`` strips the
+    ``v_feature_provenance`` block — used by the publisher when the optional
+    ``feature_meta`` / ``column_descriptions`` tables aren't materialized yet
+    so the view's CREATE OR REPLACE wouldn't validate.
     """
     text = load_dashboard_view_sql()
     if composite_name:
         text = _strip_deviation_markers(text).replace("{composite_name}", composite_name)
     else:
         text = _strip_deviation_block(text)
+    if include_provenance:
+        text = _strip_provenance_markers(text)
+    else:
+        text = _strip_provenance_block(text)
     return text.replace("{catalog}", catalog).replace("{schema}", schema)
 
 
@@ -230,6 +264,29 @@ def _try_materialize_population_stats_from_sidecar(
     return spark.catalog.tableExists(fqn)
 
 
+_PROVENANCE_PREREQ_TABLES: tuple[str, ...] = (
+    "feature_meta",
+    "column_descriptions",
+)
+
+
+def _provenance_prerequisites_present(
+    spark: "SparkSession", catalog: str, schema: str
+) -> tuple[bool, list[str]]:
+    """Return ``(ok, missing)`` for tables ``v_feature_provenance`` reads.
+
+    Older causal-track builds did not write ``feature_meta`` /
+    ``column_descriptions`` — on those clusters the provenance view is
+    skipped so the rest of the dashboard publishes successfully.
+    """
+    missing: list[str] = []
+    for tbl in _PROVENANCE_PREREQ_TABLES:
+        fqn = f"{catalog}.{schema}.{tbl}"
+        if not spark.catalog.tableExists(fqn):
+            missing.append(fqn)
+    return (not missing), missing
+
+
 def _deviation_prerequisites_present(
     spark: "SparkSession", catalog: str, schema: str, composite_name: str
 ) -> tuple[bool, list[str]]:
@@ -296,7 +353,21 @@ def publish_dashboard_views(
             )
             effective_composite = None
 
-    rendered = render_dashboard_view_sql(catalog, schema, composite_name=effective_composite)
+    include_provenance, prov_missing = _provenance_prerequisites_present(spark, catalog, schema)
+    if not include_provenance:
+        logger.warning(
+            "v_feature_provenance skipped: missing prerequisite table(s) %s; "
+            "publishing the rest of the dashboard. Re-run gold materialization "
+            "to populate feature_meta / column_descriptions and republish.",
+            ", ".join(prov_missing),
+        )
+
+    rendered = render_dashboard_view_sql(
+        catalog,
+        schema,
+        composite_name=effective_composite,
+        include_provenance=include_provenance,
+    )
     statements = split_view_statements(rendered)
     submitted: List[str] = []
     for stmt in statements:

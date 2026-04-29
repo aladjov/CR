@@ -811,6 +811,7 @@ FROM ranked
 WHERE deviation_rank <= 12;
 -- @cr:deviation-block:close
 
+-- @cr:provenance-block:open
 -- ============================================================================
 -- 14. v_feature_provenance (per-feature lineage + business definition)
 -- ----------------------------------------------------------------------------
@@ -884,3 +885,4 @@ SELECT
     cd.source_column_defs
 FROM fm
 LEFT JOIN col_defs cd ON cd.feature_name = fm.feature_name;
+-- @cr:provenance-block:close
