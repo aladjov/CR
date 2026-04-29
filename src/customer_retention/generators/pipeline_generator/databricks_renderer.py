@@ -2680,7 +2680,7 @@ def _spark_job_id():
     try: return spark._jsc.sc().dagScheduler().nextJobId().get()
     except Exception: return -1
 
-def run_notebook(path, timeout=3600):
+def run_notebook(path, timeout=86400):
     sj_before = _spark_job_id()
     start = time.time()
     try:

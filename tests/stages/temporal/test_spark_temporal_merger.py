@@ -574,11 +574,8 @@ class TestMergeAllLineageBreaking:
     def test_checkpoint_called_per_dataset(self, monkeypatch):
         _patch_native_spark(monkeypatch)
         checkpoint_calls = []
-        original_break = None
 
-        # Import after patching to get the module reference
         import customer_retention.stages.temporal.spark_temporal_merger as mod
-        original_break = mod._break_lineage
 
         def _tracking_break(sdf):
             checkpoint_calls.append(len(sdf.columns))
@@ -586,7 +583,9 @@ class TestMergeAllLineageBreaking:
 
         monkeypatch.setattr(mod, "_break_lineage", _tracking_break)
 
-        merger = SparkTemporalMerger(config=MergeConfig(validate_temporal=False))
+        merger = SparkTemporalMerger(
+            config=MergeConfig(validate_temporal=False, checkpoint_every=1)
+        )
         spine = _spine(["A", "B"], ["2024-01-01"])
         event_df = _event_snapshot("entity_id", "as_of_date", {
             "entity_id": ["A", "B"],
@@ -602,13 +601,15 @@ class TestMergeAllLineageBreaking:
             _merge_input("customers", entity_df, DatasetGranularity.ENTITY_LEVEL),
         ]
         result, report = merger.merge_all(spine, datasets)
-        assert len(checkpoint_calls) == 2  # one per dataset
+        assert len(checkpoint_calls) == 2
         assert "amount" in result.columns
         assert "tier" in result.columns
 
     def test_checkpoint_preserves_data_correctness(self, monkeypatch):
         _patch_native_spark(monkeypatch)
-        merger = SparkTemporalMerger(config=MergeConfig(validate_temporal=False))
+        merger = SparkTemporalMerger(
+            config=MergeConfig(validate_temporal=False, checkpoint_every=1)
+        )
         spine = _spine(["A", "B"], ["2024-01-01", "2024-02-01"])
         event_df = _event_snapshot("entity_id", "as_of_date", {
             "entity_id": ["A", "A", "B", "B"],
@@ -643,6 +644,174 @@ class TestMergeAllLineageBreaking:
         with caplog.at_level(logging.INFO, logger="customer_retention.stages.temporal.spark_temporal_merger"):
             merger.merge_all(spine, datasets)
         assert any("Merged 1/1" in msg and "customers" in msg for msg in caplog.messages)
+
+
+class TestMergeAllCheckpointEvery:
+    """checkpoint_every controls _break_lineage frequency without changing output.
+
+    Default is 4 — for 8 sources that means 2 checkpoints (boundary + last)
+    instead of 8, halving executor-disk I/O for the SPS-shape merge while
+    keeping bounded lineage growth between checkpoints.
+    """
+
+    def _build_eight_dataset_inputs(self):
+        spine = _spine(["A", "B", "C"], ["2024-01-01", "2024-02-01"])
+        datasets = []
+        for i in range(8):
+            df = _event_snapshot("entity_id", "as_of_date", {
+                "entity_id": ["A", "A", "B", "B", "C", "C"],
+                "as_of_date": [
+                    "2024-01-01", "2024-02-01",
+                    "2024-01-01", "2024-02-01",
+                    "2024-01-01", "2024-02-01",
+                ],
+                f"f_{i}": [i, 10 + i, 20 + i, 30 + i, 40 + i, 50 + i],
+            })
+            datasets.append(
+                _merge_input(f"src_{i}", df, DatasetGranularity.EVENT_LEVEL)
+            )
+        return spine, datasets
+
+    def _count_checkpoints_for(self, monkeypatch, checkpoint_every, spine, datasets):
+        _patch_native_spark(monkeypatch)
+        import customer_retention.stages.temporal.spark_temporal_merger as mod
+
+        calls = []
+
+        def _tracking_break(sdf):
+            calls.append(len(sdf.columns))
+            return sdf.localCheckpoint(eager=True)
+
+        monkeypatch.setattr(mod, "_break_lineage", _tracking_break)
+        merger = SparkTemporalMerger(
+            config=MergeConfig(
+                validate_temporal=False, checkpoint_every=checkpoint_every,
+            )
+        )
+        result, report = merger.merge_all(spine, datasets)
+        return result, report, calls
+
+    def test_default_checkpoint_every_is_four(self):
+        cfg = MergeConfig()
+        assert cfg.checkpoint_every == 4
+
+    def test_eight_sources_with_default_runs_two_checkpoints(self, monkeypatch):
+        spine, datasets = self._build_eight_dataset_inputs()
+        result, _, calls = self._count_checkpoints_for(
+            monkeypatch, 4, spine, datasets,
+        )
+        # Boundary at i=3 (after 4th merge) + last at i=7 = 2 calls
+        assert len(calls) == 2
+        for i in range(8):
+            assert f"f_{i}" in result.columns
+
+    def test_checkpoint_every_one_matches_old_behavior(self, monkeypatch):
+        spine, datasets = self._build_eight_dataset_inputs()
+        _, _, calls = self._count_checkpoints_for(
+            monkeypatch, 1, spine, datasets,
+        )
+        assert len(calls) == 8
+
+    def test_checkpoint_every_eight_runs_one_checkpoint(self, monkeypatch):
+        spine, datasets = self._build_eight_dataset_inputs()
+        _, _, calls = self._count_checkpoints_for(
+            monkeypatch, 8, spine, datasets,
+        )
+        # Only the final-merge checkpoint fires
+        assert len(calls) == 1
+
+    def test_checkpoint_every_zero_clamps_to_one(self, monkeypatch):
+        spine, datasets = self._build_eight_dataset_inputs()
+        # checkpoint_every=0 would divide-by-zero in modulo; max(1, ...) clamps it
+        _, _, calls = self._count_checkpoints_for(
+            monkeypatch, 0, spine, datasets,
+        )
+        assert len(calls) == 8
+
+    def test_parity_output_identical_across_intervals(self, monkeypatch):
+        """Same inputs + different checkpoint_every -> identical output frames.
+
+        This is the regression guard: the optimization must not change values,
+        rows, or columns. Compares old behavior (every=1) against new default
+        (every=4) and the most aggressive setting (every=N).
+        """
+        spine, datasets = self._build_eight_dataset_inputs()
+
+        result_one, report_one, _ = self._count_checkpoints_for(
+            monkeypatch, 1, spine, datasets,
+        )
+        result_four, report_four, _ = self._count_checkpoints_for(
+            monkeypatch, 4, spine, datasets,
+        )
+        result_eight, report_eight, _ = self._count_checkpoints_for(
+            monkeypatch, 8, spine, datasets,
+        )
+
+        # Same row count
+        assert len(result_one) == len(result_four) == len(result_eight)
+        # Same column set
+        assert set(result_one.columns) == set(result_four.columns)
+        assert set(result_one.columns) == set(result_eight.columns)
+        # Same values: align on (entity_id, as_of_date) and compare each feature
+        sort_keys = ["entity_id", "as_of_date"]
+        cols = sorted(result_one.columns)
+        ro = result_one[cols].sort_values(sort_keys).reset_index(drop=True)
+        rf = result_four[cols].sort_values(sort_keys).reset_index(drop=True)
+        re_ = result_eight[cols].sort_values(sort_keys).reset_index(drop=True)
+        pd.testing.assert_frame_equal(ro, rf, check_dtype=False)
+        pd.testing.assert_frame_equal(ro, re_, check_dtype=False)
+        # Report fields independent of checkpoint cadence
+        assert report_one.spine_rows == report_four.spine_rows == report_eight.spine_rows
+        assert report_one.total_columns == report_four.total_columns == report_eight.total_columns
+        assert report_one.datasets_merged == report_four.datasets_merged == report_eight.datasets_merged
+        assert report_one.columns_per_dataset == report_four.columns_per_dataset == report_eight.columns_per_dataset
+
+    def test_parity_with_mixed_granularities(self, monkeypatch):
+        """Parity must hold across event-level, entity-level, and asof datasets,
+        not just same-shape repeat sources."""
+        spine = _spine(["A", "B"], ["2024-01-01", "2024-02-01"])
+
+        event_df = _event_snapshot("entity_id", "as_of_date", {
+            "entity_id": ["A", "A", "B", "B"],
+            "as_of_date": ["2024-01-01", "2024-02-01", "2024-01-01", "2024-02-01"],
+            "amount": [10, 20, 30, 40],
+        })
+        entity_df = _entity_df("entity_id", {
+            "entity_id": ["A", "B"],
+            "tier": ["gold", "silver"],
+        })
+        asof_df = pd.DataFrame({
+            "entity_id": ["A", "A", "B"],
+            "feature_timestamp": pd.to_datetime(
+                ["2023-06-01", "2024-01-15", "2023-12-01"]
+            ),
+            "credit_score": [700, 720, 650],
+        })
+
+        def _build_datasets():
+            return [
+                _merge_input("txns", event_df.copy(), DatasetGranularity.EVENT_LEVEL),
+                _merge_input(
+                    "customers", entity_df.copy(), DatasetGranularity.ENTITY_LEVEL,
+                ),
+                _merge_input(
+                    "credit", asof_df.copy(), DatasetGranularity.ENTITY_LEVEL,
+                    feature_ts="feature_timestamp",
+                ),
+            ]
+
+        result_one, _, _ = self._count_checkpoints_for(
+            monkeypatch, 1, spine.copy(), _build_datasets(),
+        )
+        result_four, _, _ = self._count_checkpoints_for(
+            monkeypatch, 4, spine.copy(), _build_datasets(),
+        )
+
+        sort_keys = ["entity_id", "as_of_date"]
+        cols = sorted(result_one.columns)
+        ro = result_one[cols].sort_values(sort_keys).reset_index(drop=True)
+        rf = result_four[cols].sort_values(sort_keys).reset_index(drop=True)
+        pd.testing.assert_frame_equal(ro, rf, check_dtype=False)
 
 
 # ---------------------------------------------------------------------------

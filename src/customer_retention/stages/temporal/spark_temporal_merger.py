@@ -112,6 +112,7 @@ class SparkTemporalMerger(TemporalMerger):
 
         entity_key = self.config.entity_key
         as_of_column = self.config.as_of_column
+        checkpoint_every = max(1, self.config.checkpoint_every)
 
         merged_sdf = _to_native_spark(spine)
 
@@ -121,17 +122,21 @@ class SparkTemporalMerger(TemporalMerger):
             spine_dates=merged_sdf.select(as_of_column).distinct().count(),
         )
 
+        n_datasets = len(datasets)
         for i, ds in enumerate(datasets):
             t0 = time.monotonic()
             merged_sdf, new_cols = self.merge_one(merged_sdf, ds)
 
-            merged_sdf = _break_lineage(merged_sdf)
+            is_last = (i + 1) == n_datasets
+            on_boundary = (i + 1) % checkpoint_every == 0
+            if is_last or on_boundary:
+                merged_sdf = _break_lineage(merged_sdf)
 
             report.datasets_merged.append(ds.name)
             report.columns_per_dataset[ds.name] = len(new_cols)
             logger.info(
                 "Merged %d/%d '%s': +%d cols → %d total (%.1fs)",
-                i + 1, len(datasets), ds.name, len(new_cols),
+                i + 1, n_datasets, ds.name, len(new_cols),
                 len(merged_sdf.columns), time.monotonic() - t0,
             )
 

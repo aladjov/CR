@@ -18,6 +18,7 @@ class MergeConfig:
     tolerance_days: int | None = None
     conflict_separator: str = "__"
     validate_temporal: bool = True
+    checkpoint_every: int = 4
 
 
 @dataclass
