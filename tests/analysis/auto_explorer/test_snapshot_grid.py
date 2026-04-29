@@ -770,7 +770,10 @@ class TestSerialization:
 
         class _AtomicFs:
             def put(self, p, content, overwrite):
-                Path(p).write_bytes(content.encode())
+                target = Path(p)
+                tmp = target.parent / f"{target.name}.{threading.get_ident()}.tmp"
+                tmp.write_bytes(content.encode())
+                os.replace(str(tmp), str(target))
 
         class _StubDbutils:
             fs = _AtomicFs()
