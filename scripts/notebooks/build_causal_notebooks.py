@@ -776,11 +776,15 @@ The cell below is the only place you should need to edit. Every value here is re
 
 - **`SNAPSHOT_RISK_TIER_HIGH` / `SNAPSHOT_RISK_TIER_MEDIUM`** — risk-tier thresholds applied at snapshot time. Leave as `None` to fall back to the values stored on the active `decision_policy` row (the canonical source — set in `c01_publish_definitions`).
 - **`SNAPSHOT_CAPACITY_PARTITION_COLUMN`** — optional partition column for capacity caps (e.g. `"csm_owner_id"`). Leave as `""` to apply caps globally per playbook.
+- **`SHAP_PER_SLICE_K`** — for each `(playbook, archetype, risk_tier)` slice, compute per-row SHAP for the top-K accounts by expected loss and write them to `top_shap_drivers` so the dashboard's L4 panel can show "why surfaced" without a pandas_udf at view time. `0` disables the writer (the L3 view falls back gracefully but per-account SHAP cells stay empty for new model versions).
+- **`SHAP_TOP_DRIVERS_PER_ROW`** — how many drivers to keep per row (default `5`).
 """
 
 _C05_CONFIG_BODY = '''SNAPSHOT_RISK_TIER_HIGH = None
 SNAPSHOT_RISK_TIER_MEDIUM = None
 SNAPSHOT_CAPACITY_PARTITION_COLUMN = ""
+SHAP_PER_SLICE_K = 50
+SHAP_TOP_DRIVERS_PER_ROW = 5
 '''
 
 
@@ -818,6 +822,47 @@ else:
     )
     snapshot_result = build_eligibility_snapshot(snapshot_cfg)
     print(snapshot_result.summary())
+'''
+
+
+_C05_COMPUTE_TOP_SHAP_BODY = '''from customer_retention.stages.causal import (
+    TopDriversConfig,
+    compute_and_write_top_shap_drivers,
+)
+
+# Per-slice SHAP cache for the L4 "why surfaced" panel. Keyed on
+# (model_name, model_version, entity_id) so v_eligible_all_playbooks can
+# fall back to it via COALESCE when the snapshot row's top_shap_features
+# column is NULL. Without this writer, every new model_version produces
+# 0 rows here and the dashboard's L3 cohort list comes back empty (the
+# view filters WHERE top_shap_features IS NOT NULL after the COALESCE).
+top_drivers_result = None
+if spark is None:
+    print("SKIPPED: no Spark session (Databricks-only cell)")
+elif snapshot_result is None:
+    print("SKIPPED: snapshot_result is None — 5.1 did not produce a run")
+elif int(SHAP_PER_SLICE_K) <= 0:
+    print("SKIPPED: SHAP_PER_SLICE_K == 0 (per-slice SHAP enrichment disabled)")
+elif MODEL_URI is None:
+    print("SKIPPED: MODEL_URI is None — local runs without an MLflow attribution artifact cannot replay SHAP")
+elif not spark.catalog.tableExists(GOLD_FEATURES_FQN):
+    print(f"SKIPPED: {GOLD_FEATURES_FQN} does not exist — gold features required for SHAP replay")
+else:
+    top_drivers_cfg = TopDriversConfig(
+        spark=spark,
+        snapshot_table_fqn=ELIGIBILITY_SNAPSHOT_FQN,
+        gold_features_fqn=GOLD_FEATURES_FQN,
+        top_shap_drivers_fqn=TOP_SHAP_DRIVERS_FQN,
+        model_name=MODEL_NAME,
+        model_version=str(MODEL_VERSION),
+        scoring_run_id=snapshot_result.scoring_run_id,
+        as_of_date=snapshot_result.as_of_date,
+        model_uri=MODEL_URI,
+        per_slice_k=int(SHAP_PER_SLICE_K),
+        top_drivers_per_row=int(SHAP_TOP_DRIVERS_PER_ROW),
+    )
+    top_drivers_result = compute_and_write_top_shap_drivers(top_drivers_cfg)
+    print(top_drivers_result.summary())
 '''
 
 
@@ -950,11 +995,13 @@ def build_c05() -> List[Dict[str, Any]]:
         *setup_block(stage, needs_model=True),
         md_cell(stage, "c05_build_snapshot_section", ["## 5.1 Build Eligibility Snapshot\n"]),
         code_cell(stage, "code", "build_eligibility_snapshot", [_C05_BUILD_SNAPSHOT_BODY]),
-        md_cell(stage, "c05_write_run_context_section", ["## 5.2 Write Run Context (app masthead projection)\n"]),
+        md_cell(stage, "c05_compute_top_shap_section", ["## 5.2 Compute Per-slice Top SHAP Drivers\n"]),
+        code_cell(stage, "code", "compute_top_shap_drivers", [_C05_COMPUTE_TOP_SHAP_BODY]),
+        md_cell(stage, "c05_write_run_context_section", ["## 5.3 Write Run Context (app masthead projection)\n"]),
         code_cell(stage, "code", "write_run_context", [_C05_WRITE_RUN_CONTEXT_BODY]),
-        md_cell(stage, "c05_publish_views_section", ["## 5.3 Publish Dashboard SQL Views\n"]),
+        md_cell(stage, "c05_publish_views_section", ["## 5.4 Publish Dashboard SQL Views\n"]),
         code_cell(stage, "code", "publish_dashboard_views", [_C05_PUBLISH_VIEWS_BODY]),
-        md_cell(stage, "c05_summary_section", ["## 5.4 Print Run Summary\n"]),
+        md_cell(stage, "c05_summary_section", ["## 5.5 Print Run Summary\n"]),
         code_cell(stage, "code", "print_run_summary", [_C05_SUMMARY_BODY]),
         release_cleanup_cell(stage),
     ]
