@@ -531,11 +531,14 @@ class TestValidatePolicyCoverage:
     """Guard against the silent failure where archetypes exist but no policies map.
 
     Original incident: playbook YAMLs had prose descriptions with no
-    ``target_features`` and no gold-feature-name tokens, so the overlap
-    baseline returned 0 candidates per archetype, 0 policy rows got written,
-    and c05's snapshot failed three steps downstream with "no active
-    eligibility_policy rows". This validation converts the silent case into
-    a RuntimeError at derivation time.
+    overlap against the archetype's top SHAP-driver tokens, the overlap
+    baseline scored every (archetype, playbook) pair below the review
+    threshold, ``_build_policy_rows`` dropped them all as ``manual``, and
+    with no ``DEFAULT_PLAYBOOK_ID`` configured 0 policy rows got written.
+    c05's snapshot then failed three steps downstream with "no active
+    eligibility_policy rows". This validation converts the silent case
+    into a RuntimeError at derivation time and points the operator at
+    the actual unblocks.
     """
 
     def _archetype_row(self) -> dict:
@@ -562,13 +565,41 @@ class TestValidatePolicyCoverage:
                 config=cfg,
             )
 
-    def test_error_message_names_target_features_fix(self):
+    def test_error_message_names_concrete_unblocks(self):
         cfg = _make_config(write=False)
-        with pytest.raises(RuntimeError, match="target_features"):
+        # The empty-decisions branch points operators at LLM endpoint /
+        # playbook_catalog reachability — that's the concrete unblock when
+        # nothing matched at all.
+        with pytest.raises(RuntimeError, match="LLM_ENDPOINT_NAME"):
             derivation._validate_policy_coverage(
                 archetype_rows=[self._archetype_row()],
                 policy_rows=[],
                 mappings=[self._mapping_empty_decisions()],
+                config=cfg,
+            )
+
+    def test_error_message_names_threshold_unblocks_when_decisions_present(self):
+        # When decisions WERE produced but every score fell below the review
+        # threshold, the message must point at DEFAULT_PLAYBOOK_ID and
+        # FIT_REVIEW_THRESHOLD as the two real unblocks.
+        cfg = _make_config(write=False)
+        decision = PlaybookFitDecision(
+            playbook_id="pb_a", fit_score=0.05, rationale="weak overlap"
+        )
+        mapping = ArchetypeMapping(
+            cluster_index=0,
+            archetype_name="Archetype 0",
+            archetype_description="",
+            rationale="",
+            confidence=0.0,
+            candidate_playbook_ids=["pb_a"],
+            fit_decisions=[decision],
+        )
+        with pytest.raises(RuntimeError, match="DEFAULT_PLAYBOOK_ID"):
+            derivation._validate_policy_coverage(
+                archetype_rows=[self._archetype_row()],
+                policy_rows=[],
+                mappings=[mapping],
                 config=cfg,
             )
 

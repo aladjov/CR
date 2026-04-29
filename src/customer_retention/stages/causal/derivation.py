@@ -823,37 +823,60 @@ def _validate_policy_coverage(
 ) -> None:
     """Fail fast when archetypes were produced but no policy rows were mapped.
 
-    The silent-failure mode is: playbook_catalog rows have no ``target_features``
-    and their descriptions contain no gold feature column names, so
-    ``playbook_mapper._candidate_set`` returns ``[]`` for every archetype,
-    every ``fit_decisions`` is empty, and ``_build_policy_rows`` returns
-    ``[]``. The c02 summary printed "0 policy rows" but nothing downstream
-    caught it, and c05's snapshot failed with "no active eligibility_policy
-    rows" three steps later. Surface the gap here so operators see the
-    root cause at derivation time.
+    Two distinct silent-failure modes land here:
+
+    A. ``mapped_any == False`` — every archetype's ``fit_decisions`` list is
+       empty. This usually means the namer (LLM or prose-overlap fallback)
+       returned no decisions, often because no playbooks were loaded.
+    B. ``mapped_any == True`` — the namer DID emit decisions, but
+       ``_build_policy_rows`` classified all of them as ``manual``
+       (fit_score < ``FitThresholds.review``) and dropped them. Without a
+       ``default_playbook_id`` no catch-all rows are emitted either, so the
+       eligibility_policy table ends up empty.
+
+    Surface the gap here so operators see the root cause at derivation
+    time instead of three steps later in c05's snapshot writer.
     """
     if not archetype_rows or policy_rows:
         return
     mapped_any = any(mapping.fit_decisions for mapping in mappings)
     playbook_count = len(config.playbooks)
     feature_count = len(config.gold_feature_names)
-    reason = (
-        "no playbook mapped to any archetype — every archetype produced "
-        "an empty fit_decisions list"
-        if not mapped_any
-        else "every mapping produced fit_decisions but _build_policy_rows "
-        "dropped them all (check extracted_rules coverage)"
-    )
+    if not mapped_any:
+        reason = (
+            "no playbook mapped to any archetype — every archetype "
+            "produced an empty fit_decisions list. Likely cause: "
+            f"{playbook_count} playbook(s) loaded but the namer returned "
+            "no decisions (LLM endpoint unreachable + no prose-overlap "
+            "fallback configured, or no playbooks at all). Verify that "
+            "c01_publish_definitions wrote rows to playbook_catalog and "
+            "that LLM_ENDPOINT_NAME is reachable, or set it to '' to use "
+            "the deterministic prose_overlap matcher."
+        )
+    else:
+        thresholds = config.fit_thresholds
+        reason = (
+            "every mapping produced fit_decisions but every fit_score "
+            f"fell below FIT_REVIEW_THRESHOLD ({thresholds.review:.2f}), "
+            "so _build_policy_rows classified them all as 'manual' and "
+            "dropped them. With DEFAULT_PLAYBOOK_ID unset no catch-all "
+            "rows are emitted either. Two unblocks (either is fine):\n"
+            "  (1) set DEFAULT_PLAYBOOK_ID to one of your playbook IDs in "
+            "      the c02 config cell — every archetype then gets a "
+            "      catch_all row pointing at that playbook for manual "
+            "      review in c03.\n"
+            "  (2) lower FIT_REVIEW_THRESHOLD (e.g. 0.05) so weak prose "
+            "      overlaps land as 'review' rows instead of being "
+            "      dropped as 'manual'.\n"
+            "Long-term: tighten playbook prose so 'description' / "
+            "'when_applicable' references the business concepts named "
+            "by your top SHAP drivers — the prose_overlap matcher scores "
+            "by token overlap with the archetype's driver feature names."
+        )
     raise RuntimeError(
         f"Derivation produced {len(archetype_rows)} archetype rows but 0 "
-        f"eligibility_policy rows: {reason}. Inputs: {playbook_count} "
-        f"playbooks, {feature_count} gold feature columns. Likely cause: "
-        "playbook YAMLs have no 'target_features' list and their prose "
-        "descriptions do not reference any gold feature column names, so "
-        "the feature-overlap baseline matches zero candidates per archetype. "
-        "Add 'target_features: [col_a, col_b, ...]' to each playbook YAML "
-        "under 'catalog:', naming the actual gold feature column names "
-        "the playbook targets, then re-run c01_publish_definitions + c02."
+        f"eligibility_policy rows ({playbook_count} playbooks, "
+        f"{feature_count} gold features). {reason}"
     )
 
 

@@ -238,6 +238,71 @@ class TestAutoPromoteStable:
         assert len(result.promoted) == 1
         assert result.promoted[0].reason == "force_approve"
 
+    def test_force_approve_cascades_to_all_policy_tiers(self):
+        # Regression: when c02 produced only ``catch_all`` policy rows
+        # (because no playbook met the auto/review thresholds), c03 with
+        # FORCE_APPROVE=True must promote those policy rows to ``active``,
+        # not only the ``auto``-tier ones. The previous bug filtered the
+        # cascade UPDATE on ``fit_tier IN ('auto',)`` regardless of force,
+        # leaving every catch_all row pending forever and making c05 fail
+        # with "no active eligibility_policy rows".
+        pending = [
+            {
+                "archetype_id": "arch_1_aaa",
+                "archetype_version": "v_222",
+                "centroid_vector": [1.0, 0.0, 0.0],
+            }
+        ]
+        spark = _make_fake_spark(pending, prior_rows_by_id={})
+        auto_promote_stable(
+            spark=spark,
+            archetype_table_fqn="cat.sch.archetype_catalog",
+            policy_table_fqn="cat.sch.eligibility_policy",
+            derivation_run_id="deriv_force_cascade",
+            force=True,
+            now=datetime(2026, 4, 9),
+        )
+        policy_updates = [
+            call for call in spark.__sql_calls__
+            if "UPDATE cat.sch.eligibility_policy" in call.query
+        ]
+        assert policy_updates, "expected at least one UPDATE against eligibility_policy"
+        for call in policy_updates:
+            # The fit-tier filter must NOT be present on the force path —
+            # otherwise catch_all / review rows get silently skipped.
+            assert "fit_tier IN" not in call.query
+            assert "fit_tier IS NULL" not in call.query
+
+    def test_non_force_path_still_filters_policy_rows_by_tier(self):
+        # The default (non-force) cascade must keep its conservative
+        # auto-tier filter so review / catch_all rows go through manual
+        # review when the operator hasn't explicitly opted into bulk approval.
+        pending = [
+            {
+                "archetype_id": "arch_1_aaa",
+                "archetype_version": "v_222",
+                "centroid_vector": [1.0, 2.0, 3.0],
+            }
+        ]
+        prior = {"arch_1_aaa": [{"archetype_version": "v_111", "centroid_vector": [1.0, 2.0, 3.0]}]}
+        spark = _make_fake_spark(pending, prior_rows_by_id=prior)
+        auto_promote_stable(
+            spark=spark,
+            archetype_table_fqn="cat.sch.archetype_catalog",
+            policy_table_fqn="cat.sch.eligibility_policy",
+            derivation_run_id="deriv_default",
+            force=False,
+            now=datetime(2026, 4, 9),
+        )
+        policy_updates = [
+            call for call in spark.__sql_calls__
+            if "UPDATE cat.sch.eligibility_policy" in call.query
+        ]
+        assert policy_updates, "expected at least one UPDATE against eligibility_policy"
+        # On the non-force path the tier filter MUST stay so review /
+        # catch_all rows aren't silently auto-promoted.
+        assert any("fit_tier IN" in call.query for call in policy_updates)
+
     def test_missing_centroid_marks_pending(self):
         pending = [
             {

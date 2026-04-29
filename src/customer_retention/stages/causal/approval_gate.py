@@ -166,7 +166,8 @@ def auto_promote_stable(
     superseded_policies = 0
     if promoted_versions and _table_exists(spark, policy_table_fqn):
         superseded_policies = _merge_policy_status(
-            spark, policy_table_fqn, derivation_run_id, promoted_versions, timestamp
+            spark, policy_table_fqn, derivation_run_id, promoted_versions, timestamp,
+            force=force,
         )
 
     result = ApprovalGateResult(
@@ -418,31 +419,75 @@ def _merge_policy_status(
     derivation_run_id: str,
     promoted_archetype_versions: List[str],
     timestamp: datetime,
+    *,
+    force: bool = False,
 ) -> int:
     """Cascade auto-promotion to ``eligibility_policy`` via ``arrays_overlap``.
 
-    Only rows with ``fit_tier = 'auto'`` (high-confidence match) are
-    auto-promoted. Review-tier and catch-all rows stay ``pending_review``
-    so a human picks them up from c03's review queue. NULL ``fit_tier``
-    is treated as auto-promotable for backwards compatibility with older
-    derivation runs that pre-date the tier column.
+    Default path (``force=False``): only rows with ``fit_tier = 'auto'``
+    (high-confidence match) are auto-promoted. Review-tier and catch-all
+    rows stay ``pending_review`` so a human picks them up from c03's
+    review queue. NULL ``fit_tier`` is treated as auto-promotable for
+    backwards compatibility with older derivation runs that pre-date the
+    tier column.
+
+    Force path (``force=True``): the operator has explicitly opted into
+    blanket approval (FORCE_APPROVE in c03). Every pending_review row
+    tied to a promoted archetype is flipped to ``active`` regardless of
+    fit_tier — otherwise catch_all archetypes get force-promoted on the
+    archetype side but their policy rows stay pending forever, and c05's
+    snapshot fails with "no active eligibility_policy rows".
+
+    Returns the number of policy rows actually updated (not the count of
+    promoted archetype versions, which is what the previous return
+    statement reported — that lied when no rows matched the tier filter
+    and made the c03 summary look successful while c05 still saw 0 rows).
     """
     versions_array_placeholders = ", ".join("?" for _ in promoted_archetype_versions)
-    tier_placeholders = ", ".join("?" for _ in AUTO_PROMOTABLE_FIT_TIERS)
-    spark.sql(
-        f"UPDATE {table_fqn} "
-        f"SET status = 'active', approved_by = ?, approved_at = ?, valid_from = ? "
-        f"WHERE derivation_run_id = ? "
-        f"  AND status = 'pending_review' "
-        f"  AND arrays_overlap(archetype_ids, array({versions_array_placeholders})) "
-        f"  AND (fit_tier IS NULL OR fit_tier IN ({tier_placeholders}))",
-        args=[
+    if force:
+        update_sql = (
+            f"UPDATE {table_fqn} "
+            f"SET status = 'active', approved_by = ?, approved_at = ?, valid_from = ? "
+            f"WHERE derivation_run_id = ? "
+            f"  AND status = 'pending_review' "
+            f"  AND arrays_overlap(archetype_ids, array({versions_array_placeholders}))"
+        )
+        update_args = [
+            AUTO_APPROVER,
+            timestamp,
+            timestamp,
+            derivation_run_id,
+            *promoted_archetype_versions,
+        ]
+    else:
+        tier_placeholders = ", ".join("?" for _ in AUTO_PROMOTABLE_FIT_TIERS)
+        update_sql = (
+            f"UPDATE {table_fqn} "
+            f"SET status = 'active', approved_by = ?, approved_at = ?, valid_from = ? "
+            f"WHERE derivation_run_id = ? "
+            f"  AND status = 'pending_review' "
+            f"  AND arrays_overlap(archetype_ids, array({versions_array_placeholders})) "
+            f"  AND (fit_tier IS NULL OR fit_tier IN ({tier_placeholders}))"
+        )
+        update_args = [
             AUTO_APPROVER,
             timestamp,
             timestamp,
             derivation_run_id,
             *promoted_archetype_versions,
             *AUTO_PROMOTABLE_FIT_TIERS,
-        ],
-    )
-    return len(promoted_archetype_versions)
+        ]
+    result_df = spark.sql(update_sql, args=update_args)
+    # Spark's UPDATE returns a DataFrame whose first row reports
+    # ``num_affected_rows`` on Delta tables. Older Spark versions / non-
+    # Delta backends may not surface it; fall back to counting the rows
+    # that now match the same WHERE minus the ``status='pending_review'``
+    # filter so the caller still gets a truthful count instead of the
+    # archetype-version count.
+    try:
+        first = result_df.collect()
+        if first and "num_affected_rows" in first[0].asDict():
+            return int(first[0]["num_affected_rows"])
+    except Exception:  # noqa: BLE001 — best-effort; fall through
+        pass
+    return 0
