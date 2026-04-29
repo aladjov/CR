@@ -559,6 +559,60 @@ details[open] > .cr-summary > .cr-summary-chevron { transform: rotate(90deg); }
   padding: 0.05em 0.35em;
 }
 
+/* Diagnostic debug section — rendered inside the empty-state panel so the
+   operator can see exactly why the per-dataset template didn't load even
+   when the App's Logs tab is unavailable. */
+.cr-empty-debug {
+  margin-top: 1rem;
+  padding: 0.75rem 0.9rem;
+  background: var(--paper);
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+.cr-empty-debug-summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--yellow-800);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.cr-empty-debug-list {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.35rem 1rem;
+  margin: 0.7rem 0 0;
+}
+.cr-empty-debug-list dt {
+  font-weight: 500;
+  color: var(--ink-soft);
+}
+.cr-empty-debug-list dd {
+  margin: 0;
+  word-break: break-all;
+  color: var(--ink);
+}
+.cr-empty-debug-list code {
+  font-family: var(--font-mono);
+  font-size: 0.82em;
+  background: var(--paper-deep);
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  padding: 0.05em 0.35em;
+}
+.cr-empty-debug-ds {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.cr-empty-debug-ds li {
+  font-size: 0.85rem;
+  margin-bottom: 0.3rem;
+  line-height: 1.5;
+}
+
 /* Deviation panel — bidirectional bar chart, sign-coloured ---------------- */
 .cr-deviation .cr-chapter-lead { margin-bottom: 0.9rem; }
 

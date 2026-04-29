@@ -10,6 +10,7 @@ of every column on v_account_explanation so the CSM still sees the data.
 """
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import pandas as pd
@@ -119,35 +120,47 @@ def render() -> None:
     cfg = load_config()
     requested_path = cfg.profile_template_path or None
     template = load_template(requested_path)
-    # When a path was requested but the loaded body is identical to the bundled
-    # default, the read silently failed (FileNotFoundError or PermissionError —
-    # see ``load_template`` for the actual log lines). Surface this in the UI
-    # so the operator notices instead of staring at the empty-state panel.
-    if requested_path:
-        from .template import _default_template_path
-        try:
-            default_body = _default_template_path().read_text(encoding="utf-8")
-            if template.body and template.body in default_body:
-                st.warning(
-                    f"⚠️ Profile template at `{requested_path}` could not be "
-                    "read — using the bundled default. Most common cause: the "
-                    "Databricks App service principal lacks READ_VOLUME on the "
-                    "parent volume, or the grant was added after the app was "
-                    "last started (Stop/Start the app to refresh). Check the "
-                    "App's Logs tab for the exact reason."
-                )
-        except OSError:
-            pass
 
     # Build the full template context: flat account_explanation columns
     # + one nested dict per declared data source.
     context: dict[str, Any] = _row_to_context(detail_df.iloc[0])
+    data_source_diagnostics: list[dict[str, Any]] = []
     for ds in template.data_sources:
+        ds_diag = {
+            "name": ds.name,
+            "source": ds.source,
+            "join_key": ds.join_key,
+            "as_list": ds.as_list,
+            "status": "ok",
+            "error": "",
+            "row_count": 0,
+        }
         try:
-            context[ds.name] = _fetch_data_source(ds, entity)
+            value = _fetch_data_source(ds, entity)
+            context[ds.name] = value
+            if ds.as_list:
+                ds_diag["row_count"] = len(value) if value else 0
+                ds_diag["status"] = "ok" if value else "empty"
+            else:
+                ds_diag["row_count"] = 1 if value else 0
+                ds_diag["status"] = "ok" if value else "empty"
         except Exception as exc:
-            st.warning(f"Template data source `{ds.name}` failed — leaving empty. ({exc})")
+            ds_diag["status"] = "error"
+            ds_diag["error"] = f"{type(exc).__name__}: {exc}"
             context[ds.name] = [] if ds.as_list else {}
+        data_source_diagnostics.append(ds_diag)
+
+    # Inject the load diagnostic into the template context so the empty-state
+    # panel can render it (operators sometimes can't reach the App's Logs tab).
+    context["_template_diagnostic"] = {
+        **template.diagnostic,
+        "catalog": cfg.catalog,
+        "schema": cfg.schema,
+        "data_sources": data_source_diagnostics,
+        # Show the raw env var separately so operators can tell the difference
+        # between "env var was set" and "auto-discovery picked it up".
+        "env_var_set": bool(os.environ.get("CR_PROFILE_TEMPLATE_PATH", "").strip()),
+    }
 
     # Render the template. On any render error, show a pivoted fallback so the
     # CSM still sees the raw fields.

@@ -80,6 +80,43 @@ data:
             <li>If you want to pin a specific file, set the Databricks App env var <code>CR_PROFILE_TEMPLATE_PATH</code> — it overrides the auto-discovered template.</li>
           </ol>
           <p class="cr-chapter-lead">See <code>docs/ech_notebook_ux_overrides.md</code> (email-churn) or <code>docs/sps_notebook_ux_overrides.md</code> (SPS) for the ready-to-paste cells.</p>
+          {{#if _template_diagnostic}}
+            <details class="cr-empty-debug">
+              <summary class="cr-empty-debug-summary">Debug · template load diagnostic</summary>
+              <dl class="cr-empty-debug-list">
+                <dt>Status</dt>
+                <dd><code>{{_template_diagnostic.status}}</code></dd>
+                <dt>Requested path</dt>
+                <dd><code>{{#if _template_diagnostic.requested_path}}{{_template_diagnostic.requested_path}}{{else}}(none — env var unset and auto-discovery returned empty){{/if}}</code></dd>
+                <dt>Env var <code>CR_PROFILE_TEMPLATE_PATH</code></dt>
+                <dd><code>{{#if _template_diagnostic.env_var_set}}set{{else}}unset{{/if}}</code></dd>
+                <dt>Loaded from</dt>
+                <dd><code>{{_template_diagnostic.loaded_from}}</code></dd>
+                <dt>Catalog · Schema</dt>
+                <dd><code>{{_template_diagnostic.catalog}}.{{_template_diagnostic.schema}}</code></dd>
+                <dt>Parent dir exists</dt>
+                <dd><code>{{#if _template_diagnostic.parent_dir_exists}}yes{{else}}no — the app's service principal cannot stat the parent directory; grant READ_VOLUME or wait for the deployed grant to propagate (Stop/Start the app){{/if}}</code></dd>
+                {{#if _template_diagnostic.parent_dir_listing}}
+                  <dt>Parent dir listing (first 20)</dt>
+                  <dd><code>{{_template_diagnostic.parent_dir_listing}}</code></dd>
+                {{/if}}
+                {{#if _template_diagnostic.error_type}}
+                  <dt>Error</dt>
+                  <dd><code>{{_template_diagnostic.error_type}}: {{_template_diagnostic.error_message}}</code></dd>
+                {{/if}}
+                {{#if _template_diagnostic.data_sources}}
+                  <dt>Declared data sources</dt>
+                  <dd>
+                    <ul class="cr-empty-debug-ds">
+                      {{#each _template_diagnostic.data_sources}}
+                        <li><code>{{this.name}}</code> ← <code>{{this.source}}</code> on <code>{{this.join_key}}</code> · <strong>{{this.status}}</strong> · {{this.row_count}} row(s){{#if this.error}} · <code>{{this.error}}</code>{{/if}}</li>
+                      {{/each}}
+                    </ul>
+                  </dd>
+                {{/if}}
+              </dl>
+            </details>
+          {{/if}}
         </section>
       {{/if}}
     </div>
