@@ -1286,9 +1286,37 @@ def load_bronze_outputs():
     return outputs
 
 {% if config.silver.grid_dates %}
+# Event-source configs carry the event-grain ID (e.g. OPPORTUNITY_ID) in
+# entity_key, but the bronze aggregation step rolls up to the entity grain
+# and the event-grain column is dropped. We trust the configured key when
+# it survives in the base bronze output; otherwise fall back to a small
+# set of conventional entity columns. Raise a clear error when none match
+# so the failure mode is unambiguous instead of an opaque UNRESOLVED_COLUMN.
+def _resolve_silver_entity_key(configured_key, bronze_outputs, base_source):
+    base_cols = bronze_outputs[base_source].columns
+    base_cols_lower = {c.lower(): c for c in base_cols}
+    if configured_key in base_cols:
+        return configured_key
+    if configured_key.lower() in base_cols_lower:
+        return base_cols_lower[configured_key.lower()]
+    for candidate in ("entity_id", "ACCOUNT_ID", "account_id", "CUSTOMER_ID", "customer_id", "USER_ID", "user_id"):
+        if candidate in base_cols or candidate.lower() in base_cols_lower:
+            return base_cols_lower.get(candidate.lower(), candidate)
+    raise RuntimeError(
+        f"silver merge: configured entity_key '{configured_key}' is not in "
+        f"base source '{base_source}' (cols={base_cols}). The bronze "
+        f"aggregation likely dropped the event-grain column; set "
+        f"config.silver.entity_key to the entity-grain key (e.g. ACCOUNT_ID)."
+    )
+
+
 def merge_sources(bronze_outputs):
-    raw_entity_key = "{{ config.silver.entity_key or config.sources[0].entity_key }}"
+    _configured_entity_key = "{{ config.silver.entity_key or config.sources[0].entity_key }}"
     base_source = "{{ config.sources[0].name }}"
+    raw_entity_key = _resolve_silver_entity_key(_configured_entity_key, bronze_outputs, base_source)
+    if raw_entity_key != _configured_entity_key:
+        print(f"  silver merge: configured entity_key '{_configured_entity_key}' missing from "
+              f"'{base_source}' bronze output -- falling back to '{raw_entity_key}'")
     entity_ids = bronze_outputs[base_source].select(raw_entity_key).distinct()
 {% if has_key_resolution %}
     for meta in MERGE_SOURCE_META:
