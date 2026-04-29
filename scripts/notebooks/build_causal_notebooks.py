@@ -438,12 +438,25 @@ _C02_BACKFILL_PROSE_BODY = '''# Re-render `eligibility_rules_prose` for every ex
 # feature_population_stats sidecars existed stay NULL until we rewrite them.
 # Cycle 013 P4 surfaced exactly this gap; the backfill closes it idempotently.
 if is_databricks() and spark is not None and spark.catalog.tableExists(ELIGIBILITY_POLICY_FQN):
+    from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
     from customer_retention.stages.causal.interpretation import (
         backfill_eligibility_prose,
     )
 
+    # Resolve the namespace locally so this cell runs standalone — the
+    # derivation cell only defines `_enrich_ns` on the freshly-derive path,
+    # so a backfill-only rerun (active archetypes already exist) would
+    # otherwise NameError on the reference below.
+    _backfill_ns = globals().get("_enrich_ns")
+    if _backfill_ns is None:
+        try:
+            _backfill_ns = RunNamespace.from_env_or_latest(get_experiments_dir())
+        except Exception as _ns_exc:
+            print(f"Backfill namespace lookup failed ({type(_ns_exc).__name__}: {_ns_exc}) — proceeding without sidecar context.")
+            _backfill_ns = None
+
     _backfill = backfill_eligibility_prose(
-        spark, ELIGIBILITY_POLICY_FQN, namespace=_enrich_ns,
+        spark, ELIGIBILITY_POLICY_FQN, namespace=_backfill_ns,
     )
     print(_backfill.summary())
     if _backfill.warnings:
