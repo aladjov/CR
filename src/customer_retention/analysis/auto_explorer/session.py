@@ -49,7 +49,11 @@ class SessionState:
                 active_run_id=data["active_run_id"],
                 last_notebook=data.get("last_notebook"),
             )
-        except (json.JSONDecodeError, KeyError):
+        # OSError covers EIO / EACCES / partial-write hiccups on Databricks
+        # FUSE-mounted volumes — the session file is ephemeral and gets
+        # rewritten by the next save(), so treating an unreadable file as
+        # "no prior state" is the right recovery, not a fatal crash.
+        except (json.JSONDecodeError, KeyError, OSError):
             return None
 
 
@@ -144,7 +148,13 @@ def mark_notebook(
             active_run_id=namespace.run_id,
             last_notebook=notebook_name,
         )
-    state.save(session_path)
+    # The session file is bookkeeping for "which notebook did this user open
+    # last" — non-essential. A transient FUSE EIO here must not crash the
+    # init_progress cell at the top of every notebook.
+    try:
+        state.save(session_path)
+    except OSError:
+        pass
 
 
 def resolve_data_path(

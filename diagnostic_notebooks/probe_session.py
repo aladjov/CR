@@ -162,13 +162,23 @@ class ProbeSession:
     def bundle_results(self) -> Path:
         """Zip session_manifest.json + every cycle_*/result.json into a single
         archive at <session_dir>/probe_runs/<session_label>.zip. Operator
-        downloads via the Databricks file browser."""
+        downloads via the Databricks file browser.
+
+        Databricks Volume FUSE mounts reject zipfile's close-time seek/truncate
+        with ``OSError: [Errno 95] Operation not supported``. Build the archive
+        in memory and write the final bytes in a single call, which the FUSE
+        mount accepts.
+        """
+        import io
+
         self.write_session_manifest()
         archive = self.bundle_root.parent / f"{self.session_label}.zip"
-        with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
             for f in sorted(self.bundle_root.rglob("*")):
                 if f.is_file():
                     zf.write(f, f.relative_to(self.bundle_root.parent))
+        archive.write_bytes(buf.getvalue())
         return archive
 
 
