@@ -270,21 +270,118 @@ _PROVENANCE_PREREQ_TABLES: tuple[str, ...] = (
 )
 
 
+def _try_materialize_feature_meta_from_sidecar(
+    spark: "SparkSession", catalog: str, schema: str
+) -> bool:
+    """Best-effort: materialize the ``feature_meta`` JSON sidecar into UC.
+
+    Mirrors ``_try_materialize_population_stats_from_sidecar``. The
+    framework writes feature lineage as a JSON sidecar in the run
+    namespace at gold-materialization time; the provenance view reads a
+    UC Delta table. When the table is missing but the sidecar exists,
+    materializing it on the fly lets ``publish_dashboard_views`` continue
+    without operator intervention. Returns ``True`` when the table now
+    exists, ``False`` when neither table nor sidecar is reachable.
+    """
+    fqn = f"{catalog}.{schema}.feature_meta"
+    if spark.catalog.tableExists(fqn):
+        return True
+    try:
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+        from customer_retention.stages.causal.feature_meta_writer import (
+            FeatureMetaConfig,
+            write_feature_meta,
+        )
+        from customer_retention.stages.causal.interpretation.sidecars import (
+            load_feature_meta_sidecar,
+        )
+    except ImportError:
+        return False
+    try:
+        ns = RunNamespace.from_env_or_latest()
+    except Exception:  # noqa: BLE001 -- best-effort, never fail the publish
+        ns = None
+    if ns is None:
+        return False
+    sidecar = load_feature_meta_sidecar(ns) or {}
+    if not sidecar:
+        return False
+    try:
+        rows = list(sidecar.values())
+        write_feature_meta(
+            FeatureMetaConfig(
+                spark=spark, table_fqn=fqn, run_id=ns.run_id, rows=rows,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 -- log + degrade
+        logger.warning(
+            "auto-materialization of %s from sidecar at %s failed: %s. "
+            "v_feature_provenance will be skipped this run.",
+            fqn, ns.feature_meta_dir, exc,
+        )
+        return spark.catalog.tableExists(fqn)
+    return spark.catalog.tableExists(fqn)
+
+
+def _try_materialize_column_descriptions_from_sidecar(
+    spark: "SparkSession", catalog: str, schema: str
+) -> bool:
+    """Best-effort: materialize the ``column_descriptions`` JSON sidecar into UC."""
+    fqn = f"{catalog}.{schema}.column_descriptions"
+    if spark.catalog.tableExists(fqn):
+        return True
+    try:
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+        from customer_retention.stages.causal.column_descriptions_writer import (
+            ColumnDescriptionsConfig,
+            write_column_descriptions,
+        )
+        from customer_retention.stages.causal.interpretation.sidecars import (
+            load_column_descriptions_sidecar,
+        )
+    except ImportError:
+        return False
+    try:
+        ns = RunNamespace.from_env_or_latest()
+    except Exception:  # noqa: BLE001
+        ns = None
+    if ns is None:
+        return False
+    sidecar = load_column_descriptions_sidecar(ns) or {}
+    if not sidecar:
+        return False
+    try:
+        rows = list(sidecar.values())
+        write_column_descriptions(
+            ColumnDescriptionsConfig(spark=spark, table_fqn=fqn, rows=rows)
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "auto-materialization of %s from sidecar failed: %s. "
+            "v_feature_provenance will be skipped this run.",
+            fqn, exc,
+        )
+        return spark.catalog.tableExists(fqn)
+    return spark.catalog.tableExists(fqn)
+
+
 def _provenance_prerequisites_present(
     spark: "SparkSession", catalog: str, schema: str
 ) -> tuple[bool, list[str]]:
     """Return ``(ok, missing)`` for tables ``v_feature_provenance`` reads.
 
-    Older causal-track builds did not write ``feature_meta`` /
-    ``column_descriptions`` — on those clusters the provenance view is
-    skipped so the rest of the dashboard publishes successfully.
+    Tries to materialize each prereq table from its JSON sidecar in the
+    run namespace before failing — the framework's gold-materialization
+    step writes the lineage as JSON, but operators that skip exploration
+    (causal-track-only reruns) wouldn't otherwise have these tables in UC.
+    Older causal-track builds with neither table nor sidecar fall back to
+    skipping the provenance view so the rest of the dashboard publishes.
     """
-    missing: list[str] = []
-    for tbl in _PROVENANCE_PREREQ_TABLES:
-        fqn = f"{catalog}.{schema}.{tbl}"
-        if not spark.catalog.tableExists(fqn):
-            missing.append(fqn)
-    return (not missing), missing
+    if not _try_materialize_feature_meta_from_sidecar(spark, catalog, schema):
+        return False, [f"{catalog}.{schema}.feature_meta"]
+    if not _try_materialize_column_descriptions_from_sidecar(spark, catalog, schema):
+        return False, [f"{catalog}.{schema}.column_descriptions"]
+    return True, []
 
 
 def _deviation_prerequisites_present(

@@ -410,7 +410,7 @@ hr, [data-testid="stHorizontalBlock"] + div { border: none; }
   color: var(--ink-soft);
   margin: 0;
   font-weight: 400;
-  max-width: 78ch;
+  max-width: none;
 }
 
 /* --------------------------------------------------------------------------
