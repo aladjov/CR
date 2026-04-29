@@ -1656,6 +1656,10 @@ class FindingsParser:
                 continue
             params = dict(getattr(rec, "parameters", {}) or {})
             action = getattr(rec, "action", "")
+            explicit_sources = params.get("source_columns")
+            if explicit_sources:
+                transitive.update(c for c in explicit_sources if c)
+                continue
             if action == "ratio":
                 transitive.update(
                     c for c in (params.get("numerator", ""), params.get("denominator", "")) if c
@@ -1802,6 +1806,24 @@ class FindingsParser:
     def _silver_derived_sources_available(rec, pipeline_columns: Set[str]) -> bool:
         action = rec.action
         params = rec.parameters
+        # Explicit `source_columns` from the registry (e.g., the declarative
+        # form of `add_silver_derived(..., source_columns=[...])`) takes
+        # precedence over action-specific keys. Closes GR8 — without this,
+        # ratio recs registered via `add_silver_derived` show up here with
+        # only `expression` + `feature_type` and the action-keyed branches
+        # below default to `{""}` and skip every ratio at codegen.
+        explicit_sources = params.get("source_columns")
+        if explicit_sources:
+            needed = {c for c in explicit_sources if c}
+            missing = needed - pipeline_columns
+            if missing:
+                logger.warning(
+                    "Skipping silver derived-column '%s': missing source columns %s",
+                    rec.target_column,
+                    sorted(missing),
+                )
+                return False
+            return True
         if action == "ratio":
             needed = {params.get("numerator", ""), params.get("denominator", "")}
         elif action == "interaction":

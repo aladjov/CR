@@ -381,8 +381,11 @@ class RecommendationRegistry:
             self.bronze.modeling_strategy.append(rec)
 
     def add_silver_derived(self, column: str, expression: str, feature_type: str,
-                           rationale: str, source_notebook: str) -> None:
-        params = {"expression": expression, "feature_type": feature_type}
+                           rationale: str, source_notebook: str,
+                           source_columns: Optional[List[str]] = None) -> None:
+        params: Dict[str, object] = {"expression": expression, "feature_type": feature_type}
+        if source_columns:
+            params["source_columns"] = list(source_columns)
         rec = self._create_recommendation("silver", "derived", feature_type, column,
                                           params, rationale, source_notebook)
         self.silver.derived_columns.append(rec)
