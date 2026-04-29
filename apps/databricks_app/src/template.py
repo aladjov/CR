@@ -37,13 +37,15 @@ Built-in helpers: `fmt_currency`, `fmt_pct`, `fmt_int`, `fmt_float`, `fmt_date`,
 """
 from __future__ import annotations
 
-import os
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
 import pandas as pd
 import yaml
+
+logger = logging.getLogger(__name__)
 
 # `pybars` is imported lazily inside render_html so that the frontmatter parser
 # and helper utilities are usable in unit tests without the dependency.
@@ -112,11 +114,42 @@ def _default_css_path() -> Path:
 
 
 def load_template(path: Optional[str]) -> Template:
-    """Load an HTML template. Empty/missing path falls back to the bundled default."""
-    if path and os.path.exists(path):
-        text = Path(path).read_text(encoding="utf-8")
-    else:
+    """Load an HTML template. Empty/missing path falls back to the bundled default.
+
+    The fallback used to be silent — a permission error on the requested path
+    looked identical to "no path configured", which made the empty-state panel
+    impossible to diagnose without local repro. We now log the exact reason at
+    INFO/WARNING level so it shows up in the Databricks Apps "Logs" tab.
+    """
+    text: Optional[str] = None
+    if path:
+        try:
+            text = Path(path).read_text(encoding="utf-8")
+            logger.info("loaded profile template -> %s", path)
+        except FileNotFoundError:
+            logger.warning(
+                "profile template path does not exist: %s — falling back to bundled default",
+                path,
+            )
+        except PermissionError as exc:
+            logger.warning(
+                "profile template read denied (%s) for %s — grant READ_VOLUME to "
+                "the app's service principal on the parent volume (or wait for "
+                "the deployed grant to propagate, which may require a Stop/Start "
+                "of the app)",
+                exc,
+                path,
+            )
+        except OSError as exc:
+            logger.warning(
+                "profile template read failed (%s) for %s — falling back to bundled default",
+                exc,
+                path,
+            )
+    if text is None:
         text = _default_template_path().read_text(encoding="utf-8")
+        if not path:
+            logger.info("no CR_PROFILE_TEMPLATE_PATH set — using bundled default template")
 
     front, body = _parse_frontmatter(text)
 

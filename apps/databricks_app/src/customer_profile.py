@@ -117,7 +117,27 @@ def render() -> None:
         return
 
     cfg = load_config()
-    template = load_template(cfg.profile_template_path or None)
+    requested_path = cfg.profile_template_path or None
+    template = load_template(requested_path)
+    # When a path was requested but the loaded body is identical to the bundled
+    # default, the read silently failed (FileNotFoundError or PermissionError —
+    # see ``load_template`` for the actual log lines). Surface this in the UI
+    # so the operator notices instead of staring at the empty-state panel.
+    if requested_path:
+        from .template import _default_template_path
+        try:
+            default_body = _default_template_path().read_text(encoding="utf-8")
+            if template.body and template.body in default_body:
+                st.warning(
+                    f"⚠️ Profile template at `{requested_path}` could not be "
+                    "read — using the bundled default. Most common cause: the "
+                    "Databricks App service principal lacks READ_VOLUME on the "
+                    "parent volume, or the grant was added after the app was "
+                    "last started (Stop/Start the app to refresh). Check the "
+                    "App's Logs tab for the exact reason."
+                )
+        except OSError:
+            pass
 
     # Build the full template context: flat account_explanation columns
     # + one nested dict per declared data source.
