@@ -22,11 +22,11 @@ PASTEL_COLORSCALE = [
 
 
 _LAYOUT_COMMON = dict(
-    margin=dict(t=8, l=0, r=60, b=0),
+    margin=dict(t=44, l=0, r=60, b=0),
     paper_bgcolor="rgba(0,0,0,0)",
     plot_bgcolor="rgba(0,0,0,0)",
     font=dict(family="Geist, system-ui, sans-serif", size=12, color="#1b2230"),
-    height=460,
+    height=480,
 )
 
 
@@ -47,7 +47,11 @@ def render() -> None:
     )
     fig.update_traces(
         textposition="middle center",
-        texttemplate="<b>%{label}</b><br><span style='font-size:11px; opacity:0.75'>%{value:,} accts</span>",
+        texttemplate=(
+            "<span style='font-size:10px; opacity:0.55'>%{parent}</span>"
+            "<br><b>%{label}</b>"
+            "<br><span style='font-size:11px; opacity:0.75'>%{value:,} accts</span>"
+        ),
         textfont=dict(family="Geist, system-ui, sans-serif", size=13, color="#1b2230"),
         hovertemplate=(
             "<b>%{customdata[0]}</b> · %{customdata[1]}"
@@ -60,6 +64,17 @@ def render() -> None:
             cornerradius=6,
         ),
         root=dict(color="rgba(0,0,0,0)"),
+        pathbar=dict(
+            visible=True,
+            side="top",
+            thickness=24,
+            edgeshape=">",
+            textfont=dict(
+                family="JetBrains Mono, ui-monospace, monospace",
+                size=11,
+                color="#404853",
+            ),
+        ),
     )
     fig.update_layout(
         **_LAYOUT_COMMON,

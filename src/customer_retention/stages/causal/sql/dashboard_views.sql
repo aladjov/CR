@@ -810,3 +810,77 @@ SELECT
 FROM ranked
 WHERE deviation_rank <= 12;
 -- @cr:deviation-block:close
+
+-- ============================================================================
+-- 14. v_feature_provenance (per-feature lineage + business definition)
+-- ----------------------------------------------------------------------------
+-- One row per feature in the latest scoring run. Surfaces the upstream lineage
+-- (source table, source columns, aggregation kind / window) collected at gold-
+-- materialization time AND the LLM/curator-authored business phrase so the
+-- dashboard can explain "what does this SHAP driver mean" without a notebook.
+-- Source-column business definitions are joined in best-effort on column name
+-- (no catalog/schema match) — column_descriptions has one canonical row per
+-- column_name in this schema, so a name match is sufficient in practice.
+-- Falls back to the most recently written row when multiple runs share the
+-- same feature_name (CSMs always look at the last published cohort).
+-- ============================================================================
+CREATE OR REPLACE VIEW {catalog}.{schema}.v_feature_provenance AS
+WITH latest_meta AS (
+    SELECT MAX(written_at) AS max_written_at
+    FROM {catalog}.{schema}.feature_meta
+),
+latest_rc AS (
+    SELECT run_id, composite_name
+    FROM {catalog}.{schema}.feature_meta
+    WHERE written_at = (SELECT max_written_at FROM latest_meta)
+    GROUP BY run_id, composite_name
+    LIMIT 1
+),
+fm AS (
+    SELECT
+        f.feature_name,
+        f.source_columns,
+        f.source_table,
+        f.aggregation_kind,
+        f.window_days,
+        f.window_phrase,
+        f.target_dependency,
+        f.polarity,
+        f.business_phrase
+    FROM {catalog}.{schema}.feature_meta f
+    JOIN latest_rc lr
+      ON f.run_id = lr.run_id
+     AND f.composite_name = lr.composite_name
+),
+exploded AS (
+    SELECT fm.feature_name, sc AS source_column
+    FROM fm
+    LATERAL VIEW EXPLODE(COALESCE(fm.source_columns, ARRAY())) tbl AS sc
+),
+col_defs AS (
+    SELECT
+        e.feature_name,
+        COLLECT_LIST(NAMED_STRUCT(
+            'column_name',         e.source_column,
+            'business_name',       cd.business_name,
+            'business_definition', cd.business_definition,
+            'unit',                cd.unit
+        )) AS source_column_defs
+    FROM exploded e
+    LEFT JOIN {catalog}.{schema}.column_descriptions cd
+      ON cd.column_name = e.source_column
+    GROUP BY e.feature_name
+)
+SELECT
+    fm.feature_name,
+    fm.source_columns,
+    fm.source_table,
+    fm.aggregation_kind,
+    fm.window_days,
+    fm.window_phrase,
+    fm.target_dependency,
+    fm.polarity,
+    fm.business_phrase,
+    cd.source_column_defs
+FROM fm
+LEFT JOIN col_defs cd ON cd.feature_name = fm.feature_name;

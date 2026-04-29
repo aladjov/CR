@@ -125,13 +125,32 @@ def _render_reset_bar() -> None:
 # ---------------------------------------------------------------------------
 # Level helpers
 # ---------------------------------------------------------------------------
-def _level_header(level: int, eyebrow: str, title_html: str, lead: str) -> None:
+def _level_header(
+    level: int,
+    eyebrow: str,
+    title_html: str,
+    lead: str | None = None,
+) -> None:
+    lead_html = f'<p class="level-lead">{escape(lead)}</p>' if lead else ""
     st.markdown(
         f"""
         <section class="level level-{level}">
           <div class="level-eyebrow"><span class="dot"></span>{escape(eyebrow)}</div>
           <h2 class="level-title">{title_html}</h2>
-          <p class="level-lead">{escape(lead)}</p>
+          {lead_html}
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _section_head(eyebrow: str, title: str, lead: str) -> None:
+    st.markdown(
+        f"""
+        <section class="section-head">
+          <div class="section-eyebrow">{escape(eyebrow)}</div>
+          <h3 class="section-title">{escape(title)}</h3>
+          <p class="section-lead">{escape(lead)}</p>
         </section>
         """,
         unsafe_allow_html=True,
@@ -166,6 +185,43 @@ def _compact_currency(v) -> str:
     return f"{v:,.0f}"
 
 
+def _safe_float(v) -> float:
+    try:
+        return float(v) if v is not None and not pd.isna(v) else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _stat_breakdown_html(
+    high: float,
+    medium: float,
+    low: float,
+    *,
+    formatter,
+    high_label: str = "high",
+    medium_label: str = "med",
+    low_label: str = "low",
+) -> str:
+    total = high + medium + low
+    if total <= 0:
+        return ""
+    pct_high = high / total * 100
+    pct_med = medium / total * 100
+    pct_low = max(0.0, 100 - pct_high - pct_med)
+    return (
+        '<div class="stat-bar" role="img" aria-label="risk-tier composition">'
+        f'<span class="stat-bar-seg stat-bar-high" style="width:{pct_high:.4f}%"></span>'
+        f'<span class="stat-bar-seg stat-bar-med" style="width:{pct_med:.4f}%"></span>'
+        f'<span class="stat-bar-seg stat-bar-low" style="width:{pct_low:.4f}%"></span>'
+        '</div>'
+        '<div class="stat-tier-line">'
+        f'<span class="stat-tier stat-tier-high"><span class="stat-tier-dot"></span>{formatter(high)} {high_label}</span>'
+        f'<span class="stat-tier stat-tier-med"><span class="stat-tier-dot"></span>{formatter(medium)} {medium_label}</span>'
+        f'<span class="stat-tier stat-tier-low"><span class="stat-tier-dot"></span>{formatter(low)} {low_label}</span>'
+        '</div>'
+    )
+
+
 def _render_stat_row() -> None:
     try:
         df = data.portfolio_totals()
@@ -175,24 +231,48 @@ def _render_stat_row() -> None:
     if df.empty:
         return
     r = df.iloc[0]
+
     eligible = _compact_number(r.get("total_eligible"))
     recommended = _compact_number(r.get("total_recommended"))
     value_at_risk = _compact_currency(r.get("total_value_at_risk"))
     playbooks = _compact_number(r.get("active_playbooks"))
+
+    eligible_breakdown = _stat_breakdown_html(
+        _safe_float(r.get("eligible_high")),
+        _safe_float(r.get("eligible_medium")),
+        _safe_float(r.get("eligible_low")),
+        formatter=_compact_number,
+    )
+    recommended_breakdown = _stat_breakdown_html(
+        _safe_float(r.get("recommended_high")),
+        _safe_float(r.get("recommended_medium")),
+        _safe_float(r.get("recommended_low")),
+        formatter=_compact_number,
+    )
+    var_breakdown = _stat_breakdown_html(
+        _safe_float(r.get("value_at_risk_high")),
+        _safe_float(r.get("value_at_risk_medium")),
+        _safe_float(r.get("value_at_risk_low")),
+        formatter=lambda v: f"${_compact_currency(v)}",
+    )
+
     st.markdown(
         f"""
         <div class="stat-row">
           <div class="stat">
             <span class="stat-label">Eligible accounts</span>
             <span class="stat-value">{eligible}</span>
+            {eligible_breakdown}
           </div>
           <div class="stat">
             <span class="stat-label">Recommended</span>
             <span class="stat-value"><em>{recommended}</em></span>
+            {recommended_breakdown}
           </div>
           <div class="stat">
             <span class="stat-label">Value at risk</span>
             <span class="stat-value">${value_at_risk}</span>
+            {var_breakdown}
           </div>
           <div class="stat">
             <span class="stat-label">Active playbooks</span>
@@ -219,13 +299,18 @@ _level_header(
     level=1,
     eyebrow="Level 01 · Portfolio",
     title_html=l1_title_html(_ctx),
+)
+_render_stat_row()
+
+_section_head(
+    eyebrow="Playbooks breakdown",
+    title="Where the cohort sits today",
     lead=(
         "Every eligible customer across every active playbook. Tile size is the "
         "eligible cohort; tile colour tracks mean churn probability — pale green "
         "is safe, amber-yellow needs a look, deeper hues mean act first."
     ),
 )
-_render_stat_row()
 
 try:
     treemap.render()

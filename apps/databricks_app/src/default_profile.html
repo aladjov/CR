@@ -124,9 +124,9 @@ data:
       {{#if account_top_shap_features}}
         <section class="cr-shap">
           <header class="cr-chapter-head">
-            <span class="cr-chapter-eyebrow">Why the model flagged this account</span>
-            <h2 class="cr-chapter-title">Top SHAP drivers</h2>
-            <p class="cr-chapter-lead">Each bar's length shows the magnitude of the feature's contribution to this customer's churn score, normalised to the strongest driver in the row. <span class="cr-shap-pos-token">Red</span> pushes the score toward churn; <span class="cr-shap-neg-token">green</span> pushes it away.</p>
+            <span class="cr-chapter-eyebrow">Why this account scored where it did</span>
+            <h2 class="cr-chapter-title">Model results interpretation</h2>
+            <p class="cr-chapter-lead">Each bar shows how strongly one factor moved this customer's churn score, scaled to the strongest factor in the row. <span class="cr-shap-pos-token">Yellow</span> bars push the score toward churn; <span class="cr-shap-neg-token">green</span> bars pull it away. The number on the right is the signed contribution to the score in log-odds.</p>
           </header>
           <ul class="cr-shap-list">
             {{#each account_top_shap_features}}
@@ -140,6 +140,58 @@ data:
               </li>
             {{/each}}
           </ul>
+          {{#if feature_dictionary}}
+            <details class="cr-feature-provenance">
+              <summary class="cr-summary cr-summary-tech">
+                <span class="cr-summary-eyebrow">What these factors mean</span>
+                <span class="cr-summary-title">Feature dictionary &middot; lineage and definition</span>
+                <span class="cr-summary-chevron" aria-hidden="true">›</span>
+              </summary>
+              <div class="cr-fp-body">
+                <p class="cr-fp-lead">Where each factor above comes from, how it's computed, and what it represents in business terms. Pulled from <code>feature_meta</code> + <code>column_descriptions</code> for the latest scoring run.</p>
+                <ul class="cr-fp-list">
+                  {{#each feature_dictionary}}
+                    <li class="cr-fp-row">
+                      <header class="cr-fp-head">
+                        <code class="cr-fp-feature">{{this.feature}}</code>
+                        {{#if this.window_phrase}}<span class="cr-fp-window">{{this.window_phrase}}</span>{{/if}}
+                        {{#if this.aggregation_kind}}<span class="cr-fp-agg">{{this.aggregation_kind}}</span>{{/if}}
+                      </header>
+                      {{#if this.business_phrase}}
+                        <p class="cr-fp-phrase">{{this.business_phrase}}</p>
+                      {{/if}}
+                      <dl class="cr-fp-meta">
+                        {{#if this.source_table}}
+                          <dt>Source dataset</dt>
+                          <dd><code>{{this.source_table}}</code></dd>
+                        {{/if}}
+                        {{#if this.source_columns}}
+                          <dt>Source columns</dt>
+                          <dd>
+                            {{#each this.source_columns}}
+                              <code class="cr-fp-col">{{this}}</code>
+                            {{/each}}
+                          </dd>
+                        {{/if}}
+                        {{#if this.source_column_defs}}
+                          <dt>Column definitions</dt>
+                          <dd>
+                            <ul class="cr-fp-defs">
+                              {{#each this.source_column_defs}}
+                                {{#if this.business_definition}}
+                                  <li><code>{{this.column_name}}</code> &mdash; {{this.business_definition}}</li>
+                                {{/if}}
+                              {{/each}}
+                            </ul>
+                          </dd>
+                        {{/if}}
+                      </dl>
+                    </li>
+                  {{/each}}
+                </ul>
+              </div>
+            </details>
+          {{/if}}
         </section>
       {{/if}}
       {{#if feature_deviation}}

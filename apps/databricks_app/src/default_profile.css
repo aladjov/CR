@@ -557,6 +557,8 @@ details[open] > .cr-summary > .cr-summary-chevron { transform: rotate(90deg); }
   border: 1px solid var(--line-soft);
   border-radius: 3px;
   padding: 0.05em 0.35em;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 /* Diagnostic debug section — rendered inside the empty-state panel so the
@@ -601,6 +603,8 @@ details[open] > .cr-summary > .cr-summary-chevron { transform: rotate(90deg); }
   border: 1px solid var(--line-soft);
   border-radius: 3px;
   padding: 0.05em 0.35em;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 .cr-empty-debug-ds {
   margin: 0;
@@ -769,6 +773,165 @@ details[open] > .cr-summary > .cr-summary-chevron { transform: rotate(90deg); }
 }
 .cr-shap-pos .cr-shap-score { color: var(--yellow-800); }
 .cr-shap-neg .cr-shap-score { color: var(--green-800); }
+
+/* --------------------------------------------------------------------------
+   Feature dictionary — collapsible block beneath SHAP list
+   -------------------------------------------------------------------------- */
+.cr-feature-provenance {
+  margin-top: 1.2rem;
+  padding-top: 1rem;
+  border-top: 1px dashed var(--line);
+}
+.cr-feature-provenance > .cr-summary-tech {
+  padding: 0.4rem 0;
+}
+.cr-feature-provenance > .cr-summary-tech > .cr-summary-title {
+  font-family: var(--font-sans);
+  font-weight: 500;
+  font-size: 0.88rem;
+  color: var(--ink-2);
+}
+.cr-fp-body {
+  padding: 0.8rem 0 0.2rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+.cr-fp-lead {
+  font-size: 0.86rem;
+  line-height: 1.55;
+  color: var(--ink-soft);
+  margin: 0;
+}
+.cr-fp-lead code {
+  font-family: var(--font-mono);
+  font-size: 0.78em;
+  background: var(--paper-deep);
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  padding: 0.05em 0.35em;
+}
+.cr-fp-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+.cr-fp-row {
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: var(--paper);
+  padding: 0.85rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.cr-fp-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 0.7rem;
+}
+.cr-fp-feature {
+  font-family: var(--font-mono);
+  font-size: 0.84rem;
+  color: var(--ink);
+  background: var(--paper-deep);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0.1em 0.45em;
+  font-weight: 500;
+}
+.cr-fp-window {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--blue-700);
+  background: var(--blue-50);
+  border: 1px solid var(--blue-100);
+  border-radius: 999px;
+  padding: 0.1em 0.55em;
+  letter-spacing: 0.02em;
+}
+.cr-fp-agg {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--yellow-800);
+  background: var(--yellow-50);
+  border: 1px solid var(--yellow-100);
+  border-radius: 999px;
+  padding: 0.1em 0.55em;
+  letter-spacing: 0.02em;
+  text-transform: lowercase;
+}
+.cr-fp-phrase {
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.55;
+  color: var(--ink-2);
+  font-family: var(--font-serif);
+  font-variation-settings: "opsz" 14;
+}
+.cr-fp-meta {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.3rem 0.9rem;
+  margin: 0;
+  font-size: 0.82rem;
+}
+.cr-fp-meta dt {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 500;
+  align-self: start;
+  padding-top: 0.15rem;
+}
+.cr-fp-meta dd {
+  margin: 0;
+  color: var(--ink-2);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  align-items: center;
+}
+.cr-fp-col {
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  color: var(--ink-soft);
+  background: var(--paper-deep);
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  padding: 0.05em 0.35em;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.cr-fp-defs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.cr-fp-defs li {
+  font-size: 0.84rem;
+  line-height: 1.5;
+  color: var(--ink-soft);
+}
+.cr-fp-defs code {
+  font-family: var(--font-mono);
+  font-size: 0.78em;
+  color: var(--ink-2);
+  background: var(--paper-deep);
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  padding: 0.02em 0.32em;
+  margin-right: 0.25em;
+}
 
 /* --------------------------------------------------------------------------
    Small screens

@@ -73,6 +73,47 @@ def _rows_to_context(df: pd.DataFrame) -> list[dict[str, Any]]:
     return [{k: _clean(v) for k, v in row.items()} for _, row in df.iterrows()]
 
 
+def _build_provenance_index(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
+    """Index ``v_feature_provenance`` rows by ``feature_name`` for O(1) lookup.
+
+    Empty input returns an empty dict so callers don't need to special-case
+    the missing-view path (older causal-track builds without the view).
+    """
+    if df is None or df.empty or "feature_name" not in df.columns:
+        return {}
+    return {
+        str(row["feature_name"]): _row_to_context(row)
+        for _, row in df.iterrows()
+        if row.get("feature_name") is not None
+    }
+
+
+def _enrich_shap_with_meta(
+    shap_rows: Any,
+    provenance: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Attach a ``meta`` dict to each SHAP row keyed by ``feature``.
+
+    Always returns a list of cleaned dicts. Rows whose feature has no meta
+    entry get ``meta = None`` so the template's ``{{#if this.meta}}`` short-
+    circuits cleanly.
+    """
+    if not shap_rows:
+        return []
+    cleaned: list[dict[str, Any]] = []
+    for row in shap_rows:
+        if not isinstance(row, dict):
+            row = _clean(row)
+        if not isinstance(row, dict):
+            continue
+        feature = row.get("feature")
+        meta = provenance.get(str(feature)) if feature is not None else None
+        new_row = dict(row)
+        new_row["meta"] = meta
+        cleaned.append(new_row)
+    return cleaned
+
+
 def _fetch_data_source(ds: DataSource, entity_id: str):
     """Fetch rows of a data source joined on entity_id.
 
@@ -124,6 +165,32 @@ def render() -> None:
     # Build the full template context: flat account_explanation columns
     # + one nested dict per declared data source.
     context: dict[str, Any] = _row_to_context(detail_df.iloc[0])
+
+    # Enrich SHAP rows with per-feature provenance so the template can render
+    # the "Feature dictionary" table beneath the bar chart. The provenance
+    # view is loaded once (cached) and looked up by feature_name. The flat
+    # ``feature_dictionary`` list is the SAME data deduped by feature so the
+    # dictionary table iterates without repeating identical rows when a
+    # feature appears more than once in the SHAP set.
+    try:
+        provenance_df = data.feature_provenance()
+    except Exception:
+        provenance_df = pd.DataFrame()
+    provenance_index = _build_provenance_index(provenance_df)
+    enriched_shap = _enrich_shap_with_meta(
+        context.get("account_top_shap_features"), provenance_index
+    )
+    context["account_top_shap_features"] = enriched_shap
+    seen: set[str] = set()
+    feature_dictionary: list[dict[str, Any]] = []
+    for row in enriched_shap:
+        feature = row.get("feature")
+        if feature is None or feature in seen or not row.get("meta"):
+            continue
+        seen.add(feature)
+        feature_dictionary.append({"feature": feature, **row["meta"]})
+    context["feature_dictionary"] = feature_dictionary
+
     data_source_diagnostics: list[dict[str, Any]] = []
     for ds in template.data_sources:
         ds_diag = {

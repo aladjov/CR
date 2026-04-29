@@ -44,6 +44,7 @@ DASHBOARD_VIEW_NAMES: tuple[str, ...] = (
     "v_eligible_all_playbooks",
     "v_account_explanation",
     "v_run_context",
+    "v_feature_provenance",
 )
 DASHBOARD_DEVIATION_VIEW_NAMES: tuple[str, ...] = (
     "v_account_feature_deviation",

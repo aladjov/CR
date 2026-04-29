@@ -332,6 +332,87 @@ hr, [data-testid="stHorizontalBlock"] + div { border: none; }
   text-transform: uppercase;
 }
 
+/* Tier composition bar inside each stat tile -------------------------------- */
+.stat-bar {
+  display: flex;
+  height: 6px;
+  margin: 0.7rem 0 0.55rem 0;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--paper-edge);
+}
+.stat-bar-seg {
+  display: block;
+  height: 100%;
+  transition: width 0.18s ease;
+}
+.stat-bar-high { background: var(--blue-300); }
+.stat-bar-med  { background: var(--yellow-400); }
+.stat-bar-low  { background: var(--green-400); }
+
+.stat-tier-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem 0.75rem;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+  font-feature-settings: "tnum" 1, "lnum" 1;
+}
+.stat-tier {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  white-space: nowrap;
+}
+.stat-tier-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.stat-tier-high .stat-tier-dot { background: var(--blue-300); }
+.stat-tier-med  .stat-tier-dot { background: var(--yellow-400); }
+.stat-tier-low  .stat-tier-dot { background: var(--green-400); }
+.stat-tier-high { color: var(--blue-700); }
+.stat-tier-med  { color: var(--yellow-800); }
+.stat-tier-low  { color: var(--green-800); }
+
+/* --------------------------------------------------------------------------
+   Section head — sub-heading between figures and the treemap
+   -------------------------------------------------------------------------- */
+.section-head {
+  margin: 0.5rem 0 1.4rem 0;
+}
+.section-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 500;
+  margin-bottom: 0.55rem;
+}
+.section-title {
+  font-family: var(--font-serif);
+  font-weight: 500;
+  font-size: clamp(1.35rem, 2.2vw, 1.7rem);
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  margin: 0 0 0.55rem 0;
+  font-variation-settings: "opsz" 72;
+}
+.section-lead {
+  font-size: 0.96rem;
+  line-height: 1.6;
+  color: var(--ink-soft);
+  margin: 0;
+  font-weight: 400;
+  max-width: 78ch;
+}
+
 /* --------------------------------------------------------------------------
    Hint / aside
    -------------------------------------------------------------------------- */
