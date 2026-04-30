@@ -314,17 +314,17 @@ def render() -> None:
     # Render the template. On any render error, show a pivoted fallback so the
     # CSM still sees the raw fields.
     #
-    # Inject via ``st.markdown(..., unsafe_allow_html=True)`` rather than
-    # ``st.html()``: the latter does NOT reliably preserve inline ``<style>``
-    # blocks on the deployed Databricks App (the rules end up scoped to a
-    # different shadow root, so ``.cr-card``, ``.cr-grid``, ``.cr-shap-row``
-    # etc. all fall through to default browser styles and the panel collapses
-    # to a single column). The ``st.markdown`` path is the same one
-    # ``app.py`` uses for ``theme.css`` and is known to apply the rules
-    # globally to the page.
+    # CSS is injected via ``st.markdown(<style>..., unsafe_allow_html=True)``
+    # so the rules attach at page scope (matches the ``app.py`` theme.css
+    # path). The HTML BODY is then rendered via ``st.html()`` which preserves
+    # the full markup as-is (including ``<dt>``/``<dd>``, ``<details>``,
+    # ``<nav>``, etc.). Combining them into a single ``st.markdown`` doesn't
+    # work because Streamlit's markdown parser strips/escapes most of the
+    # element types we use -- ``<dt>``/``<dd>`` get rendered as literal text,
+    # which is what produced the "raw HTML dump" failure mode.
     try:
-        html = bundle_css(template) + render_html(template, context)
-        st.markdown(html, unsafe_allow_html=True)
+        st.markdown(bundle_css(template), unsafe_allow_html=True)
+        st.html(render_html(template, context))
     except Exception as exc:
         st.error(f"Template render failed ({exc}). Showing raw data instead.")
         _render_pivoted_fallback(detail_df.iloc[0])
