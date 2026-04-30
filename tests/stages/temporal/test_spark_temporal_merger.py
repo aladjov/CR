@@ -766,6 +766,37 @@ class TestMergeAllCheckpointEvery:
         assert report_one.datasets_merged == report_four.datasets_merged == report_eight.datasets_merged
         assert report_one.columns_per_dataset == report_four.columns_per_dataset == report_eight.columns_per_dataset
 
+    def test_report_populates_per_source_seconds(self, monkeypatch):
+        """seconds_per_dataset must contain a non-negative entry per merged source."""
+        spine, datasets = self._build_eight_dataset_inputs()
+        _, report, _ = self._count_checkpoints_for(monkeypatch, 4, spine, datasets)
+        assert set(report.seconds_per_dataset.keys()) == {f"src_{i}" for i in range(8)}
+        for name, secs in report.seconds_per_dataset.items():
+            assert isinstance(secs, float)
+            assert secs >= 0.0, f"{name}: {secs}"
+
+    def test_report_populates_summary_timers(self, monkeypatch):
+        """spine_stats_seconds, checkpoint_seconds, merge_total_seconds populated.
+
+        validation_seconds is 0 unless validate_temporal=True.
+        """
+        spine, datasets = self._build_eight_dataset_inputs()
+        _, report, _ = self._count_checkpoints_for(monkeypatch, 4, spine, datasets)
+        assert report.spine_stats_seconds >= 0.0
+        assert report.checkpoint_seconds >= 0.0
+        assert report.merge_total_seconds >= 0.0
+        assert report.checkpoint_count == 2
+        # validate_temporal=False in _count_checkpoints_for, so no validation timing
+        assert report.validation_seconds == 0.0
+
+    def test_seconds_per_dataset_default_factory_is_independent(self):
+        """Two MergeReport instances must not share a mutable default."""
+        from customer_retention.stages.temporal.temporal_merger import MergeReport
+        a = MergeReport()
+        b = MergeReport()
+        a.seconds_per_dataset["x"] = 1.0
+        assert b.seconds_per_dataset == {}
+
     def test_parity_with_mixed_granularities(self, monkeypatch):
         """Parity must hold across event-level, entity-level, and asof datasets,
         not just same-shape repeat sources."""

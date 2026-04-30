@@ -36,9 +36,15 @@ class MergeReport:
     spine_dates: int = 0
     datasets_merged: list[str] = field(default_factory=list)
     columns_per_dataset: dict[str, int] = field(default_factory=dict)
+    seconds_per_dataset: dict[str, float] = field(default_factory=dict)
     total_columns: int = 0
     renamed_columns: dict[str, str] = field(default_factory=dict)
     temporal_integrity: dict[str, Any] = field(default_factory=dict)
+    spine_stats_seconds: float = 0.0
+    checkpoint_count: int = 0
+    checkpoint_seconds: float = 0.0
+    validation_seconds: float = 0.0
+    merge_total_seconds: float = 0.0
 
 
 class TemporalMerger:

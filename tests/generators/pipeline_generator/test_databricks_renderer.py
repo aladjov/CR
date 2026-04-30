@@ -1188,7 +1188,8 @@ class TestDatabricksNotebookExitSummary:
 
     def test_silver_exits_with_summary(self, renderer, sample_pipeline_config):
         result = renderer.render_silver(sample_pipeline_config)
-        assert "dbutils.notebook.exit(_summary)" in result
+        assert "dbutils.notebook.exit(json.dumps(_silver_results" in result
+        assert "SILVER RESULTS" in result
 
     def test_gold_exits_with_summary(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)

@@ -1359,7 +1359,14 @@ def merge_sources(bronze_outputs):
     if hasattr(merged, "to_spark"):
         merged = merged.to_spark()
     print(f"  merge complete: {len(merged.columns)} columns, datasets={_report.datasets_merged}")
-    return merged
+    print(f"  spine: {_report.spine_rows:,} rows = {_report.spine_entities:,} entities x {_report.spine_dates} dates ({_report.spine_stats_seconds:.1f}s)")
+    print(f"  checkpoints: {_report.checkpoint_count} ({_report.checkpoint_seconds:.1f}s), validation: {_report.validation_seconds:.1f}s, merge_total: {_report.merge_total_seconds:.1f}s")
+    print(f"  per-source merge timings:")
+    for _ds_name in _report.datasets_merged:
+        _ds_secs = _report.seconds_per_dataset.get(_ds_name, 0.0)
+        _ds_cols = _report.columns_per_dataset.get(_ds_name, 0)
+        print(f"    {_ds_name}: {_ds_secs:.1f}s (+{_ds_cols} cols)")
+    return merged, _report
 {% else %}
 def merge_sources(bronze_outputs):
     raw_entity_key = "{{ config.silver.entity_key or config.sources[0].entity_key }}"
@@ -1383,7 +1390,7 @@ def merge_sources(bronze_outputs):
 {% endfor %}
     if raw_entity_key != "entity_id" and raw_entity_key in merged.columns:
         merged = merged.withColumnRenamed(raw_entity_key, "entity_id")
-    return merged
+    return merged, None
 {% endif %}
 
 {% set derived_groups = group_steps(config.silver.derived_columns) %}
@@ -1447,24 +1454,30 @@ def create_holdout_mask(df, holdout_fraction=0.1, random_state=42):
 
 def run_silver():
     import time as _time
+    _timings = {}
     _t0 = _time.monotonic()
     bronze_outputs = load_bronze_outputs()
-    print(f"  load_bronze: {_time.monotonic() - _t0:.1f}s")
+    _timings["load_bronze"] = round(_time.monotonic() - _t0, 2)
+    print(f"  load_bronze: {_timings['load_bronze']:.1f}s")
     _t1 = _time.monotonic()
-    merged = merge_sources(bronze_outputs)
-    print(f"  merge_sources: {_time.monotonic() - _t1:.1f}s ({len(merged.columns)} cols)")
+    merged, _report = merge_sources(bronze_outputs)
+    _timings["merge_sources"] = round(_time.monotonic() - _t1, 2)
+    print(f"  merge_sources: {_timings['merge_sources']:.1f}s ({len(merged.columns)} cols)")
 {% if config.silver.derived_columns %}
     _t2 = _time.monotonic()
     merged = apply_derived_columns(merged)
-    print(f"  apply_derived: {_time.monotonic() - _t2:.1f}s")
+    _timings["apply_derived"] = round(_time.monotonic() - _t2, 2)
+    print(f"  apply_derived: {_timings['apply_derived']:.1f}s")
 {% endif %}
     _t3 = _time.monotonic()
     merged = create_holdout_mask(merged)
-    print(f"  holdout_mask: {_time.monotonic() - _t3:.1f}s")
+    _timings["holdout_mask"] = round(_time.monotonic() - _t3, 2)
+    print(f"  holdout_mask: {_timings['holdout_mask']:.1f}s")
     _t4 = _time.monotonic()
     output_table = silver_table()
     merged.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
-    print(f"  delta_write: {_time.monotonic() - _t4:.1f}s")
+    _timings["delta_write"] = round(_time.monotonic() - _t4, 2)
+    print(f"  delta_write: {_timings['delta_write']:.1f}s")
     _t5 = _time.monotonic()
     from delta.tables import DeltaTable
     _z_cols = [c for c in ["entity_id", "as_of_date"] if c in [f.name for f in merged.schema.fields]]
@@ -1472,15 +1485,40 @@ def run_silver():
         DeltaTable.forName(spark, output_table).optimize().executeZOrderBy(_z_cols)
     else:
         DeltaTable.forName(spark, output_table).optimize().executeCompaction()
-    print(f"  optimize: {_time.monotonic() - _t5:.1f}s")
-    print(f"  total: {_time.monotonic() - _t0:.1f}s")
-    return output_table
+    _timings["optimize"] = round(_time.monotonic() - _t5, 2)
+    print(f"  optimize: {_timings['optimize']:.1f}s")
+    _timings["total"] = round(_time.monotonic() - _t0, 2)
+    print(f"  total: {_timings['total']:.1f}s")
+    return output_table, _timings, _report
 
-_output_table = run_silver()
+_output_table, _silver_timings, _silver_report = run_silver()
 _result = spark.table(_output_table)
 _row_count = _result.count()
 _col_count = len(_result.columns)
-_summary = f"{_row_count:,} rows, {_col_count} columns"
+
+import json
+_silver_results = {
+    "rows": _row_count,
+    "columns": _col_count,
+    "elapsed_seconds": _silver_timings,
+    "merge_breakdown": (
+        {
+            "spine_rows": _silver_report.spine_rows,
+            "spine_entities": _silver_report.spine_entities,
+            "spine_dates": _silver_report.spine_dates,
+            "spine_stats_seconds": round(_silver_report.spine_stats_seconds, 2),
+            "checkpoint_count": _silver_report.checkpoint_count,
+            "checkpoint_seconds": round(_silver_report.checkpoint_seconds, 2),
+            "validation_seconds": round(_silver_report.validation_seconds, 2),
+            "merge_total_seconds": round(_silver_report.merge_total_seconds, 2),
+            "datasets_merged": list(_silver_report.datasets_merged),
+            "columns_per_dataset": dict(_silver_report.columns_per_dataset),
+            "seconds_per_dataset": {k: round(v, 2) for k, v in _silver_report.seconds_per_dataset.items()},
+            "total_columns": _silver_report.total_columns,
+        }
+        if _silver_report is not None else None
+    ),
+}
 
 from pathlib import Path
 from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
@@ -1491,13 +1529,18 @@ try:
 except Exception:
     _NAMESPACE = RunNamespace.from_env_or_latest()
 if _NAMESPACE is not None:
-    import json
-    _silver_meta = {"rows": _row_count, "columns": _col_count, "column_list": _result.columns}
+    _silver_meta = dict(_silver_results)
+    _silver_meta["column_list"] = _result.columns
     _NAMESPACE.silver_metadata_path.parent.mkdir(parents=True, exist_ok=True)
-    _NAMESPACE.silver_metadata_path.write_text(json.dumps(_silver_meta))
+    _NAMESPACE.silver_metadata_path.write_text(json.dumps(_silver_meta, default=str))
+
+print("\\n" + "=" * 60)
+print("SILVER RESULTS")
+print("=" * 60)
+print(json.dumps(_silver_results, indent=2, default=str))
 
 display(_result)
-dbutils.notebook.exit(_summary)
+dbutils.notebook.exit(json.dumps(_silver_results, default=str))
 """,
     "databricks_gold.py.j2": r"""# Databricks notebook source
 # MAGIC %md

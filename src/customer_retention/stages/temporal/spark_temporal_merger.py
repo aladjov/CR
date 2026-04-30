@@ -116,28 +116,36 @@ class SparkTemporalMerger(TemporalMerger):
 
         merged_sdf = _to_native_spark(spine)
 
+        t_spine = time.monotonic()
         report = MergeReport(
             spine_rows=merged_sdf.count(),
             spine_entities=merged_sdf.select(entity_key).distinct().count(),
             spine_dates=merged_sdf.select(as_of_column).distinct().count(),
         )
+        report.spine_stats_seconds = time.monotonic() - t_spine
 
+        t_loop = time.monotonic()
         n_datasets = len(datasets)
         for i, ds in enumerate(datasets):
-            t0 = time.monotonic()
+            t_ds = time.monotonic()
             merged_sdf, new_cols = self.merge_one(merged_sdf, ds)
 
             is_last = (i + 1) == n_datasets
             on_boundary = (i + 1) % checkpoint_every == 0
             if is_last or on_boundary:
+                t_ckpt = time.monotonic()
                 merged_sdf = _break_lineage(merged_sdf)
+                report.checkpoint_seconds += time.monotonic() - t_ckpt
+                report.checkpoint_count += 1
 
+            ds_seconds = time.monotonic() - t_ds
             report.datasets_merged.append(ds.name)
             report.columns_per_dataset[ds.name] = len(new_cols)
+            report.seconds_per_dataset[ds.name] = ds_seconds
             logger.info(
                 "Merged %d/%d '%s': +%d cols → %d total (%.1fs)",
                 i + 1, n_datasets, ds.name, len(new_cols),
-                len(merged_sdf.columns), time.monotonic() - t0,
+                len(merged_sdf.columns), ds_seconds,
             )
 
         report.total_columns = len(merged_sdf.columns)
@@ -151,12 +159,16 @@ class SparkTemporalMerger(TemporalMerger):
             from customer_retention.stages.temporal.point_in_time_join import (
                 PointInTimeJoiner,
             )
+            t_validate = time.monotonic()
             result_psdf = _as_pandas_api(merged_sdf)
             report.temporal_integrity = (
                 PointInTimeJoiner.validate_temporal_integrity(result_psdf)
             )
+            report.validation_seconds = time.monotonic() - t_validate
+            report.merge_total_seconds = time.monotonic() - t_loop
             return result_psdf, report
 
+        report.merge_total_seconds = time.monotonic() - t_loop
         return _as_pandas_api(merged_sdf), report
 
     def _spark_join_event(
