@@ -1,8 +1,9 @@
-"""Tests for the operator-side patch 15 (fail-safe gold encoder) regex and
-for the gold-encoding-targets probe regex.
+"""Tests for the operator-side patches 15 + 16 (fail-safe gold encoder +
+Spark-SQL-only label encoder) regexes and for the gold-encoding-targets
+probe regex.
 
-Both live in NB10 as user_code cells (see docs/sps_nb10_runtime_patches.md
-sections 15 and probe-15). The cells use only stdlib + pathlib, so the
+All three live in NB10 as user_code cells (see docs/sps_nb10_runtime_patches.md
+sections 15, 16, and probe-15). The cells use only stdlib + pathlib, so the
 critical correctness contract is the regex behaviour. These tests exercise
 that regex against the actual rendered gold and bronze code paths.
 """
@@ -31,6 +32,41 @@ PATCH15_REPLACEMENT = (
     '        return df\n'
 )
 PATCH15_MARKER = "[patch 15] fail-safe encoder rewrite"
+
+
+PATCH16_PATTERN = re.compile(
+    r'    from pyspark\.ml\.feature import StringIndexer\n'
+    r'    tmp = f"__\{col\}_idx"\n'
+    r'    indexer = StringIndexer\(inputCol=col, outputCol=tmp, handleInvalid="keep", stringOrderType="alphabetAsc"\)\n'
+    r'    df = indexer\.fit\(df\)\.transform\(df\)\.drop\(col\)\.withColumnRenamed\(tmp, col\)\n'
+    r'    return df\n'
+)
+PATCH16_REPLACEMENT = (
+    '    # [patch 16] Spark-SQL label encoding (no pyspark.ml StringIndexer)\n'
+    '    _vals = sorted({\n'
+    '        row[0] for row in\n'
+    '        df.select(col).where(F.col(col).isNotNull()).distinct().collect()\n'
+    '    })\n'
+    '    if not _vals:\n'
+    '        print(f"[patch16] gold encoder: {col!r} has no non-null values; dropping")\n'
+    '        return df.drop(col)\n'
+    '    _n = len(_vals)\n'
+    '    _col_dtype = df.schema[col].dataType.simpleString()\n'
+    '    _lookup = df.sparkSession.createDataFrame(\n'
+    '        [(_v, _i) for _i, _v in enumerate(_vals)],\n'
+    '        schema=f"{col} {_col_dtype}, __idx int",\n'
+    '    )\n'
+    '    _tmp = f"__{col}_idx"\n'
+    '    df = (\n'
+    '        df.join(F.broadcast(_lookup), on=col, how="left")\n'
+    '          .withColumn(_tmp, F.coalesce(F.col("__idx"), F.lit(_n)).cast("int"))\n'
+    '          .drop("__idx")\n'
+    '          .drop(col)\n'
+    '          .withColumnRenamed(_tmp, col)\n'
+    '    )\n'
+    '    return df\n'
+)
+PATCH16_MARKER = "[patch 16] Spark-SQL label encoding"
 
 
 # Probe regexes: extract gold encoding targets and bronze/silver column
@@ -300,3 +336,188 @@ class TestProbeRegexes:
         missing = targets - creators
 
         assert missing == {"Y"}
+
+
+class TestPatch16RegexRewrite:
+    """Patch 16 replaces the StringIndexer body of _label_encode with a
+    Spark-SQL broadcast-join body. Independent of patch 15 (different
+    region of the same function)."""
+
+    def _label_encode_block(self) -> str:
+        return dedent('''\
+            def _label_encode(df, col):
+                if col not in df.columns:
+                    raise RuntimeError(
+                        f"[GOLD] label encoding target '{col}' missing."
+                    )
+                from pyspark.ml.feature import StringIndexer
+                tmp = f"__{col}_idx"
+                indexer = StringIndexer(inputCol=col, outputCol=tmp, handleInvalid="keep", stringOrderType="alphabetAsc")
+                df = indexer.fit(df).transform(df).drop(col).withColumnRenamed(tmp, col)
+                return df
+            ''')
+
+    def test_rewrites_label_encode_body(self):
+        src = self._label_encode_block()
+        new_src, n = PATCH16_PATTERN.subn(PATCH16_REPLACEMENT, src)
+        assert n == 1, f"expected exactly one rewrite, got {n}"
+        assert "from pyspark.ml.feature import StringIndexer" not in new_src
+        assert "indexer.fit" not in new_src
+        assert "indexer = StringIndexer(" not in new_src
+        assert PATCH16_MARKER in new_src
+        assert "F.broadcast(_lookup)" in new_src
+
+    def test_idempotent_via_marker(self):
+        src = self._label_encode_block()
+        once, n1 = PATCH16_PATTERN.subn(PATCH16_REPLACEMENT, src)
+        twice, n2 = PATCH16_PATTERN.subn(PATCH16_REPLACEMENT, once)
+        assert n1 == 1
+        assert n2 == 0
+        assert once == twice
+
+    def test_does_not_match_one_hot_body(self):
+        """_encode_one_hot's body has 'categories = [...].collect()'; patch 16
+        must not rewrite it."""
+        src = dedent('''\
+            def _encode_one_hot(df, col, max_categories=100):
+                if col not in df.columns:
+                    raise RuntimeError("missing")
+                categories = [row[col] for row in df.select(col).distinct().collect() if row[col] is not None]
+                for cat in sorted(categories):
+                    df = df.withColumn(f"{col}_{cat}", F.when(F.col(col) == cat, 1).otherwise(0))
+                return df
+            ''')
+        _, n = PATCH16_PATTERN.subn(PATCH16_REPLACEMENT, src)
+        assert n == 0
+
+    def test_does_not_match_unrelated_stringindexer(self):
+        """Patch 16's regex anchors on the exact 4-line shape inside
+        _label_encode. Unrelated StringIndexer use in another function must
+        not trigger a rewrite."""
+        src = dedent('''\
+            def some_other_func(df):
+                from pyspark.ml.feature import StringIndexer
+                idx = StringIndexer(inputCol="x", outputCol="y")
+                return idx.fit(df).transform(df)
+            ''')
+        _, n = PATCH16_PATTERN.subn(PATCH16_REPLACEMENT, src)
+        assert n == 0
+
+    def test_rewrite_compiles_as_python(self):
+        src = "from pyspark.sql import functions as F\n\n" + self._label_encode_block()
+        new_src, n = PATCH16_PATTERN.subn(PATCH16_REPLACEMENT, src)
+        assert n == 1
+        compile(new_src, "<patch16>", "exec")
+
+    def test_independent_of_patch_15(self):
+        """Patches 15 and 16 mutate disjoint regions. Applying in either
+        order must yield the same final source."""
+        src = self._label_encode_block()
+
+        order_15_then_16, _ = PATCH15_PATTERN.subn(PATCH15_REPLACEMENT, src)
+        order_15_then_16, _ = PATCH16_PATTERN.subn(PATCH16_REPLACEMENT, order_15_then_16)
+
+        order_16_then_15, _ = PATCH16_PATTERN.subn(PATCH16_REPLACEMENT, src)
+        order_16_then_15, _ = PATCH15_PATTERN.subn(PATCH15_REPLACEMENT, order_16_then_15)
+
+        assert order_15_then_16 == order_16_then_15
+        assert PATCH15_MARKER in order_15_then_16
+        assert PATCH16_MARKER in order_15_then_16
+        assert "raise RuntimeError" not in order_15_then_16
+        assert "from pyspark.ml.feature import StringIndexer" not in order_15_then_16
+
+
+class TestPatch16AgainstRenderedGold:
+    def test_rewrites_real_rendered_gold(self):
+        """Render gold via DatabricksCodeRenderer and confirm patch 16's
+        regex matches the _label_encode body in the actual output. The
+        StringIndexer body appears exactly once per gold file."""
+        from customer_retention.generators.pipeline_generator.databricks_renderer import (
+            DatabricksCodeRenderer,
+        )
+        from customer_retention.generators.pipeline_generator.models import (
+            GoldLayerConfig,
+            PipelineConfig,
+            PipelineTransformationType,
+            SilverLayerConfig,
+            SourceConfig,
+            TransformationStep,
+        )
+
+        encoding = TransformationStep(
+            type=PipelineTransformationType.ENCODE,
+            column="lifecycle_quadrant",
+            parameters={"method": "one_hot"},
+            rationale="encode lifecycle quadrant",
+        )
+        cfg = PipelineConfig(
+            name="test",
+            composite_name="test_xxxxxxx",
+            target_column="target",
+            sources=[SourceConfig(name="src", path="src.csv", format="csv", entity_key="id")],
+            bronze={},
+            silver=SilverLayerConfig(),
+            gold=GoldLayerConfig(encodings=[encoding]),
+            output_dir="/tmp/test",
+        )
+        renderer = DatabricksCodeRenderer(catalog="cat", schema="sch")
+        rendered = renderer.render_gold(cfg)
+
+        assert "def _label_encode(df, col):" in rendered
+        assert "from pyspark.ml.feature import StringIndexer" in rendered
+        assert "indexer.fit(df).transform(df)" in rendered
+
+        patched, n = PATCH16_PATTERN.subn(PATCH16_REPLACEMENT, rendered)
+        assert n == 1, f"expected 1 rewrite against real rendered gold, got {n}"
+        assert "from pyspark.ml.feature import StringIndexer" not in patched
+        assert "indexer.fit" not in patched
+        assert PATCH16_MARKER in patched
+
+        compile(patched, "<rendered_patched_16>", "exec")
+
+    def test_15_and_16_applied_together_against_rendered_gold(self):
+        """Operator workflow applies patch 15 (encoder guards) and patch 16
+        (label-encode body) in sequence. Both must complete and the result
+        must compile."""
+        from customer_retention.generators.pipeline_generator.databricks_renderer import (
+            DatabricksCodeRenderer,
+        )
+        from customer_retention.generators.pipeline_generator.models import (
+            GoldLayerConfig,
+            PipelineConfig,
+            PipelineTransformationType,
+            SilverLayerConfig,
+            SourceConfig,
+            TransformationStep,
+        )
+
+        encoding = TransformationStep(
+            type=PipelineTransformationType.ENCODE,
+            column="lifecycle_quadrant",
+            parameters={"method": "one_hot"},
+            rationale="encode lifecycle quadrant",
+        )
+        cfg = PipelineConfig(
+            name="test",
+            composite_name="test_xxxxxxx",
+            target_column="target",
+            sources=[SourceConfig(name="src", path="src.csv", format="csv", entity_key="id")],
+            bronze={},
+            silver=SilverLayerConfig(),
+            gold=GoldLayerConfig(encodings=[encoding]),
+            output_dir="/tmp/test",
+        )
+        renderer = DatabricksCodeRenderer(catalog="cat", schema="sch")
+        rendered = renderer.render_gold(cfg)
+
+        patched, n15 = PATCH15_PATTERN.subn(PATCH15_REPLACEMENT, rendered)
+        patched, n16 = PATCH16_PATTERN.subn(PATCH16_REPLACEMENT, patched)
+
+        assert n15 == 2
+        assert n16 == 1
+        assert patched.count(PATCH15_MARKER) == 2
+        assert patched.count(PATCH16_MARKER) == 1
+        assert "raise RuntimeError" not in patched
+        assert "from pyspark.ml.feature import StringIndexer" not in patched
+
+        compile(patched, "<rendered_patched_15_and_16>", "exec")
