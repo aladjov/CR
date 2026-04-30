@@ -313,9 +313,18 @@ def render() -> None:
 
     # Render the template. On any render error, show a pivoted fallback so the
     # CSM still sees the raw fields.
+    #
+    # Inject via ``st.markdown(..., unsafe_allow_html=True)`` rather than
+    # ``st.html()``: the latter does NOT reliably preserve inline ``<style>``
+    # blocks on the deployed Databricks App (the rules end up scoped to a
+    # different shadow root, so ``.cr-card``, ``.cr-grid``, ``.cr-shap-row``
+    # etc. all fall through to default browser styles and the panel collapses
+    # to a single column). The ``st.markdown`` path is the same one
+    # ``app.py`` uses for ``theme.css`` and is known to apply the rules
+    # globally to the page.
     try:
         html = bundle_css(template) + render_html(template, context)
-        st.html(html)
+        st.markdown(html, unsafe_allow_html=True)
     except Exception as exc:
         st.error(f"Template render failed ({exc}). Showing raw data instead.")
         _render_pivoted_fallback(detail_df.iloc[0])
