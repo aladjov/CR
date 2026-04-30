@@ -11,13 +11,5 @@ env:
   - name: CR_WAREHOUSE_ID
     # Override at deploy time: `databricks apps update ... --env CR_WAREHOUSE_ID=<id>`
     # Point at any SQL Warehouse that can read v_portfolio_risk_matrix, v_playbook_archetype_rollup,
-    # v_eligible_all_playbooks, v_account_explanation in CR_CATALOG.CR_SCHEMA.
+    # v_eligible_all_playbooks, v_account_explanation, v_dashboard_template_active in CR_CATALOG.CR_SCHEMA.
     value: ""
-  - name: CR_PROFILE_TEMPLATE_PATH
-    # Optional: explicit path to the per-dataset customer-profile HTML template.
-    # When set, the app skips auto-discovery (which globs /Volumes/<catalog>/<schema>/dashboard_templates/*.html)
-    # and reads this exact file. Useful when the App service principal has READ_VOLUME on the file
-    # but the volume directory listing is flaky, or when you want to pin one specific template.
-    # When empty the app auto-discovers the newest .html in the dashboard_templates volume,
-    # and falls back to the bundled default_profile.html if nothing is found.
-    value: "/Volumes/churnkit/analysis/dashboard_templates/customer_emails_profile.html"

@@ -144,12 +144,27 @@ class TestSplitViewStatements:
     def test_splits_one_statement_per_named_view(self):
         rendered = render_dashboard_view_sql("c", "s")
         statements = split_view_statements(rendered)
-        # Default render includes the (gated-at-publish-time) provenance view.
-        assert len(statements) == len(DASHBOARD_VIEW_NAMES) + len(
-            DASHBOARD_PROVENANCE_VIEW_NAMES
+        # Default render includes the (gated-at-publish-time) provenance view
+        # AND the always-on dashboard-template store: one CREATE TABLE for
+        # ``dashboard_template_overrides`` plus one CREATE VIEW for
+        # ``v_dashboard_template_active``.
+        from customer_retention.stages.causal.dashboard_views import (
+            DASHBOARD_TEMPLATE_TABLE_NAMES,
+            DASHBOARD_TEMPLATE_VIEW_NAMES,
         )
+        expected = (
+            len(DASHBOARD_VIEW_NAMES)
+            + len(DASHBOARD_PROVENANCE_VIEW_NAMES)
+            + len(DASHBOARD_TEMPLATE_TABLE_NAMES)
+            + len(DASHBOARD_TEMPLATE_VIEW_NAMES)
+        )
+        assert len(statements) == expected
+        # Every statement is either a CREATE VIEW or the template's CREATE TABLE.
         for stmt in statements:
-            assert "CREATE OR REPLACE VIEW" in stmt
+            assert (
+                "CREATE OR REPLACE VIEW" in stmt
+                or "CREATE TABLE IF NOT EXISTS" in stmt
+            )
 
     def test_strips_empty_trailing_segment(self):
         statements = split_view_statements("SELECT 1; SELECT 2;")
@@ -196,8 +211,18 @@ class TestPublishDashboardViews:
         statements = publish_dashboard_views(spark, "c", "s")
         # MagicMock's tableExists returns truthy for the provenance prereqs
         # (feature_meta + column_descriptions), so the publisher includes the
-        # provenance view too.
-        expected = len(DASHBOARD_VIEW_NAMES) + len(DASHBOARD_PROVENANCE_VIEW_NAMES)
+        # provenance view too. The template-store CREATE TABLE +
+        # v_dashboard_template_active CREATE VIEW always render.
+        from customer_retention.stages.causal.dashboard_views import (
+            DASHBOARD_TEMPLATE_TABLE_NAMES,
+            DASHBOARD_TEMPLATE_VIEW_NAMES,
+        )
+        expected = (
+            len(DASHBOARD_VIEW_NAMES)
+            + len(DASHBOARD_PROVENANCE_VIEW_NAMES)
+            + len(DASHBOARD_TEMPLATE_TABLE_NAMES)
+            + len(DASHBOARD_TEMPLATE_VIEW_NAMES)
+        )
         assert len(statements) == expected
         # publish_dashboard_views also issues a CREATE TABLE IF NOT EXISTS for
         # run_context (the v_run_context view references it and Spark validates
@@ -207,7 +232,11 @@ class TestPublishDashboardViews:
             call for call in spark.sql.call_args_list
             if "CREATE OR REPLACE VIEW" in call.args[0]
         ]
-        assert len(view_calls) == expected
+        assert len(view_calls) == (
+            len(DASHBOARD_VIEW_NAMES)
+            + len(DASHBOARD_PROVENANCE_VIEW_NAMES)
+            + len(DASHBOARD_TEMPLATE_VIEW_NAMES)
+        )
 
     def test_ensures_run_context_table_before_publishing_views(self):
         spark = MagicMock()

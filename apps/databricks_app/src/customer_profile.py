@@ -1,16 +1,22 @@
 """L4 — Customer profile card rendered via Handlebars HTML template.
 
-The profile is one HTML template (default ships with the app; CSMs override via
-`CR_PROFILE_TEMPLATE_PATH`). The template declares any additional tables to join
-against the selected entity in its YAML frontmatter; values are merged into the
-template context so `{{account.mrr}}` etc. work without Python changes.
+The profile is one HTML template body. Default ships with the app; CSMs
+override per-dataset by re-running the framework's
+``apply_profile_override(...)`` cell, which appends a row to
+``{catalog}.{schema}.dashboard_template_overrides`` (exposed by
+``v_dashboard_template_active``). The app reads the active row through
+the SQL warehouse — no Volume FUSE access is involved.
 
-When rendering fails for any reason the panel falls back to a non-styled dump
-of every column on v_account_explanation so the CSM still sees the data.
+The template declares any additional tables to join against the selected
+entity in its YAML frontmatter; values are merged into the template
+context so ``{{account.mrr}}`` etc. work without Python changes.
+
+When rendering fails for any reason the panel falls back to a non-styled
+dump of every column on v_account_explanation so the CSM still sees the
+data.
 """
 from __future__ import annotations
 
-import os
 from typing import Any
 
 import pandas as pd
@@ -20,7 +26,7 @@ from databricks.sdk.core import Config
 
 from . import data, state
 from .config import load_config
-from .template import DataSource, bundle_css, load_template, render_html
+from .template import DataSource, bundle_css, load_template_from_text, render_html
 
 
 def _clean(v: Any) -> Any:
@@ -251,9 +257,13 @@ def render() -> None:
         st.warning(f"No detail row found for entity **{entity}**.")
         return
 
-    cfg = load_config()
-    requested_path = cfg.profile_template_path or None
-    template = load_template(requested_path)
+    # Per-dataset HTML body: read from the UC ``v_dashboard_template_active``
+    # view via the SQL warehouse (the same auth path every other dashboard
+    # query uses). On miss, ``load_template_from_text`` reads the bundled
+    # default. No volume access — that route was unreliable from Apps even
+    # with READ_VOLUME granted.
+    html_text = data.load_template_html_from_uc()
+    template = load_template_from_text(html_text)
 
     # Build the full template context: flat account_explanation columns
     # + one nested dict per declared data source.
@@ -293,43 +303,13 @@ def render() -> None:
         feature_dictionary.append({"feature": feature, **row["meta"]})
     context["feature_dictionary"] = feature_dictionary
 
-    data_source_diagnostics: list[dict[str, Any]] = []
     for ds in template.data_sources:
-        ds_diag = {
-            "name": ds.name,
-            "source": ds.source,
-            "join_key": ds.join_key,
-            "as_list": ds.as_list,
-            "status": "ok",
-            "error": "",
-            "row_count": 0,
-        }
         try:
-            value = _fetch_data_source(ds, entity)
-            context[ds.name] = value
-            if ds.as_list:
-                ds_diag["row_count"] = len(value) if value else 0
-                ds_diag["status"] = "ok" if value else "empty"
-            else:
-                ds_diag["row_count"] = 1 if value else 0
-                ds_diag["status"] = "ok" if value else "empty"
-        except Exception as exc:
-            ds_diag["status"] = "error"
-            ds_diag["error"] = f"{type(exc).__name__}: {exc}"
+            context[ds.name] = _fetch_data_source(ds, entity)
+        except Exception:
+            # Empty placeholder keeps {{#if ds}} / {{#each ds}} falsy/empty
+            # so the template still renders the rest of the panel cleanly.
             context[ds.name] = [] if ds.as_list else {}
-        data_source_diagnostics.append(ds_diag)
-
-    # Inject the load diagnostic into the template context so the empty-state
-    # panel can render it (operators sometimes can't reach the App's Logs tab).
-    context["_template_diagnostic"] = {
-        **template.diagnostic,
-        "catalog": cfg.catalog,
-        "schema": cfg.schema,
-        "data_sources": data_source_diagnostics,
-        # Show the raw env var separately so operators can tell the difference
-        # between "env var was set" and "auto-discovery picked it up".
-        "env_var_set": bool(os.environ.get("CR_PROFILE_TEMPLATE_PATH", "").strip()),
-    }
 
     # Render the template. On any render error, show a pivoted fallback so the
     # CSM still sees the raw fields.

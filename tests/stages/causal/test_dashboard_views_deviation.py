@@ -12,10 +12,31 @@ from unittest.mock import MagicMock
 from customer_retention.stages.causal.dashboard_views import (
     DASHBOARD_DEVIATION_VIEW_NAMES,
     DASHBOARD_PROVENANCE_VIEW_NAMES,
+    DASHBOARD_TEMPLATE_TABLE_NAMES,
+    DASHBOARD_TEMPLATE_VIEW_NAMES,
     DASHBOARD_VIEW_NAMES,
     publish_dashboard_views,
     render_dashboard_view_sql,
     split_view_statements,
+)
+
+# Statements always emitted on top of the regular view set:
+#   - DASHBOARD_PROVENANCE_VIEW_NAMES (gated at publish-time on prereqs;
+#     the renderer always includes them)
+#   - DASHBOARD_TEMPLATE_TABLE_NAMES (CREATE TABLE -- always emitted)
+#   - DASHBOARD_TEMPLATE_VIEW_NAMES  (CREATE VIEW  -- always emitted)
+_BASE_NON_DEVIATION_STATEMENTS = (
+    len(DASHBOARD_VIEW_NAMES)
+    + len(DASHBOARD_PROVENANCE_VIEW_NAMES)
+    + len(DASHBOARD_TEMPLATE_TABLE_NAMES)
+    + len(DASHBOARD_TEMPLATE_VIEW_NAMES)
+)
+# Subset that becomes a CREATE OR REPLACE VIEW (everything except the
+# template table's CREATE TABLE).
+_BASE_NON_DEVIATION_VIEW_CALLS = (
+    len(DASHBOARD_VIEW_NAMES)
+    + len(DASHBOARD_PROVENANCE_VIEW_NAMES)
+    + len(DASHBOARD_TEMPLATE_VIEW_NAMES)
 )
 
 
@@ -52,12 +73,12 @@ def test_render_substitutes_catalog_and_schema_with_composite():
 
 def test_statement_count_matches_expected_with_and_without():
     # Provenance view is included in render output by default; the publisher
-    # is what gates it on prerequisite-table existence.
-    base_with_prov = len(DASHBOARD_VIEW_NAMES) + len(DASHBOARD_PROVENANCE_VIEW_NAMES)
-    assert len(split_view_statements(render_dashboard_view_sql("c", "s"))) == base_with_prov
+    # is what gates it on prerequisite-table existence. The template-store
+    # CREATE TABLE + v_dashboard_template_active CREATE VIEW always render.
+    assert len(split_view_statements(render_dashboard_view_sql("c", "s"))) == _BASE_NON_DEVIATION_STATEMENTS
     assert len(split_view_statements(render_dashboard_view_sql(
         "c", "s", composite_name="cn1"
-    ))) == base_with_prov + len(DASHBOARD_DEVIATION_VIEW_NAMES)
+    ))) == _BASE_NON_DEVIATION_STATEMENTS + len(DASHBOARD_DEVIATION_VIEW_NAMES)
 
 
 def test_deviation_view_computes_z_and_pct_dev():
@@ -104,12 +125,9 @@ def test_publish_with_composite_name_runs_extra_statements():
     spark = MagicMock()
     publish_dashboard_views(spark, "c", "s", composite_name="cn1")
     # MagicMock's tableExists returns truthy for every prereq, so the publisher
-    # includes both the deviation block and the provenance view.
-    expected = (
-        len(DASHBOARD_VIEW_NAMES)
-        + len(DASHBOARD_DEVIATION_VIEW_NAMES)
-        + len(DASHBOARD_PROVENANCE_VIEW_NAMES)
-    )
+    # includes both the deviation block and the provenance view, plus the
+    # always-on template-store view.
+    expected = _BASE_NON_DEVIATION_VIEW_CALLS + len(DASHBOARD_DEVIATION_VIEW_NAMES)
     view_calls = [
         call for call in spark.sql.call_args_list
         if "CREATE OR REPLACE VIEW" in call.args[0]
@@ -124,9 +142,7 @@ def test_publish_without_composite_name_keeps_original_count():
         call for call in spark.sql.call_args_list
         if "CREATE OR REPLACE VIEW" in call.args[0]
     ]
-    assert len(view_calls) == len(DASHBOARD_VIEW_NAMES) + len(
-        DASHBOARD_PROVENANCE_VIEW_NAMES
-    )
+    assert len(view_calls) == _BASE_NON_DEVIATION_VIEW_CALLS
 
 
 def test_publish_skips_deviation_when_population_stats_table_missing():
@@ -149,11 +165,9 @@ def test_publish_skips_deviation_when_population_stats_table_missing():
         if "CREATE OR REPLACE VIEW" in call.args[0]
     ]
     submitted = "\n".join(call.args[0] for call in view_calls)
-    # Non-deviation views still publish; provenance prereqs (feature_meta /
-    # column_descriptions) pass the side_effect filter so its view ships too.
-    assert len(view_calls) == len(DASHBOARD_VIEW_NAMES) + len(
-        DASHBOARD_PROVENANCE_VIEW_NAMES
-    )
+    # Non-deviation views still publish; provenance + template-store views
+    # pass the side_effect filter so they ship.
+    assert len(view_calls) == _BASE_NON_DEVIATION_VIEW_CALLS
     # Neither deviation view body reaches Spark.
     for name in DASHBOARD_DEVIATION_VIEW_NAMES:
         assert name not in submitted
@@ -175,8 +189,6 @@ def test_publish_skips_deviation_when_gold_features_table_missing():
         if "CREATE OR REPLACE VIEW" in call.args[0]
     ]
     submitted = "\n".join(call.args[0] for call in view_calls)
-    assert len(view_calls) == len(DASHBOARD_VIEW_NAMES) + len(
-        DASHBOARD_PROVENANCE_VIEW_NAMES
-    )
+    assert len(view_calls) == _BASE_NON_DEVIATION_VIEW_CALLS
     for name in DASHBOARD_DEVIATION_VIEW_NAMES:
         assert name not in submitted

@@ -59,6 +59,12 @@ DASHBOARD_DEVIATION_VIEW_NAMES: tuple[str, ...] = (
 DASHBOARD_PROVENANCE_VIEW_NAMES: tuple[str, ...] = (
     "v_feature_provenance",
 )
+DASHBOARD_TEMPLATE_VIEW_NAMES: tuple[str, ...] = (
+    "v_dashboard_template_active",
+)
+DASHBOARD_TEMPLATE_TABLE_NAMES: tuple[str, ...] = (
+    "dashboard_template_overrides",
+)
 
 
 def load_dashboard_view_sql() -> str:

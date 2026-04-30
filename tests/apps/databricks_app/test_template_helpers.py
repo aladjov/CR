@@ -67,11 +67,16 @@ def test_quantile_band_above_q95_is_very_high():
     assert _call("quantile_band", 400, 10, 50, 200, 400) == "very high"
 
 
-def test_quantile_band_missing_inputs_return_dash():
-    assert _call("quantile_band", None, 10, 50, 200, 400) == "—"
-    assert _call("quantile_band", 100, None, 50, 200, 400) == "—"
-    assert _call("quantile_band", 100, 10, 50, 200, None) == "—"
-    assert _call("quantile_band", "not_a_number", 10, 50, 200, 400) == "—"
+def test_quantile_band_missing_inputs_return_empty_string():
+    # Empty string lets the template's ``{{#if quantile_band ...}}`` branch
+    # collapse the band pill cleanly via CSS ``:empty`` instead of rendering
+    # a visible em-dash placeholder. Stale "—" assertions caught a real
+    # regression — the panel kept showing dashes on rows without population
+    # stats, which the redesign explicitly removed.
+    assert _call("quantile_band", None, 10, 50, 200, 400) == ""
+    assert _call("quantile_band", 100, None, 50, 200, 400) == ""
+    assert _call("quantile_band", 100, 10, 50, 200, None) == ""
+    assert _call("quantile_band", "not_a_number", 10, 50, 200, 400) == ""
 
 
 # ----------------------------------------------------------------------------
@@ -88,7 +93,10 @@ def test_band_class_maps_each_band():
 
 
 def test_band_class_unknown_inputs_fall_back():
-    assert _call("band_class", "—") == "cr-band-unknown"
+    # Empty string is the new "unknown" sentinel emitted by quantile_band when
+    # population stats are missing; the band_class helper still maps it to the
+    # ``cr-band-unknown`` CSS class so paired pill rendering stays consistent.
+    assert _call("band_class", "") == "cr-band-unknown"
     assert _call("band_class", None) == "cr-band-unknown"
     assert _call("band_class", "garbage") == "cr-band-unknown"
 
@@ -173,5 +181,59 @@ def test_fmt_raw_value_renders_float_three_decimals():
     assert _call("fmt_raw_value", 0.456789) == "0.457"
 
 
-def test_fmt_raw_value_missing_returns_dash():
-    assert _call("fmt_raw_value", None) == "—"
+def test_fmt_raw_value_missing_returns_empty_string():
+    # Empty string lets the SHAP-row raw-value cell collapse via CSS
+    # ``:empty`` instead of rendering a visible em-dash placeholder when
+    # the customer's raw value isn't available.
+    assert _call("fmt_raw_value", None) == ""
+
+
+# ----------------------------------------------------------------------------
+# direction_glyph / direction_tooltip — the bar-edge glyph + hover phrase
+# that replaced the permanent direction pill column.
+# ----------------------------------------------------------------------------
+
+
+def test_direction_glyph_arrows_match_sign():
+    assert _call("direction_glyph", 0.42) == "↑"   # up arrow → risk
+    assert _call("direction_glyph", -0.42) == "↓"  # down arrow → protective
+    assert _call("direction_glyph", 0.0) == ""
+    assert _call("direction_glyph", None) == ""
+
+
+def test_direction_tooltip_long_phrases():
+    risk = _call("direction_tooltip", 0.42)
+    prot = _call("direction_tooltip", -0.42)
+    assert "Risk-driving" in risk and "churn" in risk
+    assert "Protective" in prot and "retention" in prot
+
+
+# ----------------------------------------------------------------------------
+# shap_share_pct — share of total visible |SHAP|, sums to 100% across rows
+# ----------------------------------------------------------------------------
+
+
+def test_shap_share_pct_sums_to_100_across_visible_rows():
+    drivers = [
+        {"shap_contribution": 0.40},
+        {"shap_contribution": -0.20},
+        {"shap_contribution": 0.10},
+    ]
+    # Total |shap| = 0.7. Shares: 0.40/0.7 ≈ 57%, 0.20/0.7 ≈ 29%, 0.10/0.7 ≈ 14%.
+    assert _call("shap_share_pct", 0.40, drivers) == "57%"
+    assert _call("shap_share_pct", -0.20, drivers) == "29%"
+    assert _call("shap_share_pct", 0.10, drivers) == "14%"
+
+
+def test_shap_share_pct_tiny_value_renders_lt_1pct():
+    drivers = [
+        {"shap_contribution": 1.0},
+        {"shap_contribution": 0.001},  # 0.1% share → <1%
+    ]
+    assert _call("shap_share_pct", 0.001, drivers) == "<1%"
+
+
+def test_shap_share_pct_missing_returns_empty_string():
+    # Paired with a {{#if ...}} in the template so the label disappears
+    # cleanly on rows that have no SHAP contribution at all.
+    assert _call("shap_share_pct", None, [{"shap_contribution": 1.0}]) == ""

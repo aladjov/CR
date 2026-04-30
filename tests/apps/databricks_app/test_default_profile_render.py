@@ -156,7 +156,7 @@ def test_renders_shap_panel_with_bidirectional_bars(compiled_template, base_cont
         {
             "feature": "regularity_score", "value": 0.0, "shap_contribution":  0.10,
             "direction": "positive",
-            # No deviation row available — band should fall back to "—" / "unknown".
+            # No deviation row available — band falls back to empty (no pill).
         },
     ]
     html = compiled_template(base_context, helpers=HELPERS)
@@ -168,18 +168,32 @@ def test_renders_shap_panel_with_bidirectional_bars(compiled_template, base_cont
     # Largest absolute contribution → 100% bar; half-magnitude → 50%.
     assert "width:100.0%" in html
     assert "width:50.0%" in html
-    # Raw values surface unscaled in the new layout (was: scaled value).
+    # Raw values surface unscaled in the new layout.
     assert "150" in html
     # Quantile band labels render with their pill class.
     assert "cr-band-typical" in html  # active_span_days = 150 sits in [120 q50, 200 q75) → "typical" (q25..q75)
     assert "cr-band-very-high" in html  # open_rate = 0.85 ≥ q95 (0.8) → "very high"
-    # Direction phrases — yellow row says risk-driving, green row says protective.
-    assert "risk-driving" in html
-    assert "protective" in html
-    # Per-row collapsible "Model math" details with the old log-odds value.
+    # In-bar glyph replaces the old permanent direction-pill column. Up arrow
+    # for the risk-driving rows; down arrow for the protective row.
+    assert "↑" in html
+    assert "↓" in html
+    assert "cr-shap-bar-glyph" in html
+    # Direction tooltip rendered on the bar-track via title attribute.
+    assert "Risk-driving" in html
+    assert "Protective" in html
+    # Percentage label (share of total visible |SHAP|): 0.40 / (0.40+0.20+0.10) = 57%
+    assert "cr-shap-bar-label" in html
+    assert "57%" in html
+    assert "29%" in html
+    assert "14%" in html
+    # Per-row collapsible "Model math" details still carry the log-odds value.
     assert "cr-shap-math" in html
     assert "+0.400" in html
     assert "-0.200" in html
+    # The permanent ``risk-driving``/``protective`` pill column is gone — the
+    # phrase only surfaces as a tooltip + glyph now, so no ``cr-shap-direction``
+    # node should be in the rendered HTML.
+    assert "cr-shap-direction" not in html
 
 
 def test_no_account_top_shap_features_hides_shap_panel(compiled_template, base_context):
@@ -189,25 +203,27 @@ def test_no_account_top_shap_features_hides_shap_panel(compiled_template, base_c
     assert "cr-shap" not in html
 
 
-def test_customer_left_panel_shows_setup_hint_when_no_data(compiled_template, base_context):
-    # The default template renders a self-explanatory empty state when no
-    # ``customer`` data source is wired -- pointing the operator at the
-    # CR_PROFILE_TEMPLATE_PATH env var and the override docs. Previously
-    # the panel rendered nothing at all, which made the cause invisible.
+def test_customer_left_panel_renders_nothing_when_no_data(compiled_template, base_context):
+    # The empty-state diagnostic block has been removed. With the UC-table
+    # template route, the per-dataset HTML loads reliably (or the bundled
+    # fallback runs); the diagnostic was vestigial. When no ``customer``
+    # data source is wired, the left panel should now be empty -- no
+    # ``cr-customer-profile`` shell, no ``CR_PROFILE_TEMPLATE_PATH`` hint,
+    # no ``cr-customer-empty`` block.
     base_context.pop("customer", None)
     html = compiled_template(base_context, helpers=HELPERS)
-    assert "cr-customer-empty" in html
-    assert "CR_PROFILE_TEMPLATE_PATH" in html
-    assert "apply_profile_override" in html
+    assert "cr-customer-empty" not in html
+    assert "CR_PROFILE_TEMPLATE_PATH" not in html
+    assert "Dataset-specific panel pending" not in html
 
 
 def test_customer_left_panel_renders_real_data_when_provided(compiled_template, base_context):
     # When a dataset-specific template HAS wired the ``customer`` source
-    # (so its frontmatter populated this field), the empty-state hint
-    # must NOT show -- otherwise both blocks would stack.
+    # the visible-fields-pending shell still renders; covers the customer
+    # data path end-to-end.
     base_context["customer"] = {"customer_since": "2024-01-15", "lifecycle_quadrant": "Active"}
     html = compiled_template(base_context, helpers=HELPERS)
-    assert "cr-customer-empty" not in html
+    assert "cr-customer-profile" in html
     assert "Dataset-specific panel pending" not in html
 
 

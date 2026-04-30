@@ -847,7 +847,8 @@ fm AS (
         f.window_phrase,
         f.target_dependency,
         f.polarity,
-        f.business_phrase
+        f.business_phrase,
+        f.composite_name
     FROM {catalog}.{schema}.feature_meta f
     JOIN latest_rc lr
       ON f.run_id = lr.run_id
@@ -876,6 +877,13 @@ SELECT
     fm.feature_name,
     fm.source_columns,
     fm.source_table,
+    -- ``source_dataset`` is the human-readable display name (the source table
+    -- name as the operator sees it). ``composite_name`` is the stable run-level
+    -- identifier; the dashboard surfaces it as a hover tooltip beside the
+    -- dataset name so CSMs can correlate features back to the model artifact
+    -- without leaking it into the primary visual.
+    fm.source_table  AS source_dataset,
+    fm.composite_name,
     fm.aggregation_kind,
     fm.window_days,
     fm.window_phrase,
@@ -886,3 +894,42 @@ SELECT
 FROM fm
 LEFT JOIN col_defs cd ON cd.feature_name = fm.feature_name;
 -- @cr:provenance-block:close
+
+-- ============================================================================
+-- 15. dashboard_template_overrides + v_dashboard_template_active
+-- ----------------------------------------------------------------------------
+-- UC-table-based store for the per-dataset Streamlit customer-profile HTML
+-- body. Replaces the prior volume-based template path
+-- (``/Volumes/<cat>/<schema>/dashboard_templates/<name>.html``) — Volume
+-- FUSE access is unreliable from Databricks Apps because the App service
+-- principal cannot consistently stat or read those mounts even with
+-- READ_VOLUME granted, while SQL warehouse reads from UC tables work via
+-- the same auth path the dashboard already uses for every v_* view.
+--
+-- Writer: ``apply_profile_override`` upserts (composite_name, profile_html,
+-- updated_at, updated_by) on every c05 publish.
+-- Reader: ``apps/databricks_app/src/data.load_template_html_from_uc()``
+-- queries ``v_dashboard_template_active``, which collapses to one row per
+-- composite_name (most recent updated_at wins).
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS {catalog}.{schema}.dashboard_template_overrides (
+    composite_name  STRING NOT NULL,
+    profile_html    STRING NOT NULL,
+    updated_at      TIMESTAMP NOT NULL,
+    updated_by      STRING
+) USING DELTA;
+
+CREATE OR REPLACE VIEW {catalog}.{schema}.v_dashboard_template_active AS
+SELECT composite_name, profile_html, updated_at, updated_by
+FROM (
+    SELECT
+        composite_name,
+        profile_html,
+        updated_at,
+        updated_by,
+        ROW_NUMBER() OVER (
+            PARTITION BY composite_name ORDER BY updated_at DESC
+        ) AS rn
+    FROM {catalog}.{schema}.dashboard_template_overrides
+)
+WHERE rn = 1;

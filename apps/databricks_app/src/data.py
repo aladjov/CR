@@ -228,12 +228,68 @@ def feature_provenance() -> pd.DataFrame:
     One row per feature_name. Cached for 5 min — feature metadata is slow-
     changing and the table is small (<10k rows). Returns an empty DataFrame
     when ``v_feature_provenance`` is missing (e.g. older causal-track build).
+
+    The view exposes both ``source_table`` (raw column from feature_meta)
+    and ``source_dataset`` (alias for display, same value) plus
+    ``composite_name`` (the run-level identifier surfaced as a hover
+    tooltip beside the dataset name in the Feature dictionary table).
     """
     cfg = load_config()
     try:
         return _query(cfg, f"SELECT * FROM {cfg.fqn_prefix}.v_feature_provenance")
     except Exception:
         return pd.DataFrame()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def load_template_html_from_uc(composite_name: Optional[str] = None) -> Optional[str]:
+    """Read the active customer-profile HTML body from Unity Catalog.
+
+    Reads from ``v_dashboard_template_active`` -- a view that returns the
+    most recent row per ``composite_name`` from
+    ``dashboard_template_overrides`` (where ``apply_profile_override``
+    appends every published template). Replaces the prior volume-based
+    auto-discovery (``Path("/Volumes/<cat>/<sch>/dashboard_templates").iterdir()``),
+    which was unreliable from Databricks Apps because the App service
+    principal cannot consistently read Volume FUSE mounts even with
+    ``READ_VOLUME`` granted.
+
+    Returns the HTML body as a string when found, ``None`` when the view
+    has no matching row OR the view itself doesn't exist (older
+    causal-track build, table not yet created). Callers fall back to the
+    bundled ``default_profile.html`` on ``None``.
+    """
+    cfg = load_config()
+    try:
+        if composite_name:
+            df = _query(
+                cfg,
+                f"""
+                SELECT profile_html
+                FROM {cfg.fqn_prefix}.v_dashboard_template_active
+                WHERE composite_name = :composite_name
+                LIMIT 1
+                """,
+                {"composite_name": composite_name},
+            )
+        else:
+            # No composite_name supplied: take the most recently updated row
+            # across all datasets. Single-dataset deploys hit this path.
+            df = _query(
+                cfg,
+                f"""
+                SELECT profile_html
+                FROM {cfg.fqn_prefix}.v_dashboard_template_active
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+            )
+    except Exception:
+        return None
+    if df.empty:
+        return None
+    html = df.iloc[0].get("profile_html")
+    return str(html) if html else None
 
 
 @st.cache_data(ttl=300, show_spinner=False)

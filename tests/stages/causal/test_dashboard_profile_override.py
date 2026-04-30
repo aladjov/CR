@@ -1,4 +1,11 @@
-"""Tests for the generic dashboard-profile-override helper."""
+"""Tests for the generic dashboard-profile-override helper.
+
+The override path used to write the HTML body to a Volume FUSE path; it
+now appends a row into ``{catalog}.{schema}.dashboard_template_overrides``
+(a Delta table the dashboard view publisher creates at the same time as
+``v_dashboard_template_active``). The Streamlit App reads via SQL so it
+no longer touches a Volume.
+"""
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -54,19 +61,39 @@ def test_render_profile_sql_rejects_reserved_placeholder_keys():
         )
 
 
-def test_apply_passes_placeholders_through(tmp_path):
+def _spark_mock_with_writer():
+    """A Spark mock whose ``createDataFrame(...).write.mode("append").saveAsTable(...)``
+    chain captures the args without exploding. Returned alongside the writer
+    leaf so individual tests can assert on what was appended.
+    """
     spark = MagicMock()
+    appender = MagicMock()
+    spark.createDataFrame.return_value.write.mode.return_value.saveAsTable.side_effect = (
+        appender
+    )
+    # current_user() row -- shape: row.asDict-style with a "u" attribute.
+    user_row = MagicMock()
+    user_row.__getitem__.side_effect = lambda key: "tester@example.com" if key == "u" else None
+    spark.sql.return_value.first.return_value = user_row
+    return spark, appender
+
+
+def test_apply_passes_placeholders_through():
+    spark, _ = _spark_mock_with_writer()
     sql = "CREATE OR REPLACE VIEW {catalog}.{schema}.v AS SELECT * FROM delta.`{vol}/silver/silver_merged`;"
     apply_profile_override(
         spark, "c", "s",
         profile_sql=sql,
         profile_html="x",
-        template_volume_path=str(tmp_path / "t.html"),
+        composite_name="cn1",
         placeholders={"vol": "/Volumes/foo/bar/runs/r/data"},
     )
-    submitted = spark.sql.call_args_list[0].args[0]
-    assert "/Volumes/foo/bar/runs/r/data/silver/silver_merged" in submitted
-    assert "{vol}" not in submitted
+    # The first spark.sql() call publishes a view (current_user() is also
+    # called via spark.sql(...).first() and has separate args).
+    submitted = [c.args[0] for c in spark.sql.call_args_list if c.args]
+    view_call = next(s for s in submitted if "/silver_merged" in s)
+    assert "/Volumes/foo/bar/runs/r/data/silver/silver_merged" in view_call
+    assert "{vol}" not in view_call
 
 
 def test_render_profile_sql_leaves_placeholder_when_no_composite():
@@ -77,110 +104,102 @@ def test_render_profile_sql_leaves_placeholder_when_no_composite():
     assert "{composite_name}" in out
 
 
-def test_apply_publishes_each_statement_in_sql(tmp_path):
-    spark = MagicMock()
+def test_apply_publishes_each_statement_in_sql():
+    spark, _ = _spark_mock_with_writer()
     sql = (
         "CREATE OR REPLACE VIEW {catalog}.{schema}.v_account_profile AS SELECT 1;\n"
         "CREATE OR REPLACE VIEW {catalog}.{schema}.v_account_profile_extra AS SELECT 2;\n"
     )
-    template_path = tmp_path / "profile.html"
     res = apply_profile_override(
         spark, "cat", "sch",
         profile_sql=sql,
         profile_html="<article></article>",
-        template_volume_path=str(template_path),
+        composite_name="cust_emai",
     )
-    assert spark.sql.call_count == 2
-    submitted = "\n".join(call.args[0] for call in spark.sql.call_args_list)
-    assert "cat.sch.v_account_profile" in submitted
-    assert "cat.sch.v_account_profile_extra" in submitted
-    assert template_path.read_text() == "<article></article>"
+    submitted = [c.args[0] for c in spark.sql.call_args_list if c.args]
+    publish_calls = [s for s in submitted if "v_account_profile" in s]
+    assert any("cat.sch.v_account_profile" in s for s in publish_calls)
+    assert any("cat.sch.v_account_profile_extra" in s for s in publish_calls)
     assert isinstance(res, ProfileOverrideResult)
     assert res.published_views == [
         "cat.sch.v_account_profile",
         "cat.sch.v_account_profile_extra",
     ]
-    assert "CR_PROFILE_TEMPLATE_PATH=" in res.env_hint
+    assert res.template_table_fqn == "cat.sch.dashboard_template_overrides"
+    assert res.composite_name == "cust_emai"
 
 
-def test_apply_writes_html_verbatim(tmp_path):
-    spark = MagicMock()
+def test_apply_appends_html_row_to_uc_table():
+    spark, _ = _spark_mock_with_writer()
     html = "---\ndata: {}\n---\n<article>{{entity_id}}</article>\n"
-    template_path = tmp_path / "x.html"
     apply_profile_override(
         spark, "c", "s",
         profile_sql="CREATE OR REPLACE VIEW {catalog}.{schema}.v AS SELECT 1;",
         profile_html=html,
-        template_volume_path=str(template_path),
+        composite_name="cn1",
     )
-    assert template_path.read_text() == html
+    # The HTML body must appear verbatim as a column value passed to
+    # spark.createDataFrame(...). Search the call's positional args (a list
+    # of Row objects) for the html string.
+    create_call = spark.createDataFrame.call_args
+    rows = create_call.args[0]
+    assert any(getattr(r, "profile_html", None) == html for r in rows)
+    # And the chain must end at saveAsTable on the template-overrides FQN.
+    save_call = spark.createDataFrame.return_value.write.mode.return_value.saveAsTable.call_args
+    assert save_call.args[0] == "c.s.dashboard_template_overrides"
 
 
-def test_apply_passes_composite_name_through_to_sql(tmp_path):
-    spark = MagicMock()
+def test_apply_passes_composite_name_through_to_sql():
+    spark, _ = _spark_mock_with_writer()
     sql = "CREATE OR REPLACE VIEW {catalog}.{schema}.v AS SELECT * FROM {catalog}.{schema}.gold_features_{composite_name};"
     apply_profile_override(
         spark, "c", "s",
         profile_sql=sql,
         profile_html="x",
-        template_volume_path=str(tmp_path / "t.html"),
         composite_name="cust_emai",
     )
-    submitted = spark.sql.call_args_list[0].args[0]
-    assert "gold_features_cust_emai" in submitted
-    assert "{composite_name}" not in submitted
+    submitted = [c.args[0] for c in spark.sql.call_args_list if c.args]
+    view_call = next(s for s in submitted if "gold_features_" in s)
+    assert "gold_features_cust_emai" in view_call
+    assert "{composite_name}" not in view_call
 
 
-def test_apply_raises_when_composite_referenced_but_missing(tmp_path):
+def test_apply_raises_when_composite_name_missing():
     spark = MagicMock()
-    sql = "CREATE OR REPLACE VIEW {catalog}.{schema}.v AS SELECT * FROM {catalog}.{schema}.gold_features_{composite_name};"
     with pytest.raises(ValueError, match="composite_name"):
-        apply_profile_override(
-            spark, "c", "s",
-            profile_sql=sql,
-            profile_html="x",
-            template_volume_path=str(tmp_path / "t.html"),
-        )
-    spark.sql.assert_not_called()
-
-
-def test_apply_raises_when_template_parent_missing(tmp_path):
-    spark = MagicMock()
-    nonexistent_parent = tmp_path / "no" / "such" / "dir" / "t.html"
-    with pytest.raises(FileNotFoundError, match="parent directory"):
         apply_profile_override(
             spark, "c", "s",
             profile_sql="CREATE OR REPLACE VIEW {catalog}.{schema}.v AS SELECT 1;",
             profile_html="x",
-            template_volume_path=str(nonexistent_parent),
+            composite_name="",
         )
+    spark.sql.assert_not_called()
 
 
-def test_apply_raises_when_sql_has_no_statements(tmp_path):
+def test_apply_raises_when_sql_has_no_statements():
     spark = MagicMock()
     with pytest.raises(ValueError, match="no executable statements"):
         apply_profile_override(
             spark, "c", "s",
             profile_sql="-- only comments\n;",
             profile_html="x",
-            template_volume_path=str(tmp_path / "t.html"),
+            composite_name="cn1",
         )
 
 
-def test_apply_is_no_op_when_spark_is_none(tmp_path):
+def test_apply_is_no_op_when_spark_is_none():
     res = apply_profile_override(
         None, "c", "s",
         profile_sql="CREATE OR REPLACE VIEW {catalog}.{schema}.v AS SELECT 1;",
         profile_html="x",
-        template_volume_path=str(tmp_path / "t.html"),
+        composite_name="cn1",
     )
     assert res.published_views == []
-    assert res.template_path == ""
-    assert not (tmp_path / "t.html").exists()
+    assert res.template_table_fqn == ""
 
 
-def test_result_str_lists_views_and_env_hint(tmp_path):
-    spark = MagicMock()
+def test_result_str_lists_views_and_uc_table():
+    spark, _ = _spark_mock_with_writer()
     res = apply_profile_override(
         spark, "c", "s",
         profile_sql=(
@@ -188,9 +207,11 @@ def test_result_str_lists_views_and_env_hint(tmp_path):
             "CREATE OR REPLACE VIEW {catalog}.{schema}.v_b AS SELECT 2;\n"
         ),
         profile_html="x",
-        template_volume_path=str(tmp_path / "t.html"),
+        composite_name="cn1",
     )
     rendered = str(res)
     assert "c.s.v_a" in rendered
     assert "c.s.v_b" in rendered
-    assert "CR_PROFILE_TEMPLATE_PATH=" in rendered
+    # Result summary references the UC table, not a volume path.
+    assert "c.s.dashboard_template_overrides" in rendered
+    assert "CR_PROFILE_TEMPLATE_PATH" not in rendered

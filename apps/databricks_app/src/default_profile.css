@@ -531,92 +531,6 @@ details[open] > .cr-summary > .cr-summary-chevron { transform: rotate(90deg); }
   border-top: 1px dashed var(--line);
 }
 
-/* Empty-state for the left customer panel: visible explanation when no
-   ``customer`` data source is wired. Distinct from a regular profile so
-   it's obvious the panel is unconfigured rather than just empty. */
-.cr-customer-empty {
-  background: var(--paper-deep);
-  border: 1px dashed var(--line);
-  border-radius: 8px;
-  padding: 1.25rem 1.5rem;
-}
-.cr-customer-empty .cr-chapter-eyebrow { color: var(--yellow-800); }
-.cr-empty-checklist {
-  margin: 0.6rem 0 0.9rem 1.2rem;
-  padding: 0;
-  font-size: 0.95rem;
-  line-height: 1.55;
-  color: var(--ink-soft);
-}
-.cr-empty-checklist li { margin-bottom: 0.45rem; }
-.cr-empty-checklist code,
-.cr-customer-empty .cr-chapter-lead code {
-  font-family: var(--font-mono);
-  font-size: 0.82em;
-  background: var(--paper);
-  border: 1px solid var(--line-soft);
-  border-radius: 3px;
-  padding: 0.05em 0.35em;
-  word-break: break-word;
-  overflow-wrap: anywhere;
-}
-
-/* Diagnostic debug section — rendered inside the empty-state panel so the
-   operator can see exactly why the per-dataset template didn't load even
-   when the App's Logs tab is unavailable. */
-.cr-empty-debug {
-  margin-top: 1rem;
-  padding: 0.75rem 0.9rem;
-  background: var(--paper);
-  border: 1px solid var(--line-soft);
-  border-radius: 6px;
-  font-size: 0.85rem;
-}
-.cr-empty-debug-summary {
-  cursor: pointer;
-  font-weight: 600;
-  color: var(--yellow-800);
-  font-family: var(--font-mono);
-  font-size: 0.78rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-.cr-empty-debug-list {
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  gap: 0.35rem 1rem;
-  margin: 0.7rem 0 0;
-}
-.cr-empty-debug-list dt {
-  font-weight: 500;
-  color: var(--ink-soft);
-}
-.cr-empty-debug-list dd {
-  margin: 0;
-  word-break: break-all;
-  color: var(--ink);
-}
-.cr-empty-debug-list code {
-  font-family: var(--font-mono);
-  font-size: 0.82em;
-  background: var(--paper-deep);
-  border: 1px solid var(--line-soft);
-  border-radius: 3px;
-  padding: 0.05em 0.35em;
-  word-break: break-word;
-  overflow-wrap: anywhere;
-}
-.cr-empty-debug-ds {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.cr-empty-debug-ds li {
-  font-size: 0.85rem;
-  margin-bottom: 0.3rem;
-  line-height: 1.5;
-}
-
 /* Deviation panel — bidirectional bar chart, sign-coloured ---------------- */
 .cr-deviation .cr-chapter-lead { margin-bottom: 0.9rem; }
 
@@ -698,8 +612,6 @@ details[open] > .cr-summary > .cr-summary-chevron { transform: rotate(90deg); }
    negative = pushes away (green). Reuses the deviation row geometry so a
    single mental model covers both panels. */
 .cr-shap .cr-chapter-lead { margin-bottom: 0.9rem; }
-.cr-shap-pos-token { color: var(--yellow-800); font-weight: 500; }
-.cr-shap-neg-token { color: var(--green-800); font-weight: 500; }
 
 .cr-shap-list {
   list-style: none;
@@ -711,18 +623,27 @@ details[open] > .cr-summary > .cr-summary-chevron { transform: rotate(90deg); }
 }
 .cr-shap-row {
   display: grid;
-  /* name | raw value | band pill | bar | direction pill */
+  /* name | raw value | band pill | bar (with in-bar glyph + trailing % label) */
   grid-template-columns:
     minmax(0, 1.4fr)            /* name */
-    minmax(60px, auto)          /* raw value */
-    minmax(80px, auto)          /* band pill */
-    minmax(80px, 1fr)           /* bar */
-    minmax(90px, auto)          /* direction pill */;
+    minmax(60px, auto)          /* raw value (collapses via :empty) */
+    minmax(80px, auto)          /* band pill (collapses via :empty) */
+    minmax(120px, 1fr)          /* bar track + glyph + label */;
   align-items: center;
   gap: 0.55rem;
   padding: 0.3rem 0;
   font-family: var(--font-sans);
   font-size: 0.82rem;
+}
+/* When raw_value or band is missing the helper returns an empty string
+   and ``:empty`` makes the cell visually disappear so a row with no
+   population stats doesn't render an em-dash placeholder. The grid
+   track stays in place for layout consistency across rows. */
+.cr-shap-raw:empty,
+.cr-shap-band:empty {
+  background: transparent;
+  border: 0;
+  padding: 0;
 }
 .cr-shap-name {
   font-family: var(--font-mono);
@@ -768,22 +689,11 @@ details[open] > .cr-summary > .cr-summary-chevron { transform: rotate(90deg); }
 .cr-band-very-high { background: var(--yellow-100); color: var(--yellow-800); border-color: var(--yellow-200); }
 .cr-band-unknown   { background: transparent; color: var(--whisper); border-color: var(--line-soft); border-style: dashed; }
 
-.cr-shap-direction {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-family: var(--font-sans);
-  font-size: 0.7rem;
-  font-weight: 500;
-  letter-spacing: 0.005em;
-  padding: 0.18rem 0.65rem;
-  border-radius: 999px;
-  border: 1px solid transparent;
-  white-space: nowrap;
-}
-.cr-dir-protective { background: var(--green-100); color: var(--green-800); border-color: var(--green-200); }
-.cr-dir-risk       { background: var(--yellow-100); color: var(--yellow-800); border-color: var(--yellow-200); }
-.cr-dir-neutral    { background: var(--paper-deep); color: var(--ink-soft); border-color: var(--line); }
+/* Direction is now encoded by (a) bar colour (yellow=risk / green=protective),
+   (b) an arrow glyph rendered inside the bar's leading edge, and (c) a
+   browser tooltip on the bar track with the long-form phrase. The
+   permanent direction pill column was dropped to free a column for the
+   percentage label. */
 
 /* Per-row "Model math" disclosure — analysts can pop open one row at a
    time to see the scaled value + signed log-odds SHAP without cluttering
@@ -845,25 +755,55 @@ details[open] > .cr-summary > .cr-summary-chevron { transform: rotate(90deg); }
 }
 .cr-shap-bar-track {
   position: relative;
-  height: 14px;
+  height: 16px;
   background: var(--paper-deep);
   border-radius: 3px;
-  overflow: hidden;
   border: 1px solid var(--line-soft);
+  /* Hover surfaces a native tooltip with the full direction phrase
+     (``risk-driving``/``protective``); cursor hint nudges users to try. */
+  cursor: help;
 }
 .cr-shap-bar {
   position: absolute;
   top: 0;
   bottom: 0;
-  display: block;
+  display: flex;
+  align-items: center;
   transition: width 0.18s ease;
+  overflow: hidden;
+  border-radius: 2px;
 }
 /* Causal direction: positive contribution pushes prediction toward
    churn (right half, warm colour); negative pulls away (left half,
-   cool/safe colour). */
-.cr-shap-pos  .cr-shap-bar  { left: 50%;  background: var(--yellow-400); }
-.cr-shap-neg  .cr-shap-bar  { right: 50%; background: var(--green-400); }
-.cr-shap-zero .cr-shap-bar  { width: 0; }
+   cool/safe colour). The glyph sits at the leading edge of each bar
+   so the direction reads visually even when the bar is short. */
+.cr-shap-pos  .cr-shap-bar          { left: 50%;  background: var(--yellow-400); justify-content: flex-end; }
+.cr-shap-neg  .cr-shap-bar          { right: 50%; background: var(--green-400);  justify-content: flex-start; }
+.cr-shap-zero .cr-shap-bar          { width: 0; }
+.cr-shap-pos  .cr-shap-bar-glyph    { padding-right: 4px; }
+.cr-shap-neg  .cr-shap-bar-glyph    { padding-left: 4px; }
+.cr-shap-bar-glyph {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 700;
+  color: rgba(0,0,0,0.6);
+}
+/* Trailing percentage label — the row's share of total visible |SHAP|.
+   Anchored to the right edge of the track so the value doesn't jump as
+   the bar's width animates. ``cr-shap-zero`` rows still render the label
+   (empty string from helper -> visually empty cell). */
+.cr-shap-bar-label {
+  position: absolute;
+  right: 0.4rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-feature-settings: "tnum" 1, "lnum" 1;
+  color: var(--ink-soft);
+  pointer-events: none;
+}
 .cr-shap-bar-track::before {
   content: "";
   position: absolute;
@@ -1008,6 +948,19 @@ details[open] > .cr-summary > .cr-summary-chevron { transform: rotate(90deg); }
   gap: 0.3rem;
   align-items: center;
 }
+.cr-fp-dataset {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--ink);
+  background: var(--paper-deep);
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  padding: 0.08em 0.45em;
+  cursor: help;
+  text-decoration: underline dotted var(--whisper);
+  text-underline-offset: 2px;
+  word-break: break-word;
+}
 .cr-fp-col {
   font-family: var(--font-mono);
   font-size: 0.76rem;
@@ -1055,15 +1008,14 @@ details[open] > .cr-summary > .cr-summary-chevron { transform: rotate(90deg); }
   .cr-grid-2col { grid-template-columns: 1fr; }
   .cr-dev-row { grid-template-columns: minmax(0, 1.4fr) minmax(60px, 1fr) auto; }
   .cr-dev-value { display: none; }
-  /* Mobile: drop the band pill (still visible via direction + bar colour),
-     keep raw value + bar + direction so the row stays scannable on a
-     phone-width screen. */
+  /* Mobile: drop the band pill column entirely (still readable via the
+     bar's colour and the in-bar arrow glyph) so the row stays scannable
+     on a phone-width screen. */
   .cr-shap-row {
     grid-template-columns:
       minmax(0, 1.4fr)
       minmax(60px, auto)
-      minmax(60px, 1fr)
-      minmax(80px, auto);
+      minmax(80px, 1fr);
   }
   .cr-shap-band { display: none; }
 }

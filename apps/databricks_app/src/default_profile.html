@@ -68,56 +68,6 @@ data:
           </header>
           <p class="cr-chapter-lead">A dataset-specific template is loaded but did not declare any visible fields. Edit the template's frontmatter and HTML to surface the fields your CSMs need.</p>
         </section>
-      {{else}}
-        <section class="cr-customer-profile cr-customer-empty">
-          <header class="cr-chapter-head">
-            <span class="cr-chapter-eyebrow">Customer profile not configured</span>
-            <h2 class="cr-chapter-title">Dataset-specific panel pending</h2>
-          </header>
-          <p class="cr-chapter-lead">No <code>customer</code> data source is declared in the active template. Two things to check:</p>
-          <ol class="cr-empty-checklist">
-            <li>The <code>apply_profile_override(...)</code> cell in <code>c05_snapshot_and_dashboard</code> has run on the cluster, so the per-dataset HTML is published at <code>/Volumes/&lt;cat&gt;/&lt;sch&gt;/dashboard_templates/&lt;dataset&gt;_profile.html</code>. The app auto-discovers the newest <code>.html</code> there — no env var needed.</li>
-            <li>If you want to pin a specific file, set the Databricks App env var <code>CR_PROFILE_TEMPLATE_PATH</code> — it overrides the auto-discovered template.</li>
-          </ol>
-          <p class="cr-chapter-lead">See <code>docs/ech_notebook_ux_overrides.md</code> (email-churn) or <code>docs/sps_notebook_ux_overrides.md</code> (SPS) for the ready-to-paste cells.</p>
-          {{#if _template_diagnostic}}
-            <details class="cr-empty-debug">
-              <summary class="cr-empty-debug-summary">Debug · template load diagnostic</summary>
-              <dl class="cr-empty-debug-list">
-                <dt>Status</dt>
-                <dd><code>{{_template_diagnostic.status}}</code></dd>
-                <dt>Requested path</dt>
-                <dd><code>{{#if _template_diagnostic.requested_path}}{{_template_diagnostic.requested_path}}{{else}}(none — env var unset and auto-discovery returned empty){{/if}}</code></dd>
-                <dt>Env var <code>CR_PROFILE_TEMPLATE_PATH</code></dt>
-                <dd><code>{{#if _template_diagnostic.env_var_set}}set{{else}}unset{{/if}}</code></dd>
-                <dt>Loaded from</dt>
-                <dd><code>{{_template_diagnostic.loaded_from}}</code></dd>
-                <dt>Catalog · Schema</dt>
-                <dd><code>{{_template_diagnostic.catalog}}.{{_template_diagnostic.schema}}</code></dd>
-                <dt>Parent dir exists</dt>
-                <dd><code>{{#if _template_diagnostic.parent_dir_exists}}yes{{else}}no — the app's service principal cannot stat the parent directory; grant READ_VOLUME or wait for the deployed grant to propagate (Stop/Start the app){{/if}}</code></dd>
-                {{#if _template_diagnostic.parent_dir_listing}}
-                  <dt>Parent dir listing (first 20)</dt>
-                  <dd><code>{{_template_diagnostic.parent_dir_listing}}</code></dd>
-                {{/if}}
-                {{#if _template_diagnostic.error_type}}
-                  <dt>Error</dt>
-                  <dd><code>{{_template_diagnostic.error_type}}: {{_template_diagnostic.error_message}}</code></dd>
-                {{/if}}
-                {{#if _template_diagnostic.data_sources}}
-                  <dt>Declared data sources</dt>
-                  <dd>
-                    <ul class="cr-empty-debug-ds">
-                      {{#each _template_diagnostic.data_sources}}
-                        <li><code>{{this.name}}</code> ← <code>{{this.source}}</code> on <code>{{this.join_key}}</code> · <strong>{{this.status}}</strong> · {{this.row_count}} row(s){{#if this.error}} · <code>{{this.error}}</code>{{/if}}</li>
-                      {{/each}}
-                    </ul>
-                  </dd>
-                {{/if}}
-              </dl>
-            </details>
-          {{/if}}
-        </section>
       {{/if}}
     </div>
     <div class="cr-grid-right">
@@ -126,21 +76,19 @@ data:
           <header class="cr-chapter-head">
             <span class="cr-chapter-eyebrow">Why this account scored where it did</span>
             <h2 class="cr-chapter-title">Model results interpretation</h2>
-            <p class="cr-chapter-lead">Each row is one factor the model leans on for this customer. The number is the customer's actual value, the pill shows where that value sits versus everyone else (very low → very high), and the bar's length and colour show how strongly it moved the churn score — <span class="cr-shap-pos-token">risk-driving</span> (yellow) pushes toward churn, <span class="cr-shap-neg-token">protective</span> (green) pulls away.</p>
+            <p class="cr-chapter-lead">Each row is one factor the model leans on for this customer. The number is the customer's actual value, the pill shows where that value sits versus everyone else (very low → very high), and the bar shows how strongly it moved the churn score. The arrow on each bar points up when the factor pushes toward churn and down when it protects against churn — hover the bar for the full description.</p>
           </header>
           <ul class="cr-shap-list">
             {{#each account_top_shap_features}}
               <li class="cr-shap-row {{shap_sign_class this.shap_contribution}}">
                 <span class="cr-shap-name" title="{{this.feature}}">{{this.feature}}</span>
                 <span class="cr-shap-raw">{{fmt_raw_value this.raw_value}}</span>
-                <span class="cr-shap-band {{band_class (quantile_band this.raw_value this.q05 this.q25 this.q75 this.q95)}}">
-                  {{quantile_band this.raw_value this.q05 this.q25 this.q75 this.q95}}
-                </span>
-                <span class="cr-shap-bar-track">
-                  <span class="cr-shap-bar" style="width:{{shap_bar_pct this.shap_contribution ../account_top_shap_features}}%"></span>
-                </span>
-                <span class="cr-shap-direction {{direction_class this.shap_contribution}}">
-                  {{direction_phrase this.shap_contribution}}
+                <span class="cr-shap-band {{band_class (quantile_band this.raw_value this.q05 this.q25 this.q75 this.q95)}}">{{quantile_band this.raw_value this.q05 this.q25 this.q75 this.q95}}</span>
+                <span class="cr-shap-bar-track" title="{{direction_tooltip this.shap_contribution}}">
+                  <span class="cr-shap-bar" style="width:{{shap_bar_pct this.shap_contribution ../account_top_shap_features}}%">
+                    <span class="cr-shap-bar-glyph" aria-hidden="true">{{direction_glyph this.shap_contribution}}</span>
+                  </span>
+                  <span class="cr-shap-bar-label">{{shap_share_pct this.shap_contribution ../account_top_shap_features}}</span>
                 </span>
                 <details class="cr-shap-math">
                   <summary class="cr-shap-math-summary"><span aria-hidden="true">Model math</span></summary>
@@ -179,9 +127,18 @@ data:
                       <dl class="cr-fp-meta">
                         <dt>How it's computed</dt>
                         <dd>{{derivation_phrase this.aggregation_kind this.feature this.source_columns this.window_phrase}}</dd>
-                        {{#if this.source_table}}
+                        {{#if this.source_dataset}}
                           <dt>Source dataset</dt>
-                          <dd><code>{{this.source_table}}</code></dd>
+                          <dd>
+                            <code class="cr-fp-dataset" title="{{#if this.composite_name}}composite_name: {{this.composite_name}}{{/if}}">{{this.source_dataset}}</code>
+                          </dd>
+                        {{else}}
+                          {{#if this.source_table}}
+                            <dt>Source dataset</dt>
+                            <dd>
+                              <code class="cr-fp-dataset" title="{{#if this.composite_name}}composite_name: {{this.composite_name}}{{/if}}">{{this.source_table}}</code>
+                            </dd>
+                          {{/if}}
                         {{/if}}
                         {{#if this.source_columns}}
                           <dt>Source columns</dt>

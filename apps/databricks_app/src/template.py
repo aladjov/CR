@@ -1,39 +1,26 @@
 """Customer-profile template — HTML + Handlebars + YAML frontmatter.
 
-A template is ONE file that declares:
+A template is ONE HTML body that declares:
   * its data dependencies (tables to join on the selected entity), and
-  * its HTML/CSS layout with Handlebars interpolation (`{{col}}`, `{{nested.col}}`, helpers, `{{#if}}`).
+  * its HTML/CSS layout with Handlebars interpolation.
 
 The default template shipped with the app renders a rich card using only
-`v_account_explanation` columns — no joins required. A custom template at
-`CR_PROFILE_TEMPLATE_PATH` can declare additional Unity Catalog tables to join
-on `entity_id`, and those rows become nested contexts accessible by name.
+``v_account_explanation`` columns — no joins required. A dataset-specific
+template stored in Unity Catalog (table
+``{catalog}.{schema}.dashboard_template_overrides``, exposed by
+``v_dashboard_template_active``) can declare additional UC tables to join
+on ``entity_id``, and those rows become nested contexts accessible by name.
 
-Example custom template (save as `.html`):
+The HTML body itself is no longer read from a Volume FUSE path — the App
+service principal cannot consistently access Volume mounts even with
+``READ_VOLUME`` granted, so we route through the SQL warehouse instead.
+The orchestrator in ``customer_profile.py`` fetches the body string via
+``data.load_template_html_from_uc(...)`` and passes it to
+``load_template_from_text`` here.
 
-```html
----
-data:
-  account:
-    source: "gold_features_cust_emai_aggr__26e8271"
-    join_key: "account_id"
-  latest_email:
-    source: "bronze_event_email_events"
-    join_key: "account_id"
-    order_by: "event_timestamp DESC"
-    limit: 1
-css: |
-  .mrr { color: green; font-weight: bold; }
----
-<div class="cr-card">
-  <h1>{{entity_id}}</h1>
-  <p>MRR: <span class="mrr">{{fmt_currency account.mrr}}</span></p>
-  {{#if recommended}}<span class="ok">✅ recommended</span>{{/if}}
-</div>
-```
-
-Built-in helpers: `fmt_currency`, `fmt_pct`, `fmt_int`, `fmt_float`, `fmt_date`,
-`fmt_datetime`, `risk_tier_class`, `upper`, `lower`.
+Built-in helpers: ``fmt_currency``, ``fmt_pct``, ``fmt_int``, ``fmt_float``,
+``fmt_date``, ``fmt_datetime``, ``risk_tier_class``, ``upper``, ``lower``,
+plus the SHAP/deviation helpers documented inline below.
 """
 from __future__ import annotations
 
@@ -47,7 +34,7 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-# `pybars` is imported lazily inside render_html so that the frontmatter parser
+# ``pybars`` is imported lazily inside render_html so that the frontmatter parser
 # and helper utilities are usable in unit tests without the dependency.
 
 
@@ -75,10 +62,6 @@ class Template:
     body: str
     data_sources: list[DataSource] = field(default_factory=list)
     css: str = ""
-    # Diagnostic captured at load time so the empty-state panel can show why
-    # a per-dataset template wasn't loaded (path missing, permission denied,
-    # parse error, ...) — operators can't always reach the App's Logs tab.
-    diagnostic: dict = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -89,7 +72,6 @@ def _parse_frontmatter(text: str) -> tuple[dict, str]:
     """Split a file into (frontmatter_dict, body_html). Tolerant of no frontmatter."""
     if not text.startswith("---"):
         return {}, text
-    # Find the closing delimiter after the first line
     lines = text.splitlines(keepends=True)
     if not lines or not lines[0].startswith("---"):
         return {}, text
@@ -117,83 +99,8 @@ def _default_css_path() -> Path:
     return Path(__file__).parent / "default_profile.css"
 
 
-def load_template(path: Optional[str]) -> Template:
-    """Load an HTML template. Empty/missing path falls back to the bundled default.
-
-    The fallback used to be silent — a permission error on the requested path
-    looked identical to "no path configured", which made the empty-state panel
-    impossible to diagnose without local repro. We now log the exact reason at
-    INFO/WARNING level so it shows up in the Databricks Apps "Logs" tab AND
-    we record the same info in ``Template.diagnostic`` so the empty-state
-    panel can render it (operators sometimes can't reach the Logs tab).
-    """
-    text: Optional[str] = None
-    diagnostic: dict = {
-        "requested_path": path or "",
-        "default_template_path": str(_default_template_path()),
-        "loaded_from": "",
-        "status": "no_path_set",
-        "error_type": "",
-        "error_message": "",
-        "parent_dir_exists": False,
-        "parent_dir_listing": "",
-    }
-    if path:
-        diagnostic["status"] = "attempting"
-        try:
-            parent = Path(path).parent
-            diagnostic["parent_dir_exists"] = parent.exists()
-            if parent.exists():
-                try:
-                    listing = sorted(p.name for p in parent.iterdir())[:20]
-                    diagnostic["parent_dir_listing"] = ", ".join(listing) if listing else "(empty)"
-                except OSError as exc:
-                    diagnostic["parent_dir_listing"] = f"(listing failed: {exc})"
-        except OSError as exc:
-            diagnostic["parent_dir_listing"] = f"(parent stat failed: {exc})"
-        try:
-            text = Path(path).read_text(encoding="utf-8")
-            diagnostic["status"] = "loaded"
-            diagnostic["loaded_from"] = path
-            logger.info("loaded profile template -> %s", path)
-        except FileNotFoundError as exc:
-            diagnostic["status"] = "fallback_default"
-            diagnostic["error_type"] = "FileNotFoundError"
-            diagnostic["error_message"] = str(exc)
-            logger.warning(
-                "profile template path does not exist: %s — falling back to bundled default",
-                path,
-            )
-        except PermissionError as exc:
-            diagnostic["status"] = "fallback_default"
-            diagnostic["error_type"] = "PermissionError"
-            diagnostic["error_message"] = str(exc)
-            logger.warning(
-                "profile template read denied (%s) for %s — grant READ_VOLUME to "
-                "the app's service principal on the parent volume (or wait for "
-                "the deployed grant to propagate, which may require a Stop/Start "
-                "of the app)",
-                exc,
-                path,
-            )
-        except OSError as exc:
-            diagnostic["status"] = "fallback_default"
-            diagnostic["error_type"] = type(exc).__name__
-            diagnostic["error_message"] = str(exc)
-            logger.warning(
-                "profile template read failed (%s) for %s — falling back to bundled default",
-                exc,
-                path,
-            )
-    if text is None:
-        text = _default_template_path().read_text(encoding="utf-8")
-        diagnostic["loaded_from"] = str(_default_template_path())
-        if not path:
-            diagnostic["status"] = "no_path_set"
-            logger.info("no CR_PROFILE_TEMPLATE_PATH set — using bundled default template")
-
+def _build_template_from_text(text: str) -> Template:
     front, body = _parse_frontmatter(text)
-
     data_sources: list[DataSource] = []
     for name, cfg in (front.get("data") or {}).items():
         as_list = bool(cfg.get("as_list", False))
@@ -209,13 +116,25 @@ def load_template(path: Optional[str]) -> Template:
             limit=int(cfg.get("limit", default_limit)),
             as_list=as_list,
         ))
-
     return Template(
         body=body,
         data_sources=data_sources,
         css=front.get("css") or "",
-        diagnostic=diagnostic,
     )
+
+
+def load_template_from_text(text: Optional[str]) -> Template:
+    """Build a Template from raw HTML text. Empty/None falls back to the bundled default.
+
+    This is the single entry point for template loading. The Streamlit
+    customer-profile orchestrator fetches the HTML body via
+    ``data.load_template_html_from_uc()`` and passes the result here; on
+    miss (None) we read the bundled default file.
+    """
+    if not text:
+        text = _default_template_path().read_text(encoding="utf-8")
+        logger.info("no UC override available — using bundled default template")
+    return _build_template_from_text(text)
 
 
 # ---------------------------------------------------------------------------
@@ -400,6 +319,30 @@ def _shap_max_abs(drivers) -> float:
     return best if best > 0 else 1.0
 
 
+def _shap_total_abs(drivers) -> float:
+    """Sum of ``|shap_contribution|`` across ``drivers``.
+
+    Used by ``shap_share_pct`` so labelled percentages sum to 100% across
+    the visible rows. Falls back to ``1.0`` to keep arithmetic safe when
+    the panel is empty / all-zero.
+    """
+    if not drivers:
+        return 1.0
+    total = 0.0
+    for item in drivers:
+        try:
+            val = item.get("shap_contribution") if hasattr(item, "get") else getattr(item, "shap_contribution", None)
+        except Exception:
+            val = None
+        if val is None:
+            continue
+        try:
+            total += abs(float(val))
+        except Exception:
+            continue
+    return total if total > 0 else 1.0
+
+
 def _h_shap_bar_pct(this, contribution, drivers):
     """Map a signed ``shap_contribution`` to a 0–100% bar width, scaled by
     the row's own largest absolute contribution. ``drivers`` is the full
@@ -414,6 +357,31 @@ def _h_shap_bar_pct(this, contribution, drivers):
         return "0"
     cap = _shap_max_abs(drivers)
     return f"{min(cf / cap, 1.0) * 100:.1f}"
+
+
+def _h_shap_share_pct(this, contribution, drivers):
+    """Row's share of total visible |SHAP| as a formatted percentage.
+
+    Sums to 100% across the rows shown in the panel so the label honestly
+    reads "this feature accounts for X% of what's pushing the prediction
+    away from baseline among the top features shown." Renders as ``12%``
+    for normal magnitudes and ``<1%`` for tiny tails so a barely-visible
+    bar isn't accompanied by a mathematically misleading ``0%``.
+    Empty string when the contribution is missing -- callers pair the
+    helper with an ``{{#if shap_contribution}}`` so the label disappears
+    cleanly on rows that have no SHAP data.
+    """
+    if _is_missing(contribution):
+        return ""
+    try:
+        cf = abs(float(contribution))
+    except Exception:
+        return ""
+    total = _shap_total_abs(drivers)
+    share = (cf / total) * 100.0
+    if share < 1.0 and share > 0.0:
+        return "<1%"
+    return f"{round(share)}%"
 
 
 def _h_shap_sign_class(this, contribution):
@@ -467,14 +435,16 @@ def _h_fmt_shap_value(this, value):
 # Quantile-band classification: where does this customer's raw feature value
 # sit relative to the training population? 5 buckets (very low / low /
 # typical / high / very high) computed from q05/q25/q75/q95. Falls back to
-# "—" when any quantile is missing or the value is non-numeric.
+# an EMPTY string when any quantile is missing or the value is non-numeric
+# so the band-pill template block can use ``{{#if quantile_band_text}}`` to
+# skip rendering altogether — no em-dash placeholder reaches the panel.
 
 _BAND_VERY_LOW = "very low"
 _BAND_LOW = "low"
 _BAND_TYPICAL = "typical"
 _BAND_HIGH = "high"
 _BAND_VERY_HIGH = "very high"
-_BAND_UNKNOWN = "—"
+_BAND_UNKNOWN = ""
 
 
 def _h_quantile_band(this, value, q05, q25, q75, q95):
@@ -508,19 +478,21 @@ _BAND_CLASS = {
     _BAND_TYPICAL:   "cr-band-typical",
     _BAND_HIGH:      "cr-band-high",
     _BAND_VERY_HIGH: "cr-band-very-high",
-    _BAND_UNKNOWN:   "cr-band-unknown",
+    "":              "cr-band-unknown",
 }
 
 
 def _h_band_class(this, band):
     if _is_missing(band):
-        return _BAND_CLASS[_BAND_UNKNOWN]
-    return _BAND_CLASS.get(str(band), _BAND_CLASS[_BAND_UNKNOWN])
+        return _BAND_CLASS[""]
+    return _BAND_CLASS.get(str(band), _BAND_CLASS[""])
 
 
-# Direction phrase — translate the SHAP sign into business language.
-# The bar's colour already shows direction; this label puts a word on it
-# so a CSM doesn't have to interpret a log-odds number.
+# Direction phrase + glyph + tooltip — the bar's colour already shows
+# direction, so we no longer render a permanent ``risk-driving`` /
+# ``protective`` pill column. The phrase moves to a hover tooltip
+# (``title`` attribute on the bar) and is summarized visually by an
+# arrow glyph rendered inside the bar's leading edge.
 
 _DIR_RISK = "risk-driving"
 _DIR_PROTECTIVE = "protective"
@@ -530,6 +502,18 @@ _DIR_NEUTRAL = "neutral"
 # bar would be barely visible at this level anyway, and labelling a 0.001
 # contribution as "risk-driving" overstates its weight.
 _DIR_NEUTRAL_EPSILON = 1e-3
+
+_DIR_GLYPH = {
+    _DIR_RISK:       "↑",
+    _DIR_PROTECTIVE: "↓",
+    _DIR_NEUTRAL:    "",
+}
+
+_DIR_TOOLTIP = {
+    _DIR_RISK:       "Risk-driving — pushes the prediction toward churn",
+    _DIR_PROTECTIVE: "Protective — pushes the prediction toward retention",
+    _DIR_NEUTRAL:    "Near-zero contribution",
+}
 
 
 def _h_direction_phrase(this, contribution):
@@ -555,10 +539,45 @@ def _h_direction_class(this, contribution):
     return _DIR_CLASS[_h_direction_phrase(this, contribution)]
 
 
+def _h_direction_glyph(this, contribution):
+    """Up arrow / down arrow / empty string depending on contribution sign.
+
+    Rendered inside the bar's leading edge so direction is encoded
+    visually even when the per-row tooltip isn't being hovered. Empty
+    string for neutral so degenerate contributions don't add visual noise.
+    """
+    return _DIR_GLYPH[_h_direction_phrase(this, contribution)]
+
+
+def _h_direction_tooltip(this, contribution):
+    """Long-form tooltip text for the bar's ``title`` attribute.
+
+    Native browser tooltip (no JS): hovering the bar surfaces the
+    risk-driving / protective phrase. Used to be a permanent pill column;
+    moved to hover so the panel reclaims a column for the percentage label.
+    """
+    return _DIR_TOOLTIP[_h_direction_phrase(this, contribution)]
+
+
 def _h_fmt_raw_value(this, value):
-    """Customer's raw, unscaled feature value. Integer for whole numbers,
-    3 decimals for floats, scientific notation for very small magnitudes."""
-    return _h_fmt_shap_value(this, value)
+    """Customer's raw, unscaled feature value.
+
+    Returns an EMPTY string for missing values so the raw-value cell
+    collapses cleanly via ``{{#if raw_value_text}}`` rather than rendering
+    a ``—`` placeholder. Numeric values format as integer / 3-decimal
+    float / scientific.
+    """
+    if _is_missing(value):
+        return ""
+    try:
+        vf = float(value)
+    except Exception:
+        return str(value)
+    if abs(vf - int(vf)) < 1e-9 and abs(vf) < 1e9:
+        return f"{int(vf):,}"
+    if abs(vf) < 1e-3 and vf != 0.0:
+        return f"{vf:.2e}"
+    return f"{vf:.3f}"
 
 
 # Derivation prose — translate the curated ``aggregation_kind`` from
@@ -641,37 +660,39 @@ def _h_derivation_phrase(this, aggregation_kind, feature_name, source_columns=No
     if template is None:
         return f"Derived from {source}" if source else ""
     out = template.format(source=source, window=window).strip()
-    # Compact double spaces left over when window is empty.
     while "  " in out:
         out = out.replace("  ", " ")
     return out
 
 
 HELPERS = {
-    "fmt_currency":     _h_fmt_currency,
-    "fmt_pct":          _h_fmt_pct,
-    "fmt_int":          _h_fmt_int,
-    "fmt_float":        _h_fmt_float,
-    "fmt_date":         _h_fmt_date,
-    "fmt_datetime":     _h_fmt_datetime,
-    "risk_tier_class":  _h_risk_tier_class,
-    "fit_tier_label":   _h_fit_tier_label,
-    "fit_tier_class":   _h_fit_tier_class,
-    "dev_bar_pct":      _h_dev_bar_pct,
-    "dev_sign_class":   _h_dev_sign_class,
-    "fmt_signed_z":     _h_fmt_signed_z,
-    "shap_bar_pct":     _h_shap_bar_pct,
-    "shap_sign_class":  _h_shap_sign_class,
-    "fmt_signed_shap":  _h_fmt_signed_shap,
-    "fmt_shap_value":   _h_fmt_shap_value,
-    "fmt_raw_value":    _h_fmt_raw_value,
-    "quantile_band":    _h_quantile_band,
-    "band_class":       _h_band_class,
-    "direction_phrase": _h_direction_phrase,
-    "direction_class":  _h_direction_class,
-    "derivation_phrase":_h_derivation_phrase,
-    "upper":            _h_upper,
-    "lower":            _h_lower,
+    "fmt_currency":      _h_fmt_currency,
+    "fmt_pct":           _h_fmt_pct,
+    "fmt_int":           _h_fmt_int,
+    "fmt_float":         _h_fmt_float,
+    "fmt_date":          _h_fmt_date,
+    "fmt_datetime":      _h_fmt_datetime,
+    "risk_tier_class":   _h_risk_tier_class,
+    "fit_tier_label":    _h_fit_tier_label,
+    "fit_tier_class":    _h_fit_tier_class,
+    "dev_bar_pct":       _h_dev_bar_pct,
+    "dev_sign_class":    _h_dev_sign_class,
+    "fmt_signed_z":      _h_fmt_signed_z,
+    "shap_bar_pct":      _h_shap_bar_pct,
+    "shap_share_pct":    _h_shap_share_pct,
+    "shap_sign_class":   _h_shap_sign_class,
+    "fmt_signed_shap":   _h_fmt_signed_shap,
+    "fmt_shap_value":    _h_fmt_shap_value,
+    "fmt_raw_value":     _h_fmt_raw_value,
+    "quantile_band":     _h_quantile_band,
+    "band_class":        _h_band_class,
+    "direction_phrase":  _h_direction_phrase,
+    "direction_class":   _h_direction_class,
+    "direction_glyph":   _h_direction_glyph,
+    "direction_tooltip": _h_direction_tooltip,
+    "derivation_phrase": _h_derivation_phrase,
+    "upper":             _h_upper,
+    "lower":             _h_lower,
 }
 
 

@@ -136,10 +136,10 @@ def test_template_loader_parses_as_list_with_default_limit_50():
 
 def test_template_loader_keeps_limit_at_1_for_non_list_default():
     # Belt-and-braces: we don't accidentally bump non-list sources to 50.
-    import os
-    import tempfile
-
-    from src.template import load_template
+    # Templates are now loaded directly from raw HTML text (the orchestrator
+    # fetches the body from the UC ``v_dashboard_template_active`` view) --
+    # no temp-file path detour needed for this contract.
+    from src.template import load_template_from_text
     fm = (
         "---\n"
         "data:\n"
@@ -149,26 +149,15 @@ def test_template_loader_keeps_limit_at_1_for_non_list_default():
         "---\n"
         "<div>x</div>\n"
     )
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".html", delete=False, encoding="utf-8"
-    ) as f:
-        f.write(fm)
-        path = f.name
-    try:
-        tpl = load_template(path)
-        assert len(tpl.data_sources) == 1
-        ds = tpl.data_sources[0]
-        assert ds.as_list is False
-        assert ds.limit == 1
-    finally:
-        os.unlink(path)
+    tpl = load_template_from_text(fm)
+    assert len(tpl.data_sources) == 1
+    ds = tpl.data_sources[0]
+    assert ds.as_list is False
+    assert ds.limit == 1
 
 
 def test_template_loader_list_source_uses_limit_50_default():
-    import os
-    import tempfile
-
-    from src.template import load_template
+    from src.template import load_template_from_text
     fm = (
         "---\n"
         "data:\n"
@@ -179,25 +168,14 @@ def test_template_loader_list_source_uses_limit_50_default():
         "---\n"
         "<div>x</div>\n"
     )
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".html", delete=False, encoding="utf-8"
-    ) as f:
-        f.write(fm)
-        path = f.name
-    try:
-        tpl = load_template(path)
-        ds = tpl.data_sources[0]
-        assert ds.as_list is True
-        assert ds.limit == 50
-    finally:
-        os.unlink(path)
+    tpl = load_template_from_text(fm)
+    ds = tpl.data_sources[0]
+    assert ds.as_list is True
+    assert ds.limit == 50
 
 
 def test_template_loader_explicit_limit_overrides_default():
-    import os
-    import tempfile
-
-    from src.template import load_template
+    from src.template import load_template_from_text
     fm = (
         "---\n"
         "data:\n"
@@ -209,13 +187,5 @@ def test_template_loader_explicit_limit_overrides_default():
         "---\n"
         "<div>x</div>\n"
     )
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".html", delete=False, encoding="utf-8"
-    ) as f:
-        f.write(fm)
-        path = f.name
-    try:
-        tpl = load_template(path)
-        assert tpl.data_sources[0].limit == 5
-    finally:
-        os.unlink(path)
+    tpl = load_template_from_text(fm)
+    assert tpl.data_sources[0].limit == 5
