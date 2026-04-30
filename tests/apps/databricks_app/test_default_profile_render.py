@@ -143,9 +143,21 @@ def test_no_feature_deviation_data_hides_panel(compiled_template, base_context):
 
 def test_renders_shap_panel_with_bidirectional_bars(compiled_template, base_context):
     base_context["account_top_shap_features"] = [
-        {"feature": "active_span_days", "value": 4.0, "shap_contribution":  0.40, "direction": "positive"},
-        {"feature": "open_rate",        "value": 0.1, "shap_contribution": -0.20, "direction": "negative"},
-        {"feature": "regularity_score", "value": 0.0, "shap_contribution":  0.10, "direction": "positive"},
+        {
+            "feature": "active_span_days", "value": 4.0, "shap_contribution":  0.40,
+            "direction": "positive",
+            "raw_value": 150, "q05": 10, "q25": 50, "q50": 120, "q75": 200, "q95": 400,
+        },
+        {
+            "feature": "open_rate", "value": 0.1, "shap_contribution": -0.20,
+            "direction": "negative",
+            "raw_value": 0.85, "q05": 0.0, "q25": 0.1, "q50": 0.3, "q75": 0.55, "q95": 0.8,
+        },
+        {
+            "feature": "regularity_score", "value": 0.0, "shap_contribution":  0.10,
+            "direction": "positive",
+            # No deviation row available — band should fall back to "—" / "unknown".
+        },
     ]
     html = compiled_template(base_context, helpers=HELPERS)
     assert "cr-shap" in html
@@ -156,7 +168,16 @@ def test_renders_shap_panel_with_bidirectional_bars(compiled_template, base_cont
     # Largest absolute contribution → 100% bar; half-magnitude → 50%.
     assert "width:100.0%" in html
     assert "width:50.0%" in html
-    # Signed three-decimal SHAP labels.
+    # Raw values surface unscaled in the new layout (was: scaled value).
+    assert "150" in html
+    # Quantile band labels render with their pill class.
+    assert "cr-band-typical" in html  # active_span_days = 150 sits in [120 q50, 200 q75) → "typical" (q25..q75)
+    assert "cr-band-very-high" in html  # open_rate = 0.85 ≥ q95 (0.8) → "very high"
+    # Direction phrases — yellow row says risk-driving, green row says protective.
+    assert "risk-driving" in html
+    assert "protective" in html
+    # Per-row collapsible "Model math" details with the old log-odds value.
+    assert "cr-shap-math" in html
     assert "+0.400" in html
     assert "-0.200" in html
 

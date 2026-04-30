@@ -126,17 +126,35 @@ data:
           <header class="cr-chapter-head">
             <span class="cr-chapter-eyebrow">Why this account scored where it did</span>
             <h2 class="cr-chapter-title">Model results interpretation</h2>
-            <p class="cr-chapter-lead">Each bar shows how strongly one factor moved this customer's churn score, scaled to the strongest factor in the row. <span class="cr-shap-pos-token">Yellow</span> bars push the score toward churn; <span class="cr-shap-neg-token">green</span> bars pull it away. The number on the right is the signed contribution to the score in log-odds.</p>
+            <p class="cr-chapter-lead">Each row is one factor the model leans on for this customer. The number is the customer's actual value, the pill shows where that value sits versus everyone else (very low → very high), and the bar's length and colour show how strongly it moved the churn score — <span class="cr-shap-pos-token">risk-driving</span> (yellow) pushes toward churn, <span class="cr-shap-neg-token">protective</span> (green) pulls away.</p>
           </header>
           <ul class="cr-shap-list">
             {{#each account_top_shap_features}}
               <li class="cr-shap-row {{shap_sign_class this.shap_contribution}}">
                 <span class="cr-shap-name" title="{{this.feature}}">{{this.feature}}</span>
-                <span class="cr-shap-value">{{fmt_shap_value this.value}}</span>
+                <span class="cr-shap-raw">{{fmt_raw_value this.raw_value}}</span>
+                <span class="cr-shap-band {{band_class (quantile_band this.raw_value this.q05 this.q25 this.q75 this.q95)}}">
+                  {{quantile_band this.raw_value this.q05 this.q25 this.q75 this.q95}}
+                </span>
                 <span class="cr-shap-bar-track">
                   <span class="cr-shap-bar" style="width:{{shap_bar_pct this.shap_contribution ../account_top_shap_features}}%"></span>
                 </span>
-                <span class="cr-shap-score">{{fmt_signed_shap this.shap_contribution}}</span>
+                <span class="cr-shap-direction {{direction_class this.shap_contribution}}">
+                  {{direction_phrase this.shap_contribution}}
+                </span>
+                <details class="cr-shap-math">
+                  <summary class="cr-shap-math-summary"><span aria-hidden="true">Model math</span></summary>
+                  <dl class="cr-shap-math-list">
+                    <dt>Scaled value (z-score)</dt>
+                    <dd>{{fmt_shap_value this.value}}</dd>
+                    <dt>SHAP contribution (log-odds)</dt>
+                    <dd>{{fmt_signed_shap this.shap_contribution}}</dd>
+                    {{#if this.z}}
+                      <dt>Std. deviations from population mean</dt>
+                      <dd>{{fmt_signed_z this.z}}</dd>
+                    {{/if}}
+                  </dl>
+                </details>
               </li>
             {{/each}}
           </ul>
@@ -157,10 +175,10 @@ data:
                         {{#if this.window_phrase}}<span class="cr-fp-window">{{this.window_phrase}}</span>{{/if}}
                         {{#if this.aggregation_kind}}<span class="cr-fp-agg">{{this.aggregation_kind}}</span>{{/if}}
                       </header>
-                      {{#if this.business_phrase}}
-                        <p class="cr-fp-phrase">{{this.business_phrase}}</p>
-                      {{/if}}
+                      <p class="cr-fp-phrase">{{#if this.business_phrase}}{{this.business_phrase}}{{else}}{{derivation_phrase this.aggregation_kind this.feature this.source_columns this.window_phrase}}{{/if}}</p>
                       <dl class="cr-fp-meta">
+                        <dt>How it's computed</dt>
+                        <dd>{{derivation_phrase this.aggregation_kind this.feature this.source_columns this.window_phrase}}</dd>
                         {{#if this.source_table}}
                           <dt>Source dataset</dt>
                           <dd><code>{{this.source_table}}</code></dd>
@@ -178,9 +196,7 @@ data:
                           <dd>
                             <ul class="cr-fp-defs">
                               {{#each this.source_column_defs}}
-                                {{#if this.business_definition}}
-                                  <li><code>{{this.column_name}}</code> &mdash; {{this.business_definition}}</li>
-                                {{/if}}
+                                <li><code>{{this.column_name}}</code> &mdash; {{#if this.business_definition}}{{this.business_definition}}{{else}}(definition not yet curated){{/if}}</li>
                               {{/each}}
                             </ul>
                           </dd>

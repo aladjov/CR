@@ -78,28 +78,109 @@ def _build_provenance_index(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
 
     Empty input returns an empty dict so callers don't need to special-case
     the missing-view path (older causal-track builds without the view).
+    Source-column definitions are filled in best-effort: when
+    ``column_descriptions`` has no row for a given source column, we still
+    surface a one-line description synthesized from the source table name
+    so the dictionary block isn't blank.
     """
     if df is None or df.empty or "feature_name" not in df.columns:
         return {}
-    return {
-        str(row["feature_name"]): _row_to_context(row)
-        for _, row in df.iterrows()
-        if row.get("feature_name") is not None
-    }
+    out: dict[str, dict[str, Any]] = {}
+    for _, row in df.iterrows():
+        if row.get("feature_name") is None:
+            continue
+        ctx = _row_to_context(row)
+        ctx["source_column_defs"] = _ensure_source_column_defs(ctx)
+        out[str(row["feature_name"])] = ctx
+    return out
+
+
+def _ensure_source_column_defs(ctx: dict[str, Any]) -> list[dict[str, Any]]:
+    """Guarantee at least one row per source column in the dictionary block.
+
+    ``v_feature_provenance.source_column_defs`` only emits rows for columns
+    that exist in ``column_descriptions``. When that table is empty (the
+    common case for environments that haven't run the bootstrap NB cell),
+    the dictionary block ends up listing source columns with no
+    explanation. Synthesize a fallback description from the source table
+    so the block always shows something useful.
+    """
+    existing = ctx.get("source_column_defs") or []
+    have = {str((d or {}).get("column_name") or "") for d in existing if d}
+    have.discard("")
+    src_table = ctx.get("source_table") or ""
+    src_columns = ctx.get("source_columns") or []
+    out = list(existing)
+    if not isinstance(src_columns, (list, tuple)):
+        src_columns = [src_columns]
+    for col in src_columns:
+        col_str = str(col or "").strip()
+        if not col_str or col_str in have:
+            continue
+        out.append({
+            "column_name": col_str,
+            "business_name": None,
+            "business_definition": _synthesize_source_definition(col_str, src_table),
+            "unit": None,
+        })
+        have.add(col_str)
+    return out
+
+
+def _synthesize_source_definition(column_name: str, source_table: Any) -> str:
+    """One-line fallback description when column_descriptions has no row."""
+    table = str(source_table or "").strip()
+    table_short = table.rsplit(".", 1)[-1] if table else ""
+    if table_short.startswith("bronze_event_"):
+        return f"A row in {table_short} represents one {column_name!s} event recorded for the customer."
+    if table_short.startswith("bronze_entity_"):
+        return f"A column from {table_short}, the entity-grain bronze table for this dataset."
+    if table_short.startswith("silver_") or table_short.startswith("gold_"):
+        return f"A derived column from {table_short}."
+    if table_short:
+        return f"A column from {table_short}."
+    return f"Source column {column_name}."
+
+
+def _build_deviation_index(rows: Any) -> dict[str, dict[str, Any]]:
+    """Index ``feature_deviation`` rows by ``feature_name`` so SHAP rows
+    can pick up the customer's raw value + population quantile bounds.
+
+    Empty input returns ``{}`` so callers don't have to special-case the
+    missing-data path (older runs that never wrote ``feature_population_stats``).
+    """
+    if not rows:
+        return {}
+    index: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            row = _clean(row)
+        if not isinstance(row, dict):
+            continue
+        name = row.get("feature_name")
+        if name is None:
+            continue
+        index[str(name)] = row
+    return index
 
 
 def _enrich_shap_with_meta(
     shap_rows: Any,
     provenance: dict[str, dict[str, Any]],
+    deviation: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Attach a ``meta`` dict to each SHAP row keyed by ``feature``.
+    """Attach ``meta`` (provenance) and ``raw_value`` + population
+    quantiles (from ``feature_deviation``) to each SHAP row, keyed by
+    ``feature``.
 
-    Always returns a list of cleaned dicts. Rows whose feature has no meta
-    entry get ``meta = None`` so the template's ``{{#if this.meta}}`` short-
-    circuits cleanly.
+    Always returns a list of cleaned dicts. Rows whose feature has no
+    matching provenance / deviation entry get ``None`` for the missing
+    fields so the template's ``{{#if this.meta}}`` and quantile-band
+    helper short-circuit cleanly.
     """
     if not shap_rows:
         return []
+    deviation = deviation or {}
     cleaned: list[dict[str, Any]] = []
     for row in shap_rows:
         if not isinstance(row, dict):
@@ -107,9 +188,21 @@ def _enrich_shap_with_meta(
         if not isinstance(row, dict):
             continue
         feature = row.get("feature")
-        meta = provenance.get(str(feature)) if feature is not None else None
+        key = str(feature) if feature is not None else None
+        meta = provenance.get(key) if key else None
+        dev = deviation.get(key) if key else None
         new_row = dict(row)
         new_row["meta"] = meta
+        if dev:
+            new_row["raw_value"] = dev.get("feature_value")
+            for q in ("q05", "q25", "q50", "q75", "q95"):
+                new_row[q] = dev.get(q)
+            new_row["z"] = dev.get("z")
+        else:
+            new_row["raw_value"] = None
+            new_row["q05"] = new_row["q25"] = new_row["q50"] = None
+            new_row["q75"] = new_row["q95"] = None
+            new_row["z"] = None
         cleaned.append(new_row)
     return cleaned
 
@@ -172,13 +265,22 @@ def render() -> None:
     # ``feature_dictionary`` list is the SAME data deduped by feature so the
     # dictionary table iterates without repeating identical rows when a
     # feature appears more than once in the SHAP set.
+    #
+    # The same SHAP rows also pick up the customer's raw (unscaled) feature
+    # value plus population quantiles from ``feature_deviation`` (already
+    # loaded as a template data source, so the lookup is in-memory). This
+    # is what powers the "very low / typical / very high" band pill that
+    # replaces the cryptic scaled value the panel used to show.
     try:
         provenance_df = data.feature_provenance()
     except Exception:
         provenance_df = pd.DataFrame()
     provenance_index = _build_provenance_index(provenance_df)
+    deviation_index = _build_deviation_index(context.get("feature_deviation"))
     enriched_shap = _enrich_shap_with_meta(
-        context.get("account_top_shap_features"), provenance_index
+        context.get("account_top_shap_features"),
+        provenance_index,
+        deviation=deviation_index,
     )
     context["account_top_shap_features"] = enriched_shap
     seen: set[str] = set()

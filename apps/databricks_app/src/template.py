@@ -464,25 +464,214 @@ def _h_fmt_shap_value(this, value):
     return f"{vf:.3f}"
 
 
+# Quantile-band classification: where does this customer's raw feature value
+# sit relative to the training population? 5 buckets (very low / low /
+# typical / high / very high) computed from q05/q25/q75/q95. Falls back to
+# "—" when any quantile is missing or the value is non-numeric.
+
+_BAND_VERY_LOW = "very low"
+_BAND_LOW = "low"
+_BAND_TYPICAL = "typical"
+_BAND_HIGH = "high"
+_BAND_VERY_HIGH = "very high"
+_BAND_UNKNOWN = "—"
+
+
+def _h_quantile_band(this, value, q05, q25, q75, q95):
+    if _is_missing(value):
+        return _BAND_UNKNOWN
+    try:
+        vf = float(value)
+    except (TypeError, ValueError):
+        return _BAND_UNKNOWN
+    quantiles = (q05, q25, q75, q95)
+    if any(_is_missing(q) for q in quantiles):
+        return _BAND_UNKNOWN
+    try:
+        a, b, c, d = (float(q) for q in quantiles)
+    except (TypeError, ValueError):
+        return _BAND_UNKNOWN
+    if vf < a:
+        return _BAND_VERY_LOW
+    if vf < b:
+        return _BAND_LOW
+    if vf < c:
+        return _BAND_TYPICAL
+    if vf < d:
+        return _BAND_HIGH
+    return _BAND_VERY_HIGH
+
+
+_BAND_CLASS = {
+    _BAND_VERY_LOW:  "cr-band-very-low",
+    _BAND_LOW:       "cr-band-low",
+    _BAND_TYPICAL:   "cr-band-typical",
+    _BAND_HIGH:      "cr-band-high",
+    _BAND_VERY_HIGH: "cr-band-very-high",
+    _BAND_UNKNOWN:   "cr-band-unknown",
+}
+
+
+def _h_band_class(this, band):
+    if _is_missing(band):
+        return _BAND_CLASS[_BAND_UNKNOWN]
+    return _BAND_CLASS.get(str(band), _BAND_CLASS[_BAND_UNKNOWN])
+
+
+# Direction phrase — translate the SHAP sign into business language.
+# The bar's colour already shows direction; this label puts a word on it
+# so a CSM doesn't have to interpret a log-odds number.
+
+_DIR_RISK = "risk-driving"
+_DIR_PROTECTIVE = "protective"
+_DIR_NEUTRAL = "neutral"
+
+# Anything below this magnitude (in log-odds) is rounded to "neutral" — the
+# bar would be barely visible at this level anyway, and labelling a 0.001
+# contribution as "risk-driving" overstates its weight.
+_DIR_NEUTRAL_EPSILON = 1e-3
+
+
+def _h_direction_phrase(this, contribution):
+    if _is_missing(contribution):
+        return _DIR_NEUTRAL
+    try:
+        cf = float(contribution)
+    except (TypeError, ValueError):
+        return _DIR_NEUTRAL
+    if abs(cf) < _DIR_NEUTRAL_EPSILON:
+        return _DIR_NEUTRAL
+    return _DIR_RISK if cf > 0 else _DIR_PROTECTIVE
+
+
+_DIR_CLASS = {
+    _DIR_RISK:       "cr-dir-risk",
+    _DIR_PROTECTIVE: "cr-dir-protective",
+    _DIR_NEUTRAL:    "cr-dir-neutral",
+}
+
+
+def _h_direction_class(this, contribution):
+    return _DIR_CLASS[_h_direction_phrase(this, contribution)]
+
+
+def _h_fmt_raw_value(this, value):
+    """Customer's raw, unscaled feature value. Integer for whole numbers,
+    3 decimals for floats, scientific notation for very small magnitudes."""
+    return _h_fmt_shap_value(this, value)
+
+
+# Derivation prose — translate the curated ``aggregation_kind`` from
+# ``feature_meta`` into a CSM-readable phrase. Falls back to a name-based
+# inference when the meta row is absent (older runs that never wrote
+# feature_meta). Window context comes from the meta row's
+# ``window_phrase`` when available.
+
+_AGG_KIND_PHRASES = {
+    "count":           "Count of {source} occurrences {window}",
+    "count_distinct":  "Distinct values of {source} observed {window}",
+    "sum":             "Total {source} {window}",
+    "avg":             "Average {source} {window}",
+    "max":             "Maximum {source} observed {window}",
+    "min":             "Minimum {source} observed {window}",
+    "last":            "Most recent value of {source} {window}",
+    "first":           "First observed value of {source} {window}",
+    "ratio":           "Ratio derived from {source} {window}",
+    "recency_days":    "Days since the most recent {source} event",
+    "derived_datetime":"Calendar-derived from {source} (e.g. day-of-week, hour)",
+    "passthrough":     "Raw value of {source} from the source table",
+}
+
+# Heuristics for inferring derivation when feature_meta is missing — based
+# on conventions used in the framework's gold materializer.
+_DERIVATION_NAME_HINTS = (
+    ("_velocity",   "Rate of change in {source} over time"),
+    ("_per_day",    "Per-day rate of {source}"),
+    ("_recency",    "Days since the last {source} event"),
+    ("_days_since", "Days since the last {source} event"),
+    ("_ratio",      "Ratio derived from {source}"),
+    ("_pct",        "Percentage derived from {source}"),
+    ("_count",      "Count of {source} occurrences"),
+    ("_sum",        "Total {source}"),
+    ("_avg",        "Average {source}"),
+    ("_mean",       "Average {source}"),
+    ("_max",        "Maximum {source} observed"),
+    ("_min",        "Minimum {source} observed"),
+    ("_first",      "First observed value of {source}"),
+    ("_last",       "Most recent value of {source}"),
+    ("_cos",        "Cyclical encoding (cosine) of {source}"),
+    ("_sin",        "Cyclical encoding (sine) of {source}"),
+)
+
+
+def _derivation_window_clause(window_phrase):
+    if _is_missing(window_phrase):
+        return ""
+    text = str(window_phrase).strip()
+    if not text:
+        return ""
+    return f"over {text}"
+
+
+def _h_derivation_phrase(this, aggregation_kind, feature_name, source_columns=None, window_phrase=None):
+    """Return one-sentence derivation prose. ``source_columns`` may be a
+    list (the typical case) or a single string; the first non-empty entry
+    is used as ``{source}``. Falls back to the feature name when the
+    source list is empty/missing."""
+    source = ""
+    if isinstance(source_columns, (list, tuple)):
+        for entry in source_columns:
+            if entry:
+                source = str(entry)
+                break
+    elif source_columns:
+        source = str(source_columns)
+    if not source and not _is_missing(feature_name):
+        source = str(feature_name)
+    window = _derivation_window_clause(window_phrase)
+    template = None
+    if not _is_missing(aggregation_kind):
+        template = _AGG_KIND_PHRASES.get(str(aggregation_kind))
+    if template is None and not _is_missing(feature_name):
+        lower = str(feature_name).lower()
+        for hint, phrase in _DERIVATION_NAME_HINTS:
+            if hint in lower:
+                template = phrase
+                break
+    if template is None:
+        return f"Derived from {source}" if source else ""
+    out = template.format(source=source, window=window).strip()
+    # Compact double spaces left over when window is empty.
+    while "  " in out:
+        out = out.replace("  ", " ")
+    return out
+
+
 HELPERS = {
-    "fmt_currency":    _h_fmt_currency,
-    "fmt_pct":         _h_fmt_pct,
-    "fmt_int":         _h_fmt_int,
-    "fmt_float":       _h_fmt_float,
-    "fmt_date":        _h_fmt_date,
-    "fmt_datetime":    _h_fmt_datetime,
-    "risk_tier_class": _h_risk_tier_class,
-    "fit_tier_label":  _h_fit_tier_label,
-    "fit_tier_class":  _h_fit_tier_class,
-    "dev_bar_pct":     _h_dev_bar_pct,
-    "dev_sign_class":  _h_dev_sign_class,
-    "fmt_signed_z":    _h_fmt_signed_z,
-    "shap_bar_pct":    _h_shap_bar_pct,
-    "shap_sign_class": _h_shap_sign_class,
-    "fmt_signed_shap": _h_fmt_signed_shap,
-    "fmt_shap_value":  _h_fmt_shap_value,
-    "upper":           _h_upper,
-    "lower":           _h_lower,
+    "fmt_currency":     _h_fmt_currency,
+    "fmt_pct":          _h_fmt_pct,
+    "fmt_int":          _h_fmt_int,
+    "fmt_float":        _h_fmt_float,
+    "fmt_date":         _h_fmt_date,
+    "fmt_datetime":     _h_fmt_datetime,
+    "risk_tier_class":  _h_risk_tier_class,
+    "fit_tier_label":   _h_fit_tier_label,
+    "fit_tier_class":   _h_fit_tier_class,
+    "dev_bar_pct":      _h_dev_bar_pct,
+    "dev_sign_class":   _h_dev_sign_class,
+    "fmt_signed_z":     _h_fmt_signed_z,
+    "shap_bar_pct":     _h_shap_bar_pct,
+    "shap_sign_class":  _h_shap_sign_class,
+    "fmt_signed_shap":  _h_fmt_signed_shap,
+    "fmt_shap_value":   _h_fmt_shap_value,
+    "fmt_raw_value":    _h_fmt_raw_value,
+    "quantile_band":    _h_quantile_band,
+    "band_class":       _h_band_class,
+    "direction_phrase": _h_direction_phrase,
+    "direction_class":  _h_direction_class,
+    "derivation_phrase":_h_derivation_phrase,
+    "upper":            _h_upper,
+    "lower":            _h_lower,
 }
 
 

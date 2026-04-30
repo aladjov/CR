@@ -711,10 +711,16 @@ details[open] > .cr-summary > .cr-summary-chevron { transform: rotate(90deg); }
 }
 .cr-shap-row {
   display: grid;
-  grid-template-columns: minmax(0, 1.6fr) auto minmax(80px, 1fr) auto;
+  /* name | raw value | band pill | bar | direction pill */
+  grid-template-columns:
+    minmax(0, 1.4fr)            /* name */
+    minmax(60px, auto)          /* raw value */
+    minmax(80px, auto)          /* band pill */
+    minmax(80px, 1fr)           /* bar */
+    minmax(90px, auto)          /* direction pill */;
   align-items: center;
-  gap: 0.6rem;
-  padding: 0.25rem 0;
+  gap: 0.55rem;
+  padding: 0.3rem 0;
   font-family: var(--font-sans);
   font-size: 0.82rem;
 }
@@ -731,6 +737,110 @@ details[open] > .cr-summary > .cr-summary-chevron { transform: rotate(90deg); }
   font-size: 0.74rem;
   color: var(--ink-soft);
   text-align: right;
+  font-feature-settings: "tnum" 1, "lnum" 1;
+}
+.cr-shap-raw {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--ink);
+  text-align: right;
+  font-feature-settings: "tnum" 1, "lnum" 1;
+  font-weight: 500;
+}
+.cr-shap-band {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-sans);
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  padding: 0.18rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  text-transform: lowercase;
+}
+.cr-band-very-low  { background: var(--green-100); color: var(--green-800); border-color: var(--green-200); }
+.cr-band-low       { background: var(--green-50);  color: var(--green-800); border-color: var(--green-100); }
+.cr-band-typical   { background: var(--paper-deep); color: var(--ink-soft); border-color: var(--line); }
+.cr-band-high      { background: var(--yellow-50); color: var(--yellow-800); border-color: var(--yellow-100); }
+.cr-band-very-high { background: var(--yellow-100); color: var(--yellow-800); border-color: var(--yellow-200); }
+.cr-band-unknown   { background: transparent; color: var(--whisper); border-color: var(--line-soft); border-style: dashed; }
+
+.cr-shap-direction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-sans);
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.005em;
+  padding: 0.18rem 0.65rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.cr-dir-protective { background: var(--green-100); color: var(--green-800); border-color: var(--green-200); }
+.cr-dir-risk       { background: var(--yellow-100); color: var(--yellow-800); border-color: var(--yellow-200); }
+.cr-dir-neutral    { background: var(--paper-deep); color: var(--ink-soft); border-color: var(--line); }
+
+/* Per-row "Model math" disclosure — analysts can pop open one row at a
+   time to see the scaled value + signed log-odds SHAP without cluttering
+   the operational view. The summary marker is intentionally minimal so
+   it visually retreats; the body uses the same dt/dl pattern as the
+   feature dictionary block below for stylistic consistency. */
+.cr-shap-math {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 0;
+}
+.cr-shap-math > .cr-shap-math-summary {
+  list-style: none;
+  cursor: pointer;
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--whisper);
+  padding: 0.15rem 0;
+  user-select: none;
+}
+.cr-shap-math > .cr-shap-math-summary::-webkit-details-marker { display: none; }
+.cr-shap-math > .cr-shap-math-summary::marker { content: ""; }
+.cr-shap-math > .cr-shap-math-summary::before {
+  content: "› model math";
+}
+.cr-shap-math[open] > .cr-shap-math-summary::before {
+  content: "▾ model math";
+}
+.cr-shap-math > .cr-shap-math-summary > span { display: none; }
+.cr-shap-math-list {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 0.9rem;
+  margin: 0.4rem 0 0.5rem 0;
+  padding: 0.55rem 0.8rem;
+  background: var(--paper-deep);
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  font-size: 0.78rem;
+}
+.cr-shap-math-list dt {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 500;
+  align-self: start;
+  padding-top: 0.15rem;
+}
+.cr-shap-math-list dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  color: var(--ink-2);
   font-feature-settings: "tnum" 1, "lnum" 1;
 }
 .cr-shap-bar-track {
@@ -945,6 +1055,15 @@ details[open] > .cr-summary > .cr-summary-chevron { transform: rotate(90deg); }
   .cr-grid-2col { grid-template-columns: 1fr; }
   .cr-dev-row { grid-template-columns: minmax(0, 1.4fr) minmax(60px, 1fr) auto; }
   .cr-dev-value { display: none; }
-  .cr-shap-row { grid-template-columns: minmax(0, 1.4fr) minmax(60px, 1fr) auto; }
-  .cr-shap-value { display: none; }
+  /* Mobile: drop the band pill (still visible via direction + bar colour),
+     keep raw value + bar + direction so the row stays scannable on a
+     phone-width screen. */
+  .cr-shap-row {
+    grid-template-columns:
+      minmax(0, 1.4fr)
+      minmax(60px, auto)
+      minmax(60px, 1fr)
+      minmax(80px, auto);
+  }
+  .cr-shap-band { display: none; }
 }
