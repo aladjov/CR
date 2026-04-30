@@ -76,7 +76,7 @@ data:
           <header class="cr-chapter-head">
             <span class="cr-chapter-eyebrow">Why this account scored where it did</span>
             <h2 class="cr-chapter-title">Model results interpretation</h2>
-            <p class="cr-chapter-lead">Each row is one factor the model leans on for this customer. The number is the customer's actual value, the pill shows where that value sits versus everyone else (very low → very high), and the bar shows how strongly it moved the churn score. The arrow on each bar points up when the factor pushes toward churn and down when it protects against churn — hover the bar for the full description.</p>
+            <p class="cr-chapter-lead">Each row is one factor the model leans on for this customer. The number is the customer's actual value, the pill shows where that value sits versus everyone else (very low → very high), and the bar shows how strongly it moved the churn score. The trailing label shows the row's share of total influence with an arrow — <span class="cr-shap-pos-token">↑</span> means the factor pushes toward churn, <span class="cr-shap-neg-token">↓</span> means it protects against churn. Hover the bar for the full direction phrase.</p>
           </header>
           <ul class="cr-shap-list">
             {{#each account_top_shap_features}}
@@ -85,24 +85,9 @@ data:
                 <span class="cr-shap-raw">{{fmt_raw_value this.raw_value}}</span>
                 <span class="cr-shap-band {{band_class (quantile_band this.raw_value this.q05 this.q25 this.q75 this.q95)}}">{{quantile_band this.raw_value this.q05 this.q25 this.q75 this.q95}}</span>
                 <span class="cr-shap-bar-track" title="{{direction_tooltip this.shap_contribution}}">
-                  <span class="cr-shap-bar" style="width:{{shap_bar_pct this.shap_contribution ../account_top_shap_features}}%">
-                    <span class="cr-shap-bar-glyph" aria-hidden="true">{{direction_glyph this.shap_contribution}}</span>
-                  </span>
-                  <span class="cr-shap-bar-label">{{shap_share_pct this.shap_contribution ../account_top_shap_features}}</span>
+                  <span class="cr-shap-bar" style="width:{{shap_bar_pct this.shap_contribution ../account_top_shap_features}}%"></span>
                 </span>
-                <details class="cr-shap-math">
-                  <summary class="cr-shap-math-summary"><span aria-hidden="true">Model math</span></summary>
-                  <dl class="cr-shap-math-list">
-                    <dt>Scaled value (z-score)</dt>
-                    <dd>{{fmt_shap_value this.value}}</dd>
-                    <dt>SHAP contribution (log-odds)</dt>
-                    <dd>{{fmt_signed_shap this.shap_contribution}}</dd>
-                    {{#if this.z}}
-                      <dt>Std. deviations from population mean</dt>
-                      <dd>{{fmt_signed_z this.z}}</dd>
-                    {{/if}}
-                  </dl>
-                </details>
+                <span class="cr-shap-score" title="{{direction_tooltip this.shap_contribution}}">{{direction_glyph this.shap_contribution}}{{shap_share_pct this.shap_contribution ../account_top_shap_features}}</span>
               </li>
             {{/each}}
           </ul>

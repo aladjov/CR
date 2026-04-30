@@ -623,12 +623,17 @@ details[open] > .cr-summary > .cr-summary-chevron { transform: rotate(90deg); }
 }
 .cr-shap-row {
   display: grid;
-  /* name | raw value | band pill | bar (with in-bar glyph + trailing % label) */
+  /* 5-track layout preserved for backward compatibility with per-dataset
+     HTML templates that pre-date the redesign and still emit a 5th cell
+     (direction pill, signed-shap label, etc.). The bundled default emits
+     only 4 children per row; the 5th track collapses to ``auto`` width
+     when nothing lands in it. */
   grid-template-columns:
     minmax(0, 1.4fr)            /* name */
     minmax(60px, auto)          /* raw value (collapses via :empty) */
     minmax(80px, auto)          /* band pill (collapses via :empty) */
-    minmax(120px, 1fr)          /* bar track + glyph + label */;
+    minmax(80px, 1fr)            /* bar track + (optional) glyph + label */
+    minmax(0, auto)             /* trailing slot (operator HTML compat) */;
   align-items: center;
   gap: 0.55rem;
   padding: 0.3rem 0;
@@ -689,11 +694,31 @@ details[open] > .cr-summary > .cr-summary-chevron { transform: rotate(90deg); }
 .cr-band-very-high { background: var(--yellow-100); color: var(--yellow-800); border-color: var(--yellow-200); }
 .cr-band-unknown   { background: transparent; color: var(--whisper); border-color: var(--line-soft); border-style: dashed; }
 
-/* Direction is now encoded by (a) bar colour (yellow=risk / green=protective),
-   (b) an arrow glyph rendered inside the bar's leading edge, and (c) a
-   browser tooltip on the bar track with the long-form phrase. The
-   permanent direction pill column was dropped to free a column for the
-   percentage label. */
+/* Direction pill -- legacy column kept in CSS for operator-supplied
+   HTML templates that still emit ``<span class="cr-shap-direction">``.
+   The bundled default no longer emits the element (encoding direction
+   via bar colour + an arrow glyph + a hover tooltip instead) so the
+   selectors below are inert for the bundled layout. */
+.cr-shap-direction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-sans);
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.005em;
+  padding: 0.18rem 0.65rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.cr-dir-protective { background: var(--green-100); color: var(--green-800); border-color: var(--green-200); }
+.cr-dir-risk       { background: var(--yellow-100); color: var(--yellow-800); border-color: var(--yellow-200); }
+.cr-dir-neutral    { background: var(--paper-deep); color: var(--ink-soft); border-color: var(--line); }
+/* Inline tokens used in the bundled default's pre-redesign chapter lead.
+   Operator HTML may still reference these so keep the rules around. */
+.cr-shap-pos-token { color: var(--yellow-800); font-weight: 500; }
+.cr-shap-neg-token { color: var(--green-800); font-weight: 500; }
 
 /* Per-row "Model math" disclosure — analysts can pop open one row at a
    time to see the scaled value + signed log-odds SHAP without cluttering
@@ -755,44 +780,52 @@ details[open] > .cr-summary > .cr-summary-chevron { transform: rotate(90deg); }
 }
 .cr-shap-bar-track {
   position: relative;
-  height: 16px;
+  height: 14px;
   background: var(--paper-deep);
   border-radius: 3px;
+  overflow: hidden;
   border: 1px solid var(--line-soft);
   /* Hover surfaces a native tooltip with the full direction phrase
-     (``risk-driving``/``protective``); cursor hint nudges users to try. */
+     (``risk-driving``/``protective``) when the bundled template emits
+     ``title=...`` on the track; the cursor hint nudges users to try. */
   cursor: help;
 }
 .cr-shap-bar {
   position: absolute;
   top: 0;
   bottom: 0;
-  display: flex;
-  align-items: center;
+  display: block;
   transition: width 0.18s ease;
-  overflow: hidden;
-  border-radius: 2px;
 }
 /* Causal direction: positive contribution pushes prediction toward
    churn (right half, warm colour); negative pulls away (left half,
-   cool/safe colour). The glyph sits at the leading edge of each bar
-   so the direction reads visually even when the bar is short. */
-.cr-shap-pos  .cr-shap-bar          { left: 50%;  background: var(--yellow-400); justify-content: flex-end; }
-.cr-shap-neg  .cr-shap-bar          { right: 50%; background: var(--green-400);  justify-content: flex-start; }
-.cr-shap-zero .cr-shap-bar          { width: 0; }
-.cr-shap-pos  .cr-shap-bar-glyph    { padding-right: 4px; }
-.cr-shap-neg  .cr-shap-bar-glyph    { padding-left: 4px; }
+   cool/safe colour). */
+.cr-shap-pos  .cr-shap-bar  { left: 50%;  background: var(--yellow-400); }
+.cr-shap-neg  .cr-shap-bar  { right: 50%; background: var(--green-400); }
+.cr-shap-zero .cr-shap-bar  { width: 0; }
+/* Direction glyph -- absolute-positioned child of ``.cr-shap-bar`` that
+   only the bundled default emits. Operator-supplied templates that
+   pre-date this redesign don't include the element, so the rule no-ops
+   for them. ``overflow: hidden`` on the track clips the glyph when the
+   bar is too narrow, which is the right behaviour. */
 .cr-shap-bar-glyph {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
   font-family: var(--font-sans);
   font-size: 11px;
   line-height: 1;
   font-weight: 700;
-  color: rgba(0,0,0,0.6);
+  color: rgba(0,0,0,0.7);
+  pointer-events: none;
 }
-/* Trailing percentage label — the row's share of total visible |SHAP|.
-   Anchored to the right edge of the track so the value doesn't jump as
-   the bar's width animates. ``cr-shap-zero`` rows still render the label
-   (empty string from helper -> visually empty cell). */
+.cr-shap-pos .cr-shap-bar-glyph { right: 3px; }
+.cr-shap-neg .cr-shap-bar-glyph { left: 3px; }
+/* Trailing percentage label -- absolute-positioned child of
+   ``.cr-shap-bar-track`` (sibling to ``.cr-shap-bar``). Same opt-in
+   pattern: only the bundled default emits the element. Anchored to the
+   right edge of the track so the value doesn't jump as the bar's width
+   animates. */
 .cr-shap-bar-label {
   position: absolute;
   right: 0.4rem;
@@ -803,6 +836,7 @@ details[open] > .cr-summary > .cr-summary-chevron { transform: rotate(90deg); }
   font-feature-settings: "tnum" 1, "lnum" 1;
   color: var(--ink-soft);
   pointer-events: none;
+  white-space: nowrap;
 }
 .cr-shap-bar-track::before {
   content: "";

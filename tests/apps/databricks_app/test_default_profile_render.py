@@ -173,23 +173,29 @@ def test_renders_shap_panel_with_bidirectional_bars(compiled_template, base_cont
     # Quantile band labels render with their pill class.
     assert "cr-band-typical" in html  # active_span_days = 150 sits in [120 q50, 200 q75) → "typical" (q25..q75)
     assert "cr-band-very-high" in html  # open_rate = 0.85 ≥ q95 (0.8) → "very high"
-    # In-bar glyph replaces the old permanent direction-pill column. Up arrow
-    # for the risk-driving rows; down arrow for the protective row.
+    # Trailing ``cr-shap-score`` cell carries glyph + share-of-total percentage
+    # (replacing the old in-bar glyph + in-track label + signed log-odds).
+    # Up arrow for the risk-driving rows; down arrow for the protective row.
+    assert "cr-shap-score" in html
     assert "↑" in html
     assert "↓" in html
-    assert "cr-shap-bar-glyph" in html
-    # Direction tooltip rendered on the bar-track via title attribute.
+    # Direction tooltip rendered on both the bar-track and the score via
+    # title attribute.
     assert "Risk-driving" in html
     assert "Protective" in html
-    # Percentage label (share of total visible |SHAP|): 0.40 / (0.40+0.20+0.10) = 57%
-    assert "cr-shap-bar-label" in html
+    # Share of total visible |SHAP|: 0.40/0.70=57%, 0.20/0.70=29%, 0.10/0.70=14%.
     assert "57%" in html
     assert "29%" in html
     assert "14%" in html
-    # Per-row collapsible "Model math" details still carry the log-odds value.
-    assert "cr-shap-math" in html
-    assert "+0.400" in html
-    assert "-0.200" in html
+    # The in-bar glyph, in-track label, and per-row "Model math" details are
+    # gone — the trailing score subsumes all three.
+    assert "cr-shap-bar-glyph" not in html
+    assert "cr-shap-bar-label" not in html
+    assert "cr-shap-math" not in html
+    # Signed log-odds (``+0.400``/``-0.200``) is no longer rendered — the
+    # percentage share replaces it as the easier-to-read value.
+    assert "+0.400" not in html
+    assert "-0.200" not in html
     # The permanent ``risk-driving``/``protective`` pill column is gone — the
     # phrase only surfaces as a tooltip + glyph now, so no ``cr-shap-direction``
     # node should be in the rendered HTML.
