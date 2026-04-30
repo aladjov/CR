@@ -14,7 +14,10 @@ env:
     # v_eligible_all_playbooks, v_account_explanation in CR_CATALOG.CR_SCHEMA.
     value: ""
   - name: CR_PROFILE_TEMPLATE_PATH
-    # Optional: path to a YAML template that shapes the customer-profile panel.
-    # Example: /Volumes/churnkit/analysis/app_config/customer_profile_template.yaml
-    # When empty the profile falls back to a pivoted row of v_account_explanation.
-    value: ""
+    # Optional: explicit path to the per-dataset customer-profile HTML template.
+    # When set, the app skips auto-discovery (which globs /Volumes/<catalog>/<schema>/dashboard_templates/*.html)
+    # and reads this exact file. Useful when the App service principal has READ_VOLUME on the file
+    # but the volume directory listing is flaky, or when you want to pin one specific template.
+    # When empty the app auto-discovers the newest .html in the dashboard_templates volume,
+    # and falls back to the bundled default_profile.html if nothing is found.
+    value: "/Volumes/churnkit/analysis/dashboard_templates/customer_emails_profile.html"
