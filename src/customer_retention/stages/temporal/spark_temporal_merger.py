@@ -129,6 +129,7 @@ class SparkTemporalMerger(TemporalMerger):
         for i, ds in enumerate(datasets):
             t_ds = time.monotonic()
             merged_sdf, new_cols = self.merge_one(merged_sdf, ds)
+            ds_seconds = time.monotonic() - t_ds
 
             is_last = (i + 1) == n_datasets
             on_boundary = (i + 1) % checkpoint_every == 0
@@ -138,7 +139,6 @@ class SparkTemporalMerger(TemporalMerger):
                 report.checkpoint_seconds += time.monotonic() - t_ckpt
                 report.checkpoint_count += 1
 
-            ds_seconds = time.monotonic() - t_ds
             report.datasets_merged.append(ds.name)
             report.columns_per_dataset[ds.name] = len(new_cols)
             report.seconds_per_dataset[ds.name] = ds_seconds
