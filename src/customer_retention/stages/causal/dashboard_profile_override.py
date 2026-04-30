@@ -184,6 +184,7 @@ def apply_profile_override(
     profile_html: str,
     composite_name: str,
     placeholders: Optional[Dict[str, str]] = None,
+    template_volume_path: Optional[str] = None,
 ) -> ProfileOverrideResult:
     """Publish a project-side profile view set and append the HTML row.
 
@@ -215,7 +216,25 @@ def apply_profile_override(
         Optional extra placeholders for runtime-specific tokens (Volume
         paths for inline Delta references, etc.). Keys ``catalog``,
         ``schema``, ``composite_name`` are reserved.
+    template_volume_path
+        DEPRECATED. Previously the absolute path on a FUSE-mounted Volume
+        where the HTML body was written. Kept as a no-op kwarg so existing
+        ``c05`` operator cells generated against the old framework signature
+        keep running unchanged -- the App now reads the body from the
+        ``dashboard_template_overrides`` Delta table via its SQL warehouse,
+        which is reliable from Databricks Apps; the Volume route was not.
+        Pass ``None`` (or omit) in new cells; the parameter will be removed
+        in a future release.
     """
+    if template_volume_path is not None:
+        logger.warning(
+            "apply_profile_override: ``template_volume_path`` is deprecated "
+            "and ignored -- the HTML body is now appended to the UC table "
+            "``%s.%s.dashboard_template_overrides`` and exposed via "
+            "``v_dashboard_template_active``. Drop the kwarg from your "
+            "c05 user-code cell on the next edit.",
+            catalog, schema,
+        )
     if spark is None:
         logger.warning("apply_profile_override: spark is None — skipping publish")
         return ProfileOverrideResult([], "", "", "", "")
