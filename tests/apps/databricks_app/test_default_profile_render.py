@@ -175,20 +175,22 @@ def test_renders_shap_panel_with_bidirectional_bars(compiled_template, base_cont
     # driver -- but the trailing label is the actual value, not a derived
     # percentage, so analysts can compare across customers.
     assert "cr-shap-score" in html
-    assert "+0.400" in html
-    assert "-0.200" in html
-    assert "+0.100" in html
-    # Glyph / percentage / band pill / in-bar label / model-math disclosure
-    # are all GONE -- the layout reverts to the original image-#3 shape:
-    # name | raw | bar | signed-contribution. Direction is encoded purely
-    # via the bar's colour (yellow = pushes toward churn, green = away).
+    assert "+0.40" in html
+    assert "-0.20" in html
+    assert "+0.10" in html
+    # Quantile-band pill restored alongside the bar -- two channels of
+    # information that don't interfere: bar = panel-normalised SHAP
+    # magnitude, pill = where this customer's raw value sits in the
+    # population distribution per feature.
+    assert "cr-shap-band" in html
+    assert "cr-band-typical" in html  # active_span_days = 150 sits in [120 q50, 200 q75) → "typical" (q25..q75)
+    assert "cr-band-very-high" in html  # open_rate = 0.85 ≥ q95 (0.8) → "very high"
+    # Glyph / share-percentage / model-math disclosure / direction pill are
+    # gone -- the row stays at name | raw | band | bar | signed-contribution.
     assert "cr-shap-bar-glyph" not in html
     assert "cr-shap-bar-label" not in html
     assert "cr-shap-math" not in html
     assert "cr-shap-direction" not in html
-    # No quantile band pill in the bundled row body.
-    assert "cr-band-typical" not in html
-    assert "cr-band-very-high" not in html
     # No share-of-total percentage label and no arrow glyphs.
     assert "57%" not in html
     assert "29%" not in html

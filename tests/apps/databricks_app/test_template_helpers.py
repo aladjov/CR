@@ -177,8 +177,10 @@ def test_fmt_raw_value_renders_whole_number_as_integer():
     assert _call("fmt_raw_value", 312.0) == "312"
 
 
-def test_fmt_raw_value_renders_float_three_decimals():
-    assert _call("fmt_raw_value", 0.456789) == "0.457"
+def test_fmt_raw_value_renders_float_two_decimals():
+    assert _call("fmt_raw_value", 0.456789) == "0.46"
+    assert _call("fmt_raw_value", 13.707) == "13.71"
+    assert _call("fmt_raw_value", -3.373) == "-3.37"
 
 
 def test_fmt_raw_value_missing_returns_empty_string():

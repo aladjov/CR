@@ -76,13 +76,14 @@ data:
           <header class="cr-chapter-head">
             <span class="cr-chapter-eyebrow">Why the model flagged this account</span>
             <h2 class="cr-chapter-title">Top SHAP drivers</h2>
-            <p class="cr-chapter-lead">Each row is one factor the model leans on for this customer. The first number is the customer's actual value, the bar's length is how strongly that value moved the churn score (relative to the strongest driver in the row), and the trailing number is the signed contribution — <span class="cr-shap-pos-token">positive (yellow)</span> pushes toward churn, <span class="cr-shap-neg-token">negative (green)</span> protects against churn.</p>
+            <p class="cr-chapter-lead">Each row is one factor the model leans on for this customer. The left number is the customer's actual value and the pill next to it shows where that value sits versus everyone else (very low → very high). The bar reads from the middle outward — <span class="cr-shap-pos-token">right (yellow)</span> drives risk, <span class="cr-shap-neg-token">left (green)</span> is protective, the middle is "no effect". Bar lengths are normalised so the strongest driver in the panel hits 100% and the others scale relative to it, letting you compare magnitudes across the five factors at a glance. The right number is the signed contribution to the churn log-odds.</p>
           </header>
           <ul class="cr-shap-list">
             {{#each account_top_shap_features}}
               <li class="cr-shap-row {{shap_sign_class this.shap_contribution}}">
                 <span class="cr-shap-name" title="{{this.feature}}">{{this.feature}}</span>
                 <span class="cr-shap-raw">{{fmt_raw_value this.raw_value}}</span>
+                <span class="cr-shap-band {{band_class (quantile_band this.raw_value this.q05 this.q25 this.q75 this.q95)}}">{{quantile_band this.raw_value this.q05 this.q25 this.q75 this.q95}}</span>
                 <span class="cr-shap-bar-track">
                   <span class="cr-shap-bar" style="width:{{shap_bar_pct this.shap_contribution ../account_top_shap_features}}%"></span>
                 </span>

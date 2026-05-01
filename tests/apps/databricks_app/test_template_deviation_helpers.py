@@ -95,10 +95,10 @@ def test_shap_sign_class_cases():
     assert _call("shap_sign_class", "garbage") == "cr-shap-zero"
 
 
-def test_fmt_signed_shap_uses_three_decimals():
-    assert _call("fmt_signed_shap", 0.1234) == "+0.123"
-    assert _call("fmt_signed_shap", -0.5) == "-0.500"
-    assert _call("fmt_signed_shap", 0.0) == "+0.000"
+def test_fmt_signed_shap_uses_two_decimals():
+    assert _call("fmt_signed_shap", 0.1234) == "+0.12"
+    assert _call("fmt_signed_shap", -0.5) == "-0.50"
+    assert _call("fmt_signed_shap", 0.0) == "+0.00"
     assert _call("fmt_signed_shap", None) == "—"
 
 

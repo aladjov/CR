@@ -666,17 +666,21 @@ details[open] > .cr-summary > .cr-summary-chevron { transform: rotate(90deg); }
 }
 .cr-shap-row {
   display: grid;
-  /* 4-track layout: name | raw value | bar | signed contribution. Older
-     operator templates that still emit an extra band pill / direction pill
-     between raw and bar fall back gracefully -- the implicit grid auto-flow
-     keeps the row readable even with 5 children. */
+  /* 5-track layout: name | raw value | quantile-band pill | bar | signed
+     contribution. Bar = SHAP magnitude (panel-normalised, comparable
+     across rows); pill = where this customer's raw value sits in the
+     population distribution per feature. Two channels of information that
+     don't interfere -- the bar tells you which factor mattered most for
+     this prediction, the pill tells you whether that factor is unusual
+     for this customer relative to everyone else. */
   grid-template-columns:
     minmax(0, 1.4fr)            /* name */
     minmax(60px, auto)          /* raw value (collapses via :empty) */
-    minmax(120px, 1.6fr)        /* bidirectional bar track */
+    minmax(80px, auto)          /* band pill (collapses via :empty when no quantiles) */
+    minmax(120px, 1.4fr)        /* bidirectional bar track */
     minmax(0, auto)             /* trailing signed contribution */;
   align-items: center;
-  gap: 0.6rem;
+  gap: 0.55rem;
   padding: 0.3rem 0;
   font-family: var(--font-sans);
   font-size: 0.82rem;

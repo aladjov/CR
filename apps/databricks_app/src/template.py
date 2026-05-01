@@ -402,12 +402,18 @@ def _h_shap_sign_class(this, contribution):
 
 
 def _h_fmt_signed_shap(this, contribution):
-    """Three-significant-digit signed contribution (e.g. ``+0.142``)."""
+    """Two-decimal-place signed contribution (e.g. ``+0.14``).
+
+    Two decimals is the right operational precision for SHAP log-odds in
+    this dashboard: the upstream contributions sit in roughly [-1, 1],
+    so .2f keeps the meaningful magnitude while dropping a trailing
+    decimal that read as false precision.
+    """
     if _is_missing(contribution):
         return "—"
     try:
         cf = float(contribution)
-        return f"{cf:+.3f}"
+        return f"{cf:+.2f}"
     except Exception:
         return str(contribution)
 
@@ -564,8 +570,10 @@ def _h_fmt_raw_value(this, value):
 
     Returns an EMPTY string for missing values so the raw-value cell
     collapses cleanly via ``{{#if raw_value_text}}`` rather than rendering
-    a ``—`` placeholder. Numeric values format as integer / 3-decimal
-    float / scientific.
+    a ``—`` placeholder. Numeric values format as integer / 2-decimal
+    float / scientific. Two decimals (was three) matches the operator
+    expectation that the dashboard reads as round numbers, not pseudo-
+    precise SHAP scaffolding.
     """
     if _is_missing(value):
         return ""
@@ -576,8 +584,8 @@ def _h_fmt_raw_value(this, value):
     if abs(vf - int(vf)) < 1e-9 and abs(vf) < 1e9:
         return f"{int(vf):,}"
     if abs(vf) < 1e-3 and vf != 0.0:
-        return f"{vf:.2e}"
-    return f"{vf:.3f}"
+        return f"{vf:.1e}"
+    return f"{vf:.2f}"
 
 
 # Derivation prose — translate the curated ``aggregation_kind`` from
