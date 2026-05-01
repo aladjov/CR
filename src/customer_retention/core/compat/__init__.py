@@ -1435,8 +1435,13 @@ def batched_missingness_corr(
     """Pairwise correlation of null-indicator columns.
 
     On pandas: ``df[cols].isnull().corr()``.
-    On Spark: batched ``F.corr`` on ``isnull().cast("double")`` indicators,
-    processing column-pairs in groups to keep Catalyst plans small.
+    On Spark: single-job MLlib ``Correlation.corr`` over a vectorised
+    null-indicator frame. Plan size is O(N) regardless of column count;
+    no per-pair Catalyst expressions, no quadratic plan fan-in. This is
+    the durable replacement for the previous batched ``F.corr`` loop
+    that scaled as O(N²/batch) jobs and OOMed driver heaps on wide
+    parallel-task workloads (e.g. opportunity, ~150+ nullable cols, run
+    concurrently across 4 NB02 tasks on a shared cluster).
 
     Returns a symmetric *native* pandas DataFrame (small — cols × cols).
     """
@@ -1451,52 +1456,58 @@ def batched_missingness_corr(
         return df[cols].isnull().corr()
 
     import pyspark.sql.functions as F  # noqa: N812
+    from pyspark.ml.feature import VectorAssembler
+    from pyspark.ml.stat import Correlation
 
     spark_df = as_spark_df(df[cols])
-    # Build null-indicator columns: 1.0 if null, 0.0 otherwise
-    null_cols = [F.when(F.col(f"`{c}`").isNull(), 1.0).otherwise(0.0).alias(c) for c in cols]
-    null_df = spark_df.select(*null_cols).localCheckpoint(eager=True)
+    # Build null-indicator columns: 1.0 if null, 0.0 otherwise. Use safe
+    # alias names (`__nm_<i>`) so VectorAssembler doesn't choke on column
+    # names containing dots, spaces, or other Spark-reserved characters.
+    safe_aliases = [f"__nm_{i}" for i in range(len(cols))]
+    null_cols = [
+        F.when(F.col(f"`{c}`").isNull(), 1.0).otherwise(0.0).alias(safe_aliases[i])
+        for i, c in enumerate(cols)
+    ]
+    null_df = spark_df.select(*null_cols)
 
-    # Pre-filter: only columns with at least one null have meaningful variance
-    _BATCH_NC = 200
-    has_nulls: set[str] = set()
-    for start in range(0, len(cols), _BATCH_NC):
-        batch = cols[start : start + _BATCH_NC]
-        exprs = [F.coalesce(F.sum(F.col(c).cast("int")), F.lit(0)).alias(c) for c in batch]
-        row = null_df.agg(*exprs).head()
-        for c in batch:
-            if row[c] and int(row[c]) > 0:
-                has_nulls.add(c)
-
+    # Identify zero-variance columns (no nulls OR all nulls): MLlib reports
+    # them as NaN throughout their row/col, but pandas' isnull().corr() also
+    # reports NaN for zero-variance columns, so the contract matches.
+    # We compute null counts in a single agg job to know which columns to
+    # mark as "has nulls" for the later post-processing.
+    sum_exprs = [F.sum(F.col(safe_aliases[i])).alias(safe_aliases[i]) for i in range(len(cols))]
+    sum_row = null_df.agg(*sum_exprs).head()
     n = len(cols)
-    matrix = _np.full((n, n), _np.nan)
-    _np.fill_diagonal(matrix, 1.0)
-    idx = {c: i for i, c in enumerate(cols)}
+    has_nulls: set[int] = set()
+    for i in range(n):
+        v = sum_row[safe_aliases[i]] if sum_row is not None else None
+        if v is not None and float(v) > 0:
+            has_nulls.add(i)
 
-    # Only compute pairs where both columns have nulls (non-zero variance)
-    active = sorted(has_nulls, key=cols.index)
-    pairs = [(i, j) for ii, a in enumerate(active) for j_idx, b in enumerate(active[ii + 1:], ii + 1)
-             if (i := idx[a]) is not None and (j := idx[b]) is not None]
+    # Single Spark job: vectorise + compute the full N×N correlation matrix.
+    # Plan size is O(N), not O(N²). MLlib's MultivariateStatisticalSummary
+    # accumulates moments per partition, then aggregates — no driver-side
+    # per-pair Catalyst plan, no cached null-indicator frame held across
+    # batches.
+    assembler = VectorAssembler(
+        inputCols=safe_aliases, outputCol="__nm_features", handleInvalid="keep",
+    )
+    vec_df = assembler.transform(null_df).select("__nm_features")
+    corr_row = Correlation.corr(vec_df, "__nm_features", method="pearson").head()
+    matrix = _np.array(corr_row[0].toArray(), dtype=float)
 
-    _BATCH_CORR = 500
-    for start in range(0, len(pairs), _BATCH_CORR):
-        batch = pairs[start : start + _BATCH_CORR]
-        exprs = [_safe_corr_expr(cols[i], cols[j]).alias(f"c_{i}_{j}") for i, j in batch]
-        row = null_df.select(*exprs).head()
-        for i, j in batch:
-            val = row[f"c_{i}_{j}"]
-            val = float(val) if val is not None else _np.nan
-            matrix[i, j] = val
-            matrix[j, i] = val
-
-    null_df.unpersist()
-    del null_df
-
-    # Columns with zero nulls have no variance → corr = NaN with everything (already set),
-    # except self-correlation = NaN for zero-variance (consistent with pandas behavior)
-    for c in cols:
-        if c not in has_nulls:
-            matrix[idx[c], idx[c]] = _np.nan
+    # Pandas isnull().corr() contract:
+    #   - NaN diagonal for zero-variance columns
+    #   - NaN row/col for zero-variance columns (already what MLlib emits)
+    # MLlib already returns NaN for zero-variance entries, but it sets the
+    # diagonal to 1.0 even when the column has zero variance. Override the
+    # diagonal for zero-variance columns to match pandas.
+    for i in range(n):
+        if i not in has_nulls:
+            matrix[i, :] = _np.nan
+            matrix[:, i] = _np.nan
+        else:
+            matrix[i, i] = 1.0
 
     return _pandas.DataFrame(matrix, columns=cols, index=cols)
 

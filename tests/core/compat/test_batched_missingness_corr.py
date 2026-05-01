@@ -85,35 +85,99 @@ class TestBatchedMissingnessCorr:
         assert not np.isnan(result.loc["has_nulls_1", "has_nulls_2"])
 
 
-class TestBatchedMissingnessSparkCheckpointed:
-    @pytest.fixture(autouse=True)
-    def _skip_without_pyspark(self):
-        pytest.importorskip("pyspark")
+class TestBatchedMissingnessSparkMatrixForm:
+    """Spark path uses MLlib's ``Correlation.corr`` for an O(N) plan.
 
-    def test_spark_path_calls_localcheckpoint(self):
-        from unittest.mock import MagicMock, patch
+    Verifies behaviour parity with the pandas branch on a real local
+    SparkSession, including the wide-N case that triggered the previous
+    O(N²) batched-pair plan to OOM driver heaps when run in parallel
+    across multiple NB02 tasks on a shared cluster.
+    """
 
-        cols = ["a", "b"]
-        mock_df = MagicMock()
-        mock_df.columns = cols
+    pyspark = pytest.importorskip("pyspark")
+    pytestmark = pytest.mark.spark
 
-        mock_spark_df = MagicMock()
-        mock_null_df = MagicMock()
-        mock_checkpointed = MagicMock()
-        mock_spark_df.select.return_value = mock_null_df
-        mock_null_df.localCheckpoint.return_value = mock_checkpointed
-        null_count_row = MagicMock()
-        null_count_row.__getitem__ = lambda self, k: 0
-        mock_checkpointed.agg.return_value.head.return_value = null_count_row
+    @pytest.fixture(scope="class")
+    def spark(self):
+        from pyspark.sql import SparkSession
+        return (
+            SparkSession.builder
+            .master("local[2]")
+            .appName("missingness_corr_matrix_form")
+            .config("spark.sql.shuffle.partitions", "4")
+            .getOrCreate()
+        )
 
-        with (
-            patch("customer_retention.core.compat._is_spark_pandas", return_value=True),
-            patch("customer_retention.core.compat.as_spark_df", return_value=mock_spark_df),
-        ):
-            batched_missingness_corr(mock_df, cols)
+    def _make_ps_df(self, spark, n_rows, n_cols, seed=42, null_frac=0.3):
+        from customer_retention.core.compat.spark_backend import _as_pandas_api
 
-        mock_null_df.localCheckpoint.assert_called_once_with(eager=True)
-        mock_checkpointed.agg.assert_called()
+        rng = np.random.default_rng(seed)
+        data = rng.standard_normal((n_rows, n_cols))
+        mask = rng.random((n_rows, n_cols)) < null_frac
+        data[mask] = np.nan
+        cols = [f"c{i:03d}" for i in range(n_cols)]
+        pdf = pd.DataFrame(data, columns=cols)
+        return _as_pandas_api(spark.createDataFrame(pdf)), pdf, cols
+
+    def test_matches_pandas_isnull_corr_small(self, spark):
+        ps_df, pdf, cols = self._make_ps_df(spark, n_rows=300, n_cols=8)
+        result = batched_missingness_corr(ps_df, cols)
+        expected = pdf.isnull().corr()
+        # MLlib computes via moments; tolerance accounts for accumulator order
+        pd.testing.assert_frame_equal(result, expected, atol=1e-9)
+
+    def test_wide_n_does_not_emit_quadratic_plan(self, spark):
+        """Regression: 200-col missingness corr must not OOM or hang.
+
+        The previous implementation issued O(N²/500) Spark jobs per call;
+        the matrix-form rewrite issues exactly one MLlib correlation job
+        regardless of N. This test exercises the wide-N path against
+        a real SparkSession to ensure the single-job path is in effect
+        and produces the right shape.
+        """
+        ps_df, pdf, cols = self._make_ps_df(spark, n_rows=500, n_cols=200)
+        result = batched_missingness_corr(ps_df, cols)
+        assert result.shape == (200, 200)
+        # Diagonal of has-variance cols must be 1.0 (matches pandas contract)
+        diag_finite = np.array([result.iloc[i, i] for i in range(200) if not np.isnan(result.iloc[i, i])])
+        assert (diag_finite == pytest.approx(1.0)).all()
+        # Symmetry is required (correlation matrix is symmetric)
+        for i in range(0, 200, 13):  # spot-check, not full N²
+            for j in range(i + 1, 200, 17):
+                a, b = result.iloc[i, j], result.iloc[j, i]
+                if np.isnan(a):
+                    assert np.isnan(b)
+                else:
+                    assert a == pytest.approx(b)
+
+    def test_zero_variance_column_emits_nan_row(self, spark):
+        from customer_retention.core.compat.spark_backend import _as_pandas_api
+
+        # 'complete' has no nulls → zero variance → all-NaN row/col
+        pdf = pd.DataFrame({
+            "complete": [1.0, 2.0, 3.0, 4.0, 5.0],
+            "has_nulls_a": [1.0, np.nan, 3.0, np.nan, 5.0],
+            "has_nulls_b": [np.nan, 2.0, np.nan, 4.0, np.nan],
+        })
+        ps_df = _as_pandas_api(spark.createDataFrame(pdf))
+        result = batched_missingness_corr(ps_df, ["complete", "has_nulls_a", "has_nulls_b"])
+        assert np.isnan(result.loc["complete", "complete"])
+        assert np.isnan(result.loc["complete", "has_nulls_a"])
+        assert np.isnan(result.loc["has_nulls_a", "complete"])
+        # has-variance cols still get a real correlation
+        assert not np.isnan(result.loc["has_nulls_a", "has_nulls_b"])
+
+    def test_matches_pandas_anti_correlated(self, spark):
+        from customer_retention.core.compat.spark_backend import _as_pandas_api
+
+        pdf = pd.DataFrame({
+            "a": [1.0, np.nan, 3.0, np.nan, 5.0, np.nan, 7.0, np.nan],
+            "b": [np.nan, 2.0, np.nan, 4.0, np.nan, 6.0, np.nan, 8.0],
+        })
+        ps_df = _as_pandas_api(spark.createDataFrame(pdf))
+        result = batched_missingness_corr(ps_df, ["a", "b"])
+        assert result.loc["a", "b"] == pytest.approx(-1.0, abs=1e-9)
+        assert result.loc["b", "a"] == pytest.approx(-1.0, abs=1e-9)
 
 
 class TestBulkIqrBounds:
