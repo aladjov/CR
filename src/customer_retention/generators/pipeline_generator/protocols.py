@@ -174,6 +174,29 @@ class PipelineGeneratorBase(ABC):
     def _write_training(self, config: PipelineConfig) -> Path:
         path = self._output_dir / "training" / "ml_experiment.py"
         path.parent.mkdir(parents=True, exist_ok=True)
+        # Externalise the exploration feature profile to a sibling JSON file.
+        # The training template (databricks_training.py.j2 / training.py.j2)
+        # discovers this file at runtime via Path(__file__).parent. Keeping
+        # it out of the .py source avoids 1-5 MB inline dict literals that
+        # press on the Python parser during cell-4 evaluation on shared
+        # clusters and bloat the rendered file beyond human readability.
+        # NaN values are preserved via allow_nan=True (Python's json.load
+        # accepts NaN by default), so float('nan') round-trips correctly.
+        if (
+            config.training is not None
+            and config.training.exploration_feature_profile is not None
+        ):
+            import json as _ep_json
+
+            json_path = path.parent / "exploration_profile.json"
+            json_path.write_text(
+                _ep_json.dumps(
+                    config.training.exploration_feature_profile,
+                    indent=2,
+                    allow_nan=True,
+                    default=str,
+                )
+            )
         path.write_text(self._renderer.render_training(config))
         return path
 

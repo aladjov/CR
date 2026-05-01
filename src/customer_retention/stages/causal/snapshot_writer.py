@@ -550,7 +550,7 @@ def build_eligibility_snapshot(config: SnapshotConfig) -> SnapshotResult:
         as_of_date = as_of_date.replace(tzinfo=timezone.utc)
 
     definitions = _load_active_definitions(spark, config)
-    _require_definitions_present(definitions, config)
+    _require_definitions_present(definitions, config, spark)
 
     predictions_df = _load_latest_predictions(spark, config)
 
@@ -719,7 +719,7 @@ def _join_top_shap_drivers(
 
 
 def _require_definitions_present(
-    definitions: _LoadedDefinitions, config: SnapshotConfig
+    definitions: _LoadedDefinitions, config: SnapshotConfig, spark: "SparkSession"
 ) -> None:
     """Fail fast on missing active rows.
 
@@ -727,6 +727,14 @@ def _require_definitions_present(
     the four-way anchor. Letting None flow into a non-nullable column
     silently corrupts the Delta MERGE. We surface the missing-layer
     condition here so the operator sees a precise error message.
+
+    When the missing layer is ``eligibility_policy``, we look for
+    ``pending_review`` rows belonging to the same model name/version and
+    surface a FORCE_APPROVE / manual-review hint -- the c03 approval gate
+    only auto-promotes ``fit_tier='auto'`` rows by default, so a run with
+    only ``review`` / ``manual`` / ``catch_all`` policies needs an extra
+    step before c05 can proceed. Without this hint the cryptic "Run c01
+    and c02 first" message sends operators down the wrong rabbit hole.
     """
     missing: List[str] = []
     if not definitions.archetypes:
@@ -734,9 +742,21 @@ def _require_definitions_present(
             f"no active archetype_catalog rows for {config.model_name}/{config.model_version}"
         )
     if not definitions.policies:
-        missing.append(
-            f"no active eligibility_policy rows for {config.model_name}/{config.model_version}"
+        msg = (
+            f"no active eligibility_policy rows for "
+            f"{config.model_name}/{config.model_version}"
         )
+        pending = _count_pending_policies(spark, config)
+        if pending:
+            msg += (
+                f" ({pending} pending_review rows exist for the same model -- the c03 "
+                f"approval gate left them un-promoted because their fit_tier is not 'auto'. "
+                f"Re-run c03 with FORCE_APPROVE=True, OR manually approve the rows from "
+                f"c03's pending-review queue, OR raise STABILITY_THRESHOLD until the gate "
+                f"approves them. The original c01/c02 outputs are fine -- only c03 needs "
+                f"to be re-run.)"
+            )
+        missing.append(msg)
     if definitions.decision_policy is None or not definitions.decision_policy_id:
         missing.append(
             f"no active decision_policy row at {config.decision_policy_fqn}"
@@ -745,8 +765,27 @@ def _require_definitions_present(
         raise RuntimeError(
             "build_eligibility_snapshot cannot run: "
             + "; ".join(missing)
-            + ". Run c01_publish_definitions and c02_archetype_derivation first."
         )
+
+
+def _count_pending_policies(spark: "SparkSession", config: SnapshotConfig) -> int:
+    """Count ``pending_review`` rows on ``eligibility_policy`` for this model.
+
+    Best-effort: returns 0 on any failure (table missing, query error) so
+    diagnostics never mask the upstream missing-rows error.
+    """
+    try:
+        if not spark.catalog.tableExists(config.eligibility_policy_fqn):
+            return 0
+        row = spark.sql(
+            f"SELECT COUNT(*) AS c FROM {config.eligibility_policy_fqn} "
+            f"WHERE status = 'pending_review' "
+            f"  AND model_name = ? AND model_version = ?",
+            args=[config.model_name, config.model_version],
+        ).first()
+        return int(row["c"]) if row and row["c"] is not None else 0
+    except Exception:  # noqa: BLE001 -- diagnostics only
+        return 0
 
 
 def _query_active_rows(

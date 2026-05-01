@@ -1150,7 +1150,24 @@ mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 logger = logging.getLogger("training")
 _EXCLUDE_COLS = {TARGET_COLUMN, FEAST_TIMESTAMP_COL, ENTITY_KEY} | GOLD_METADATA_COLUMNS
 {% if config.training and config.training.exploration_feature_profile %}
-_EXPLORATION_PROFILE = {{ config.training.exploration_feature_profile | py_source }}
+# Exploration feature profile is loaded from a sibling JSON file written
+# next to this script by the renderer (PipelineGeneratorBase._write_training).
+# Externalised because the inline literal could exceed 1-5 MB on wide
+# datasets (1.2K columns x selection_trace per feature) and pressured the
+# Python parser during cell-4 evaluation on shared clusters.
+_EXPLORATION_PROFILE = None
+_ep_candidates = []
+try:
+    _ep_candidates.append(Path(__file__).parent / "exploration_profile.json")
+except NameError:
+    pass
+_ep_candidates.append(Path.cwd() / "training" / "exploration_profile.json")
+_ep_candidates.append(Path.cwd() / "exploration_profile.json")
+for _ep_candidate in _ep_candidates:
+    if _ep_candidate.exists():
+        with open(_ep_candidate) as _ep_f:
+            _EXPLORATION_PROFILE = _json.load(_ep_f)
+        break
 {% else %}
 _EXPLORATION_PROFILE = None
 {% endif %}

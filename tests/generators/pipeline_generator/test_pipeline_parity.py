@@ -1938,7 +1938,8 @@ class TestLocalTrainingFeatureProfile:
             exploration_feature_profile={"stage": "exploration", "created_at": "2024-01-01", "row_count": 100, "feature_count": 2, "target_column": "churn", "features": {"col_a": {"dtype": "double", "non_null": 90, "null_count": 10}}, "excluded": {}},
         )
         result = renderer.render_training(pipeline_config_minimal)
-        assert "_EXPLORATION_PROFILE = {" in result
+        assert 'exploration_profile.json' in result
+        assert '_json.load(_ep_f)' in result
         assert "FeatureProfile.from_dict(_EXPLORATION_PROFILE)" in result
         assert "compare_feature_profiles(" in result
 
@@ -1979,52 +1980,11 @@ class TestLocalTrainingFeatureProfile:
         result = renderer.render_training(pipeline_config_minimal)
         ast.parse(result)
 
-    def test_local_training_profile_emits_float_nan_not_bare_nan(self, renderer, pipeline_config_minimal):
-        """Regression: ``repr({'score': float('nan')})`` emits the bare identifier
-        ``nan`` which raises ``NameError`` in module scope. Rendered profile
-        must use ``float('nan')`` so the cell executes standalone."""
-        import math
-        pipeline_config_minimal.training = TrainingConfig(
-            exploration_feature_profile={
-                "stage": "exploration",
-                "created_at": "2024-01-01",
-                "row_count": 100,
-                "feature_count": 1,
-                "target_column": "churn",
-                "features": {
-                    "col_a": {
-                        "dtype": "float32",
-                        "non_null": 90,
-                        "null_count": 10,
-                        "selection_trace": [
-                            {
-                                "stage": "chi_squared",
-                                "score": float("nan"),
-                                "score_name": "chi2_stat",
-                                "threshold": 500.0,
-                                "decision": "kept",
-                                "reason": None,
-                                "rank": None,
-                                "stage_input_count": 20,
-                                "stage_output_count": 20,
-                                "companion_feature": None,
-                            }
-                        ],
-                    },
-                },
-                "excluded": {},
-            },
-        )
-        result = renderer.render_training(pipeline_config_minimal)
-        ast.parse(result)
-        profile_line = next(
-            ln for ln in result.splitlines() if ln.startswith("_EXPLORATION_PROFILE = ")
-        )
-        assert "float('nan')" in profile_line
-        assert ": nan," not in profile_line
-        assert ": nan}" not in profile_line
-        parsed = eval(profile_line[len("_EXPLORATION_PROFILE = "):], {}, {})
-        assert math.isnan(parsed["features"]["col_a"]["selection_trace"][0]["score"])
+    # NaN preservation is now handled by the JSON sidecar (allow_nan=True
+    # in json.dumps; json.load accepts NaN by default). The renderer no
+    # longer embeds an inline _EXPLORATION_PROFILE literal in the .py.
+    # Equivalent end-to-end coverage lives in
+    # test_databricks_pipeline_generator.py::TestExplorationProfileExternalisation::test_json_sidecar_preserves_nan
 
 
 class TestExplorationFeatureProfileSaved:

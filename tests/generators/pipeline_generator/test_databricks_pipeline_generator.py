@@ -269,6 +269,147 @@ class TestDatabricksPipelineGeneratorGenerate:
                 ast.parse(content)
 
 
+class TestExplorationProfileExternalisation:
+    """The exploration_feature_profile is externalised to a sibling JSON
+    file rather than embedded as an inline Python literal — see protocols.py
+    `_write_training`. The training script reads it via json.load at runtime."""
+
+    def _build_config(self, output_dir, profile):
+        from customer_retention.generators.pipeline_generator.models import (
+            GoldLayerConfig,
+            PipelineConfig,
+            SilverLayerConfig,
+            SourceConfig,
+            TrainingConfig,
+        )
+        return PipelineConfig(
+            name="test",
+            composite_name="test_xxxxxxx",
+            target_column="target",
+            sources=[SourceConfig(name="src", path="src.csv", format="csv", entity_key="id")],
+            bronze={},
+            silver=SilverLayerConfig(),
+            gold=GoldLayerConfig(),
+            training=TrainingConfig(exploration_feature_profile=profile),
+            output_dir=str(output_dir),
+        )
+
+    def test_json_sidecar_written_when_profile_present(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.databricks_generator import (
+            DatabricksPipelineGenerator,
+        )
+        profile = {
+            "stage": "exploration",
+            "row_count": 100,
+            "feature_count": 1,
+            "target_column": "churn",
+            "features": {"col_a": {"dtype": "double", "non_null": 90, "null_count": 10}},
+            "excluded": {},
+        }
+        gen = DatabricksPipelineGenerator.__new__(DatabricksPipelineGenerator)
+        gen._output_dir = tmp_path
+        from customer_retention.generators.pipeline_generator.databricks_renderer import (
+            DatabricksCodeRenderer,
+        )
+        gen._renderer = DatabricksCodeRenderer(catalog="cat", schema="sch")
+        cfg = self._build_config(tmp_path, profile)
+        gen._write_training(cfg)
+        json_path = tmp_path / "training" / "exploration_profile.json"
+        assert json_path.exists(), "expected sibling exploration_profile.json"
+        import json
+        loaded = json.loads(json_path.read_text())
+        assert loaded["stage"] == "exploration"
+        assert loaded["features"]["col_a"]["dtype"] == "double"
+
+    def test_json_sidecar_preserves_nan(self, tmp_path):
+        """Selection traces in real findings carry float('nan') for missing
+        scores. allow_nan=True keeps them; Python json.load accepts NaN by
+        default so the round-trip succeeds."""
+        from customer_retention.generators.pipeline_generator.databricks_generator import (
+            DatabricksPipelineGenerator,
+        )
+        from customer_retention.generators.pipeline_generator.databricks_renderer import (
+            DatabricksCodeRenderer,
+        )
+        profile = {
+            "stage": "exploration",
+            "row_count": 100,
+            "feature_count": 1,
+            "target_column": "churn",
+            "features": {
+                "col_a": {
+                    "dtype": "double",
+                    "non_null": 90,
+                    "null_count": 10,
+                    "selection_trace": [
+                        {"stage": "variance", "score": float("nan"), "threshold": 0.01},
+                    ],
+                },
+            },
+            "excluded": {},
+        }
+        gen = DatabricksPipelineGenerator.__new__(DatabricksPipelineGenerator)
+        gen._output_dir = tmp_path
+        gen._renderer = DatabricksCodeRenderer(catalog="cat", schema="sch")
+        cfg = self._build_config(tmp_path, profile)
+        gen._write_training(cfg)
+        json_path = tmp_path / "training" / "exploration_profile.json"
+        import json
+        loaded = json.loads(json_path.read_text())
+        score = loaded["features"]["col_a"]["selection_trace"][0]["score"]
+        import math
+        assert math.isnan(score)
+
+    def test_no_sidecar_when_profile_absent(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.databricks_generator import (
+            DatabricksPipelineGenerator,
+        )
+        from customer_retention.generators.pipeline_generator.databricks_renderer import (
+            DatabricksCodeRenderer,
+        )
+        gen = DatabricksPipelineGenerator.__new__(DatabricksPipelineGenerator)
+        gen._output_dir = tmp_path
+        gen._renderer = DatabricksCodeRenderer(catalog="cat", schema="sch")
+        cfg = self._build_config(tmp_path, None)
+        gen._write_training(cfg)
+        json_path = tmp_path / "training" / "exploration_profile.json"
+        assert not json_path.exists(), "no sidecar should exist when profile is None"
+
+    def test_training_script_does_not_contain_inline_literal(self, tmp_path):
+        """The whole point of externalisation: keep the .py source small
+        enough to parse cheaply on shared clusters."""
+        from customer_retention.generators.pipeline_generator.databricks_generator import (
+            DatabricksPipelineGenerator,
+        )
+        from customer_retention.generators.pipeline_generator.databricks_renderer import (
+            DatabricksCodeRenderer,
+        )
+        big_features = {
+            f"feature_{i}": {"dtype": "double", "non_null": 100, "null_count": 0}
+            for i in range(50)
+        }
+        profile = {
+            "stage": "exploration",
+            "row_count": 100,
+            "feature_count": len(big_features),
+            "target_column": "churn",
+            "features": big_features,
+            "excluded": {},
+        }
+        gen = DatabricksPipelineGenerator.__new__(DatabricksPipelineGenerator)
+        gen._output_dir = tmp_path
+        gen._renderer = DatabricksCodeRenderer(catalog="cat", schema="sch")
+        cfg = self._build_config(tmp_path, profile)
+        gen._write_training(cfg)
+        py_text = (tmp_path / "training" / "ml_experiment.py").read_text()
+        # The training script should reference the JSON file but NOT inline
+        # the dict literal.
+        assert "exploration_profile.json" in py_text
+        assert "json.load(_ep_f)" in py_text
+        assert "feature_0" not in py_text  # would only appear if inlined
+        assert "feature_49" not in py_text
+
+
 class TestDatabricksMultiDatasetGeneration:
     def test_generates_per_source_bronze_files(self, sample_findings_dir, tmp_path):
         generator = DatabricksPipelineGenerator(

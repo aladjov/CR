@@ -1921,7 +1921,24 @@ _vector_schema = StructType([
     StructField("label", DoubleType(), True),
 ])
 {% if config.training and config.training.exploration_feature_profile %}
-_EXPLORATION_PROFILE = {{ config.training.exploration_feature_profile | py_source }}
+# Exploration feature profile is loaded from a sibling JSON file written
+# next to this script by the renderer (PipelineGeneratorBase._write_training).
+# This avoids embedding a 1-5 MB Python dict literal in the source — the
+# inline form was a JVM-heap-pressure risk on shared clusters during cell-4
+# parse and made the rendered file unreadable to humans.
+_EXPLORATION_PROFILE = None
+_ep_candidates = []
+try:
+    _ep_candidates.append(Path(__file__).parent / "exploration_profile.json")
+except NameError:
+    pass
+_ep_candidates.append(Path.cwd() / "training" / "exploration_profile.json")
+_ep_candidates.append(Path.cwd() / "exploration_profile.json")
+for _ep_candidate in _ep_candidates:
+    if _ep_candidate.exists():
+        with open(_ep_candidate) as _ep_f:
+            _EXPLORATION_PROFILE = json.load(_ep_f)
+        break
 {% else %}
 _EXPLORATION_PROFILE = None
 {% endif %}
