@@ -161,7 +161,7 @@ def test_renders_shap_panel_with_bidirectional_bars(compiled_template, base_cont
     ]
     html = compiled_template(base_context, helpers=HELPERS)
     assert "cr-shap" in html
-    assert "Model results interpretation" in html
+    assert "Top SHAP drivers" in html
     assert "active_span_days" in html
     assert "shap-pos" in html
     assert "shap-neg" in html
@@ -170,36 +170,30 @@ def test_renders_shap_panel_with_bidirectional_bars(compiled_template, base_cont
     assert "width:50.0%" in html
     # Raw values surface unscaled in the new layout.
     assert "150" in html
-    # Quantile band labels render with their pill class.
-    assert "cr-band-typical" in html  # active_span_days = 150 sits in [120 q50, 200 q75) → "typical" (q25..q75)
-    assert "cr-band-very-high" in html  # open_rate = 0.85 ≥ q95 (0.8) → "very high"
-    # Trailing ``cr-shap-score`` cell carries glyph + share-of-total percentage
-    # (replacing the old in-bar glyph + in-track label + signed log-odds).
-    # Up arrow for the risk-driving rows; down arrow for the protective row.
+    # Trailing ``cr-shap-score`` cell shows the signed log-odds contribution
+    # (real, unscaled). Bar magnitude is normalized to the row's strongest
+    # driver -- but the trailing label is the actual value, not a derived
+    # percentage, so analysts can compare across customers.
     assert "cr-shap-score" in html
-    assert "↑" in html
-    assert "↓" in html
-    # Direction tooltip rendered on both the bar-track and the score via
-    # title attribute.
-    assert "Risk-driving" in html
-    assert "Protective" in html
-    # Share of total visible |SHAP|: 0.40/0.70=57%, 0.20/0.70=29%, 0.10/0.70=14%.
-    assert "57%" in html
-    assert "29%" in html
-    assert "14%" in html
-    # The in-bar glyph, in-track label, and per-row "Model math" details are
-    # gone — the trailing score subsumes all three.
+    assert "+0.400" in html
+    assert "-0.200" in html
+    assert "+0.100" in html
+    # Glyph / percentage / band pill / in-bar label / model-math disclosure
+    # are all GONE -- the layout reverts to the original image-#3 shape:
+    # name | raw | bar | signed-contribution. Direction is encoded purely
+    # via the bar's colour (yellow = pushes toward churn, green = away).
     assert "cr-shap-bar-glyph" not in html
     assert "cr-shap-bar-label" not in html
     assert "cr-shap-math" not in html
-    # Signed log-odds (``+0.400``/``-0.200``) is no longer rendered — the
-    # percentage share replaces it as the easier-to-read value.
-    assert "+0.400" not in html
-    assert "-0.200" not in html
-    # The permanent ``risk-driving``/``protective`` pill column is gone — the
-    # phrase only surfaces as a tooltip + glyph now, so no ``cr-shap-direction``
-    # node should be in the rendered HTML.
     assert "cr-shap-direction" not in html
+    # No quantile band pill in the bundled row body.
+    assert "cr-band-typical" not in html
+    assert "cr-band-very-high" not in html
+    # No share-of-total percentage label and no arrow glyphs.
+    assert "57%" not in html
+    assert "29%" not in html
+    assert "↑" not in html
+    assert "↓" not in html
 
 
 def test_no_account_top_shap_features_hides_shap_panel(compiled_template, base_context):

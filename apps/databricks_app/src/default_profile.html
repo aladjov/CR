@@ -74,20 +74,19 @@ data:
       {{#if account_top_shap_features}}
         <section class="cr-shap">
           <header class="cr-chapter-head">
-            <span class="cr-chapter-eyebrow">Why this account scored where it did</span>
-            <h2 class="cr-chapter-title">Model results interpretation</h2>
-            <p class="cr-chapter-lead">Each row is one factor the model leans on for this customer. The number is the customer's actual value, the pill shows where that value sits versus everyone else (very low → very high), and the bar shows how strongly it moved the churn score. The trailing label shows the row's share of total influence with an arrow — <span class="cr-shap-pos-token">↑</span> means the factor pushes toward churn, <span class="cr-shap-neg-token">↓</span> means it protects against churn. Hover the bar for the full direction phrase.</p>
+            <span class="cr-chapter-eyebrow">Why the model flagged this account</span>
+            <h2 class="cr-chapter-title">Top SHAP drivers</h2>
+            <p class="cr-chapter-lead">Each row is one factor the model leans on for this customer. The first number is the customer's actual value, the bar's length is how strongly that value moved the churn score (relative to the strongest driver in the row), and the trailing number is the signed contribution — <span class="cr-shap-pos-token">positive (yellow)</span> pushes toward churn, <span class="cr-shap-neg-token">negative (green)</span> protects against churn.</p>
           </header>
           <ul class="cr-shap-list">
             {{#each account_top_shap_features}}
               <li class="cr-shap-row {{shap_sign_class this.shap_contribution}}">
                 <span class="cr-shap-name" title="{{this.feature}}">{{this.feature}}</span>
                 <span class="cr-shap-raw">{{fmt_raw_value this.raw_value}}</span>
-                <span class="cr-shap-band {{band_class (quantile_band this.raw_value this.q05 this.q25 this.q75 this.q95)}}">{{quantile_band this.raw_value this.q05 this.q25 this.q75 this.q95}}</span>
-                <span class="cr-shap-bar-track" title="{{direction_tooltip this.shap_contribution}}">
+                <span class="cr-shap-bar-track">
                   <span class="cr-shap-bar" style="width:{{shap_bar_pct this.shap_contribution ../account_top_shap_features}}%"></span>
                 </span>
-                <span class="cr-shap-score" title="{{direction_tooltip this.shap_contribution}}">{{direction_glyph this.shap_contribution}}{{shap_share_pct this.shap_contribution ../account_top_shap_features}}</span>
+                <span class="cr-shap-score">{{fmt_signed_shap this.shap_contribution}}</span>
               </li>
             {{/each}}
           </ul>
