@@ -1354,7 +1354,10 @@ def merge_sources(bronze_outputs):
         for name, df in bronze_outputs.items():
             if raw_entity_key in df.columns:
                 bronze_outputs[name] = df.withColumnRenamed(raw_entity_key, "entity_id")
-    merger = SparkTemporalMerger(MergeConfig(entity_key="entity_id"))
+    merger = SparkTemporalMerger(MergeConfig(
+        entity_key="entity_id",
+        scratch_namespace=f"{DATABRICKS_CATALOG}.{DATABRICKS_SCHEMA}",
+    ))
     spine = merger.build_spine(entity_ids, GRID_DATES)
     inputs = []
     for meta in MERGE_SOURCE_META:
@@ -1368,9 +1371,14 @@ def merge_sources(bronze_outputs):
             granularity=granularity,
             feature_timestamp_column=meta.get("feature_timestamp_column"),
         ))
-    merged, _report = merger.merge_all(spine, inputs)
-    if hasattr(merged, "to_spark"):
-        merged = merged.to_spark()
+    try:
+        merged, _report = merger.merge_all(spine, inputs)
+        if hasattr(merged, "to_spark"):
+            merged = merged.to_spark()
+    finally:
+        _dropped = merger.cleanup_scratch_tables(spark)
+        if _dropped:
+            print(f"  silver scratch cleanup: dropped {_dropped} _silver_merge_ckpt_* table(s)")
     print(f"  merge complete: {len(merged.columns)} columns, datasets={_report.datasets_merged}")
     print(f"  spine: {_report.spine_rows:,} rows = {_report.spine_entities:,} entities x {_report.spine_dates} dates ({_report.spine_stats_seconds:.1f}s)")
     print(f"  checkpoints: {_report.checkpoint_count} ({_report.checkpoint_seconds:.1f}s), validation: {_report.validation_seconds:.1f}s, merge_total: {_report.merge_total_seconds:.1f}s")

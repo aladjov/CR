@@ -64,7 +64,80 @@ def _break_lineage(sdf: Any) -> Any:
     return sdf.localCheckpoint(eager=True)
 
 
+_SCRATCH_TABLE_PREFIX = "_silver_merge_ckpt_"
+
+
+def _break_lineage_delta(
+    sdf: Any,
+    namespace: str,
+    scratch_tables: list[str] | None,
+) -> Any:
+    """Detach Spark logical plan via Delta scratch-table round-trip.
+
+    Used in place of ``_break_lineage`` (``localCheckpoint(eager=True)``)
+    when the merged projection is too wide for Catalyst's binding pass —
+    at the SPS scale (~1900 columns × N joins) ``localCheckpoint`` trips
+    ``[INTERNAL_ERROR_ATTRIBUTE_NOT_FOUND]`` (SQLSTATE XX000) because
+    attribute IDs collide during plan canonicalisation.
+
+    Writing to Delta and re-reading is fully distributed (executors
+    write/read in parallel, no driver materialisation) and produces a
+    fresh logical plan with no accumulated multi-join lineage.
+
+    Parameters
+    ----------
+    sdf:
+        Native Spark DataFrame to materialise.
+    namespace:
+        ``"catalog.schema"`` where scratch tables are written.
+    scratch_tables:
+        Mutable list to which the new scratch table's fully-qualified
+        name is appended; used by ``SparkTemporalMerger.cleanup_scratch_tables``.
+    """
+    import uuid
+
+    scratch_name = f"{_SCRATCH_TABLE_PREFIX}{uuid.uuid4().hex[:12]}"
+    table = f"{namespace}.{scratch_name}"
+    (
+        sdf.write
+        .format("delta")
+        .mode("overwrite")
+        .option("overwriteSchema", "true")
+        .saveAsTable(table)
+    )
+    if scratch_tables is not None:
+        scratch_tables.append(table)
+    spark = get_spark_session()
+    return spark.table(table)
+
+
 class SparkTemporalMerger(TemporalMerger):
+    def __init__(self, config=None):
+        super().__init__(config)
+        self._scratch_tables: list[str] = []
+
+    def cleanup_scratch_tables(self, spark: Any | None = None) -> int:
+        """Drop every Delta scratch table created during ``merge_all``.
+
+        Safe to call repeatedly — already-dropped tables are no-ops.
+        Returns the number of tables dropped. Always called for the
+        instance's own scratch list; callers wanting to sweep
+        independently can ``SHOW TABLES … LIKE '_silver_merge_ckpt_*'``.
+        """
+        if spark is None:
+            spark = get_spark_session()
+        if spark is None:
+            return 0
+        dropped = 0
+        for table in list(self._scratch_tables):
+            try:
+                spark.sql(f"DROP TABLE IF EXISTS {table}")
+                dropped += 1
+            except Exception:  # noqa: BLE001 — best-effort cleanup
+                logger.warning("scratch cleanup: failed to drop %s", table)
+        self._scratch_tables.clear()
+        return dropped
+
     def merge_one(
         self,
         merged_sdf: Any,
@@ -135,7 +208,14 @@ class SparkTemporalMerger(TemporalMerger):
             on_boundary = (i + 1) % checkpoint_every == 0
             if is_last or on_boundary:
                 t_ckpt = time.monotonic()
-                merged_sdf = _break_lineage(merged_sdf)
+                if self.config.scratch_namespace:
+                    merged_sdf = _break_lineage_delta(
+                        merged_sdf,
+                        self.config.scratch_namespace,
+                        self._scratch_tables,
+                    )
+                else:
+                    merged_sdf = _break_lineage(merged_sdf)
                 report.checkpoint_seconds += time.monotonic() - t_ckpt
                 report.checkpoint_count += 1
 

@@ -19,6 +19,7 @@ class MergeConfig:
     conflict_separator: str = "__"
     validate_temporal: bool = True
     checkpoint_every: int = 4
+    scratch_namespace: str | None = None
 
 
 @dataclass
