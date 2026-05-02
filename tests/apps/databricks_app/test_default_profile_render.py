@@ -161,7 +161,7 @@ def test_renders_shap_panel_with_bidirectional_bars(compiled_template, base_cont
     ]
     html = compiled_template(base_context, helpers=HELPERS)
     assert "cr-shap" in html
-    assert "Top SHAP drivers" in html
+    assert "Model interpretation" in html
     assert "active_span_days" in html
     assert "shap-pos" in html
     assert "shap-neg" in html
