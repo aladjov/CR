@@ -2689,6 +2689,28 @@ class TestDatabricksSilverTemporalMerge:
         result = renderer.render_silver(temporal_config)
         assert ".pandas_api()" not in result
 
+    def test_silver_kr_step_emits_codegen_guard_for_pre_resolved_source(
+        self, renderer, temporal_config_with_key_resolution,
+    ):
+        """Fix #4: silver kr_steps loop must emit a runtime guard that
+        skips the join when ``step["source_key"]`` is no longer a column
+        on the bronze output (because the bronze aggregator already
+        rolled up to ``resolve_column`` grain). This was previously the
+        operator-paste `patch_skip_silver_kr_steps_when_source_key_absent`
+        / cycle_024 failure mode; the guard now ships in the framework."""
+        result = renderer.render_silver(temporal_config_with_key_resolution)
+        # Guard reads `if step["source_key"] not in df.columns`
+        assert 'not in df.columns' in result
+        # Operator-friendly diagnostic so the skip is visible in run logs
+        assert "skipping kr_step" in result
+        # Skip must short-circuit before the join — `continue` keyword present
+        # AND the guard appears textually before the actual `df.join(`
+        assert "continue" in result
+        guard_pos = result.find("not in df.columns")
+        join_pos = result.find("df = df.join(")
+        assert guard_pos != -1 and join_pos != -1
+        assert guard_pos < join_pos
+
 
 class TestDatabricksGoldAsOfDate:
     def test_gold_checks_as_of_date(self, renderer, sample_pipeline_config):

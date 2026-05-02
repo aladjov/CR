@@ -243,6 +243,14 @@ class FeatureSpec:
     exploration_run_id: str = ""
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     target_column: str = ""
+    # The exact column name on the gold/silver schema that the rendered
+    # training script should resolve before applying its TARGET literal.
+    # When non-empty, NB10's training renderer emits a withColumnRenamed
+    # step `original_target_column -> target_column` before any filter
+    # against TARGET fires. Closes the patch_target_column_resolver
+    # operator-paste path for the common case where exploration applies
+    # a rename and codegen needs to replay it.
+    original_target_column: str = ""
     entity_column: str = "entity_id"
     timestamp_column: str = "as_of_date"
     horizon_days: int = 0
@@ -284,6 +292,7 @@ class FeatureSpec:
             "exploration_run_id": self.exploration_run_id,
             "created_at": self.created_at,
             "target_column": self.target_column,
+            "original_target_column": self.original_target_column,
             "entity_column": self.entity_column,
             "timestamp_column": self.timestamp_column,
             "horizon_days": int(self.horizon_days),
@@ -314,6 +323,7 @@ class FeatureSpec:
             exploration_run_id=data.get("exploration_run_id", ""),
             created_at=data.get("created_at", datetime.now(timezone.utc).isoformat()),
             target_column=data.get("target_column", ""),
+            original_target_column=data.get("original_target_column", ""),
             entity_column=data.get("entity_column", "entity_id"),
             timestamp_column=data.get("timestamp_column", "as_of_date"),
             horizon_days=int(data.get("horizon_days", 0)),

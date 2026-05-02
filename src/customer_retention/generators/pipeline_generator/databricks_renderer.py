@@ -1325,6 +1325,19 @@ def merge_sources(bronze_outputs):
             continue
         df = bronze_outputs[meta["name"]]
         for step in kr_steps:
+            # Codegen guard (closes GR12 / patch 14): when the bronze
+            # aggregator already pre-resolved the source_key upstream
+            # (rolling up to ACCOUNT_ID grain), the join column is no
+            # longer present on the bronze output. Skip the now-redundant
+            # join — the resolve_column is already on `df` and the
+            # downstream merger picks it up unchanged.
+            if step["source_key"] not in df.columns:
+                print(
+                    f"  silver merge: skipping kr_step for source={meta['name']!r}, "
+                    f"source_key={step['source_key']!r} not in bronze output "
+                    f"(already pre-resolved upstream — resolve_column={step['resolve_column']!r})"
+                )
+                continue
             bridge_subset = bronze_outputs[step["bridge_dataset"]].select(
                 step["bridge_key"], step["resolve_column"]
             ).dropDuplicates([step["bridge_key"]])

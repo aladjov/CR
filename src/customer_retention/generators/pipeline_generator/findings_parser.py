@@ -414,6 +414,77 @@ class FindingsParser:
                     ]
             if per_col:
                 self._value_counts_by_source[name] = per_col
+        self._augment_value_counts_from_spec()
+
+    _SPEC_TRAILING_WINDOW_RE = re.compile(r"^(?P<head>.+)_count_(?:\d+[dhw]|all_time)$")
+
+    def _augment_value_counts_from_spec(self) -> None:
+        """Harvest categorical values from `selected_features` into `_value_counts_by_source`.
+
+        Why: ``_value_counts_by_source`` is normally populated from
+        ``findings.columns[col].type_metrics["value_counts"]`` — i.e. observed
+        values in the SAMPLED findings. After lifecycle enrichment doubles
+        START → TERMINATE rows, the sampled findings may underrepresent
+        a value that the FULL data does carry. NB08's gold-time training,
+        however, sees the full schema and selects ``event_type_terminate_count_<w>``
+        as a real feature. At codegen time, ``_event_aggregated_columns``
+        emits ``f"{col}_{val}_count_{window}"`` only when ``val`` is in the
+        ``unique_map`` for that source/column — so without this augmentation,
+        ``terminate`` is silently absent from the emit set and the parity
+        gate raises.
+
+        The augmentation is bounded: it only adds values that **already**
+        appear in ``selected_features`` (i.e. the model is trained on them),
+        and only for columns that are explicit ``value_counts_columns`` on
+        an event-source bronze override. Zero false positives.
+
+        Disambiguation: a spec feature like ``event_type_terminate_count_365d``
+        could in principle parse as ``col=event``, ``val=type_terminate`` or
+        as ``col=event_type``, ``val=terminate``. We resolve by looking up
+        the registered ``value_counts_columns`` set per source — only `col`
+        names that the operator declared as `value_counts` targets are
+        valid, so the longest matching prefix is the correct split.
+        """
+        spec = self._feature_spec
+        if spec is None or not spec.selected_features:
+            return
+        # Map from source dataset name -> set of value_counts target columns
+        # declared in the bronze override. Built from
+        # ``self._bronze_aggregation_overrides`` because this runs BEFORE
+        # ``_apply_bronze_aggregation_overrides`` lifts the values onto
+        # event_cfg.
+        vc_targets_by_source: Dict[str, Set[str]] = {}
+        for src, override in (self._bronze_aggregation_overrides or {}).items():
+            cols = override.get("value_counts_columns") if isinstance(override, dict) else None
+            if cols:
+                vc_targets_by_source[src] = set(cols)
+        if not vc_targets_by_source:
+            return
+        # Flatten to (source, col) pairs sorted by descending col-length for
+        # deterministic longest-prefix matching when one declared value-count
+        # column is itself a prefix of another (e.g. "type" and "type_v2").
+        candidates: List[Tuple[str, str]] = sorted(
+            ((src, col) for src, cols in vc_targets_by_source.items() for col in cols),
+            key=lambda pair: (-len(pair[1]), pair[0], pair[1]),
+        )
+        for feat in spec.selected_features:
+            m = FindingsParser._SPEC_TRAILING_WINDOW_RE.match(feat)
+            if m is None:
+                continue
+            head = m.group("head")  # "{col}_{val}"
+            for src, col in candidates:
+                prefix = f"{col}_"
+                if not head.startswith(prefix):
+                    continue
+                val = head[len(prefix):]
+                if not val:
+                    continue
+                bucket = self._value_counts_by_source.setdefault(src, {})
+                values = bucket.setdefault(col, [])
+                if val not in values:
+                    values.append(val)
+                # Stop at the first (longest-prefix) match for this feature.
+                break
 
     def _load_feature_spec(self) -> Optional[FeatureSpec]:
         spec_path = None
@@ -2811,3 +2882,94 @@ class FindingsParser:
         if ext in (".parquet", ".pq"):
             return "parquet"
         return "delta"
+
+
+def project_codegen_emit_set(
+    namespace,
+    recommendations_registry=None,
+    *,
+    findings_dir: Optional[str] = None,
+    intent=None,
+) -> Set[str]:
+    """Project the column set the codegen pipeline will emit.
+
+    Used by NB08 (``write_feature_spec``) to prune ``selected_features`` to
+    only those that survive into the generated pipeline, eliminating
+    FeatureSpec parity violations at NB10 codegen time. Same logic
+    ``FindingsParser._enforce_spec_schema_parity`` uses internally — the
+    helper exposes it so exploration code paths can validate
+    *before* writing the spec, instead of waiting for the operator to hit
+    the parity gate at codegen.
+
+    The helper instantiates a parser with the supplied namespace +
+    registry, runs ``parse()`` WITHOUT loading any feature_spec.yaml so
+    no parity gate fires, then returns
+    ``_collect_known_pipeline_columns(config)`` — the same set the gate
+    would compare against.
+    """
+    if findings_dir is None:
+        if namespace is None:
+            raise ValueError(
+                "project_codegen_emit_set: provide `namespace` or `findings_dir`"
+            )
+        findings_dir = str(getattr(namespace, "findings_dir", None) or namespace.root)
+
+    bronze_overrides: Dict[str, Dict[str, Any]] = {}
+    if recommendations_registry is not None:
+        bronze_overrides = recommendations_registry.merge_bronze_aggregation_overrides()
+    elif namespace is not None:
+        recs_path = getattr(namespace, "merged_recommendations_path", None)
+        if recs_path is not None and Path(recs_path).exists():
+            try:
+                from customer_retention.analysis.auto_explorer.layered_recommendations import (
+                    RecommendationRegistry,
+                )
+                registry = RecommendationRegistry.load(recs_path)
+                bronze_overrides = registry.merge_bronze_aggregation_overrides()
+                if recommendations_registry is None:
+                    recommendations_registry = registry
+            except Exception:
+                bronze_overrides = {}
+
+    parser = FindingsParser(
+        findings_dir=findings_dir,
+        namespace=namespace,
+        intent=intent,
+        bronze_aggregation_overrides=bronze_overrides,
+    )
+    # Suppress feature_spec auto-load so no parity gate fires inside parse().
+    # `parse()` internally calls `self._load_feature_spec()` and gates parity
+    # checks on the returned value being non-None. Monkey-patch the loader on
+    # this instance to return None so the helper can be called even when a
+    # stale `feature_spec.yaml` exists in the namespace (e.g. from an earlier
+    # NB08 run that we want to supersede).
+    parser._load_feature_spec = lambda: None  # type: ignore[assignment]
+    # Spec-driven value-counts augmentation also reads `self._feature_spec`;
+    # belt-and-suspenders ensure the field stays None.
+    parser._feature_spec = None
+    config = parser.parse()
+    return parser._collect_known_pipeline_columns(config)
+
+
+def prune_unreachable_features(
+    selected_features: List[str],
+    emit_set: Set[str],
+    *,
+    protected: Optional[Iterable[str]] = None,
+) -> Tuple[List[str], List[str]]:
+    """Filter ``selected_features`` to those reachable in ``emit_set``.
+
+    Returns ``(kept, dropped)``. ``protected`` columns (entity_id, target,
+    timestamp) are never dropped even if missing from ``emit_set`` —
+    they're injected into the pipeline by other codegen paths.
+    """
+    protected_set = set(protected or ()) | {"entity_id", "as_of_date"}
+    kept: List[str] = []
+    dropped: List[str] = []
+    emit = set(emit_set)
+    for feat in selected_features:
+        if feat in emit or feat in protected_set:
+            kept.append(feat)
+        else:
+            dropped.append(feat)
+    return kept, dropped
