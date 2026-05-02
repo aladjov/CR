@@ -1356,7 +1356,7 @@ def merge_sources(bronze_outputs):
                 bronze_outputs[name] = df.withColumnRenamed(raw_entity_key, "entity_id")
     merger = SparkTemporalMerger(MergeConfig(
         entity_key="entity_id",
-        scratch_namespace=f"{DATABRICKS_CATALOG}.{DATABRICKS_SCHEMA}",
+        scratch_namespace=f"{CATALOG}.{SCHEMA}",
     ))
     spine = merger.build_spine(entity_ids, GRID_DATES)
     inputs = []
