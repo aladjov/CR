@@ -36,15 +36,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-_DEFAULT_FRAMEWORK_ROOT = (
-    "/Workspace/Repos/haladjov@spscommerce.com/customer_retention"
-)
-_DEFAULT_EXPERIMENTS_ROOT = (
-    "/Volumes/prod_tradingpartnermap_internal_use1/customer_churn_model/"
-    "experiments_secondary"
-)
-_DEFAULT_CATALOG = "prod_tradingpartnermap_internal_use1"
-_DEFAULT_SCHEMA = "customer_churn_model"
 _TASK_VALUES_KEY = "probe_config"
 
 
@@ -61,6 +52,62 @@ def _get_dbutils():
         except Exception:
             pass
     return None
+
+
+def _current_notebook_path() -> Optional[str]:
+    """Workspace path of the currently-executing notebook (Databricks only)."""
+    dbutils = _get_dbutils()
+    if dbutils is None:
+        return None
+    try:
+        ctx = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
+        path = ctx.notebookPath().get()
+        return str(path) if path else None
+    except Exception:
+        return None
+
+
+def _autodetect_workspace_root() -> Optional[str]:
+    """Derive the workspace folder containing ``exploration_notebooks/``.
+
+    The probe notebook lives somewhere under the operator's working copy
+    (typical layout: ``<workspace_root>/debug/<engagement>/cycles/<probe>``).
+    The deployed framework notebooks live at
+    ``<workspace_root>/exploration_notebooks/<nb>``. Walk up from the
+    currently-executing probe path to find ``<workspace_root>``.
+
+    Returns None when not on Databricks (no dbutils) or when neither
+    ``debug/`` nor ``exploration_notebooks/`` appears in the path
+    (operator is running from an unexpected location — fall through to
+    explicit override).
+    """
+    nb_path = _current_notebook_path()
+    if not nb_path:
+        return None
+    parts = nb_path.split("/")
+    # Anchor 1: probe paths typically contain a ``debug/`` folder.
+    if "debug" in parts:
+        idx = parts.index("debug")
+        return "/".join(parts[:idx])
+    # Anchor 2: someone running from inside exploration_notebooks/ directly.
+    if "exploration_notebooks" in parts:
+        idx = parts.index("exploration_notebooks")
+        return "/".join(parts[:idx])
+    return None
+
+
+def _autodetect_catalog_schema(experiments_root: str) -> tuple[Optional[str], Optional[str]]:
+    """Parse ``(catalog, schema)`` from ``/Volumes/<catalog>/<schema>/<volume>/..``.
+
+    Returns ``(None, None)`` for non-UC paths so the operator can still
+    pass an explicit override via env vars / widgets / task values.
+    """
+    if not experiments_root:
+        return None, None
+    parts = str(experiments_root).split("/")
+    if len(parts) >= 5 and parts[1] == "Volumes":
+        return parts[2], parts[3]
+    return None, None
 
 
 def _resolve(name: str, default: Optional[str] = None) -> Optional[str]:
@@ -185,16 +232,43 @@ class ProbeSession:
 def bind_probe_session(extra_defaults: Optional[Dict[str, str]] = None) -> ProbeSession:
     """Resolve config + return a ProbeSession.
 
-    ``extra_defaults`` lets a specific notebook override the default
-    fallback for one or more keys (e.g. NB00_PATH for cycle 017 if the
-    operator's repo path differs).
+    Auto-detection takes care of paths and UC namespace derivation; the
+    operator only needs ``run_id`` + ``experiments_root`` (anything that
+    pins the run identity). All other fields fall back through:
+
+        1. ``extra_defaults`` (caller override)
+        2. Databricks task values (set by ``publish_probe_config``)
+        3. Databricks widgets (manual operator binding)
+        4. Environment variables (``CR_<KEY>`` or ``<KEY>``)
+        5. **Auto-detection**:
+            - ``framework_root`` ← workspace folder hosting the probe
+              (derived from ``dbutils.notebook.getContext().notebookPath()``)
+            - ``nb00_path`` / ``nb06_path`` / ``nb10_export_path`` ←
+              ``<framework_root>/exploration_notebooks/<nb>.ipynb``
+            - ``catalog`` / ``schema`` ← parsed from ``experiments_root``
+              when it is a ``/Volumes/<catalog>/<schema>/...`` path
+
+    The previous hard-coded defaults (engagement-specific framework_root,
+    catalog, schema) have been removed — those values were a usability
+    cliff every new engagement bumped into.
     """
 
     extras = extra_defaults or {}
 
+    # Auto-detect workspace root from the currently-executing probe path.
+    autodetected_root = _autodetect_workspace_root()
+
     framework_root = _resolve(
-        "framework_root", extras.get("framework_root", _DEFAULT_FRAMEWORK_ROOT)
+        "framework_root", extras.get("framework_root", autodetected_root)
     )
+    if not framework_root:
+        raise RuntimeError(
+            "probe_session: framework_root could not be auto-detected from the "
+            "probe notebook path. Either run the probe inside a workspace folder "
+            "containing a sibling `exploration_notebooks/` directory, or set "
+            "framework_root explicitly via env / widget / task value."
+        )
+
     src = f"{framework_root}/src"
     if src not in sys.path:
         sys.path.insert(0, src)
@@ -205,19 +279,34 @@ def bind_probe_session(extra_defaults: Optional[Dict[str, str]] = None) -> Probe
     if not run_id:
         raise RuntimeError(
             "probe_session: run_id is not bound. Run "
-            "debug/engagement_e4ad6e1b/cycles/00_probe_config.ipynb first, "
+            "debug/engagement_e4ad6e1b/cycles/000_probe_config.ipynb first, "
             "or set the CR_RUN_ID environment variable."
         )
 
-    experiments_root = Path(
-        _resolve(
-            "experiments_root",
-            extras.get("experiments_root", _DEFAULT_EXPERIMENTS_ROOT),
-        )
+    experiments_root_raw = _resolve(
+        "experiments_root", extras.get("experiments_root")
     )
-    catalog = _resolve("catalog", extras.get("catalog", _DEFAULT_CATALOG))
-    schema = _resolve("schema", extras.get("schema", _DEFAULT_SCHEMA))
-    nb10_raw = _resolve("nb10_export_path", extras.get("nb10_export_path"))
+    if not experiments_root_raw:
+        raise RuntimeError(
+            "probe_session: experiments_root is not bound. Run "
+            "debug/engagement_e4ad6e1b/cycles/000_probe_config.ipynb first, "
+            "or set CR_EXPERIMENTS_ROOT."
+        )
+    experiments_root = Path(experiments_root_raw)
+
+    # Catalog/schema auto-derived from /Volumes/<catalog>/<schema>/... paths.
+    auto_cat, auto_sch = _autodetect_catalog_schema(str(experiments_root))
+    catalog = _resolve("catalog", extras.get("catalog", auto_cat))
+    schema = _resolve("schema", extras.get("schema", auto_sch))
+
+    # Notebook paths default to siblings under the auto-detected framework root.
+    nb10_raw = _resolve(
+        "nb10_export_path",
+        extras.get(
+            "nb10_export_path",
+            f"{framework_root}/exploration_notebooks/10_spec_generation.ipynb",
+        ),
+    )
     nb00 = Path(
         _resolve(
             "nb00_path",
@@ -263,10 +352,10 @@ def bind_probe_session(extra_defaults: Optional[Dict[str, str]] = None) -> Probe
 def publish_probe_config(
     *,
     run_id: str,
-    experiments_root: str = _DEFAULT_EXPERIMENTS_ROOT,
-    catalog: str = _DEFAULT_CATALOG,
-    schema: str = _DEFAULT_SCHEMA,
-    framework_root: str = _DEFAULT_FRAMEWORK_ROOT,
+    experiments_root: str,
+    catalog: str = "",
+    schema: str = "",
+    framework_root: str = "",
     nb10_export_path: str = "",
     nb00_path: str = "",
     nb06_path: str = "",
@@ -274,16 +363,38 @@ def publish_probe_config(
 ) -> Dict[str, str]:
     """Publish task values (when running inside a Databricks job) AND set env
     vars (so the same config survives interactive single-notebook execution).
-    Called from 00_probe_config's Cell 1.
+    Called from ``000_probe_config``'s Cell 1.
+
+    Required: ``run_id`` + ``experiments_root``.
+
+    Everything else auto-detects:
+    - ``framework_root`` from the currently-executing notebook path
+    - ``catalog`` / ``schema`` from the ``/Volumes/<cat>/<sch>/...`` shape of
+      ``experiments_root``
+    - ``nb00_path`` / ``nb06_path`` / ``nb10_export_path`` from
+      ``<framework_root>/exploration_notebooks/<nb>.ipynb``
+
+    Pass any of those explicitly only when the auto-detection produces the
+    wrong answer for your workspace layout.
     """
 
-    payload = {
+    if not framework_root:
+        framework_root = _autodetect_workspace_root() or ""
+    if not (catalog and schema):
+        auto_cat, auto_sch = _autodetect_catalog_schema(experiments_root)
+        catalog = catalog or (auto_cat or "")
+        schema = schema or (auto_sch or "")
+
+    payload: Dict[str, str] = {
         "run_id": run_id,
         "experiments_root": experiments_root,
-        "catalog": catalog,
-        "schema": schema,
-        "framework_root": framework_root,
     }
+    if framework_root:
+        payload["framework_root"] = framework_root
+    if catalog:
+        payload["catalog"] = catalog
+    if schema:
+        payload["schema"] = schema
     if nb10_export_path:
         payload["nb10_export_path"] = nb10_export_path
     if nb00_path:
