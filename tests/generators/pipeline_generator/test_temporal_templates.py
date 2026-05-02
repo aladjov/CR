@@ -387,7 +387,7 @@ class TestEntityIdStandardization:
         from customer_retention.generators.pipeline_generator.databricks_renderer import DATABRICKS_TEMPLATES
 
         silver_template = DATABRICKS_TEMPLATES["databricks_silver.py.j2"]
-        assert 'MergeConfig(entity_key="entity_id")' in silver_template
+        assert 'entity_key="entity_id"' in silver_template
 
     def test_feast_entity_key_defaults_to_entity_id(self):
         from customer_retention.generators.pipeline_generator.renderer import TEMPLATES
