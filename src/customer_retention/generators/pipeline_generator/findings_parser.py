@@ -128,8 +128,21 @@ def resolve_aggregation_windows(*, intent, material, override):
     a coverage recommendation silently drops window families the user expects
     to appear in generated bronze (cycle 3 / G4). ``override`` is the
     per-dataset ``BRONZE_AGGREGATIONS[<ds>]['windows']`` escape hatch.
+
+    Widening rule (cycle 4 / G6): when ``override`` is a (non-strict) subset
+    of ``intent`` AND intent is non-empty, the override is treated as a
+    redundant restatement (e.g., a registry call passing the full default
+    list with one window dropped by a typo) — return ``intent`` so the
+    user's declared breadth wins. To genuinely narrow, the operator must
+    pass an override that contains at least one window NOT in intent
+    (signalling deliberate scope change).
     """
     if override:
+        if intent and set(override).issubset(set(intent)):
+            # Override is a subset of intent — preserve intent breadth and
+            # respect the operator's intent-vs-override ordering by
+            # returning intent (which is a superset of override).
+            return list(intent)
         return list(override)
     if intent:
         return list(intent)
@@ -2677,7 +2690,8 @@ class FindingsParser:
                 text_features=self._build_text_feature_configs(findings),
             )
             self._apply_bronze_aggregation_overrides(
-                config.bronze_event[event_name], event_name
+                config.bronze_event[event_name], event_name,
+                intent_windows=list(getattr(multi, "aggregation_windows", []) or []),
             )
         for agg_name, preagg in (discovered_events or {}).items():
             if agg_name in config.bronze_event:
@@ -2707,7 +2721,8 @@ class FindingsParser:
                 text_features=self._build_text_feature_configs(preagg),
             )
             self._apply_bronze_aggregation_overrides(
-                config.bronze_event[agg_name], agg_name
+                config.bronze_event[agg_name], agg_name,
+                intent_windows=list(getattr(multi, "aggregation_windows", []) or []),
             )
 
         self._fail_on_overrides_targeting_non_event_datasets(config)
@@ -2721,7 +2736,8 @@ class FindingsParser:
                 )
 
     def _apply_bronze_aggregation_overrides(
-        self, event_cfg: BronzeEventConfig, event_name: str
+        self, event_cfg: BronzeEventConfig, event_name: str,
+        intent_windows: Optional[List[str]] = None,
     ) -> None:
         overrides = self._bronze_aggregation_overrides.get(event_name)
         if not overrides:
@@ -2738,12 +2754,22 @@ class FindingsParser:
         if "value_counts_columns" in overrides:
             event_cfg.value_counts_columns = tuple(overrides["value_counts_columns"])
         if "windows" in overrides:
+            override_windows = list(overrides["windows"])
+            # Apply the same widening rule as resolve_aggregation_windows:
+            # when an override is a (non-strict) subset of intent, treat it
+            # as a redundant restatement and keep the broader intent breadth.
+            # Cycle 4 / G6 — closes the silent-narrow case where an SPS
+            # operator restated the default 6-window list and the 24h
+            # window dropped from generated bronze.
+            resolved_windows = override_windows
+            if intent_windows and set(override_windows).issubset(set(intent_windows)):
+                resolved_windows = list(intent_windows)
             if event_cfg.aggregation is None:
                 event_cfg.aggregation = AggregationWindowConfig(
-                    windows=list(overrides["windows"])
+                    windows=resolved_windows
                 )
             else:
-                event_cfg.aggregation.windows = list(overrides["windows"])
+                event_cfg.aggregation.windows = resolved_windows
 
     def _discover_event_sources(
         self, source_findings: Dict[str, ExplorationFindings]

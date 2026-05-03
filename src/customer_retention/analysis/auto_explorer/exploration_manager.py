@@ -91,6 +91,7 @@ class MultiDatasetFindings:
     aggregation_windows: List[str] = field(
         default_factory=lambda: ["24h", "7d", "30d", "90d", "180d", "365d", "all_time"]
     )
+    bronze_aggregation_overrides: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     composite_dataset_name: Optional[str] = None
     notes: Dict[str, Any] = field(default_factory=dict)
 
@@ -239,6 +240,7 @@ class MultiDatasetFindings:
             "event_datasets": self.event_datasets,
             "excluded_datasets": self.excluded_datasets,
             "aggregation_windows": self.aggregation_windows,
+            "bronze_aggregation_overrides": self.bronze_aggregation_overrides,
             "composite_dataset_name": self.composite_dataset_name,
             "notes": self.notes,
         }
@@ -308,6 +310,7 @@ class MultiDatasetFindings:
             aggregation_windows=data.get(
                 "aggregation_windows", ["24h", "7d", "30d", "90d", "180d", "365d", "all_time"]
             ),
+            bronze_aggregation_overrides=data.get("bronze_aggregation_overrides") or {},
             composite_dataset_name=data.get("composite_dataset_name"),
             notes=data.get("notes", {}),
         )
@@ -471,6 +474,8 @@ class ExplorationManager:
         self,
         dataset_names: Optional[List[str]] = None,
         merge_scaffold=None,
+        recommendations_registry=None,
+        bronze_aggregation_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> MultiDatasetFindings:
         """Create a MultiDatasetFindings from discovered datasets.
 
@@ -480,6 +485,12 @@ class ExplorationManager:
                           If provided, only datasets matching these names are included.
             merge_scaffold: Optional list of MergeScaffoldEntry from ProjectContext.
                            Converted to relationships for the silver layer.
+            recommendations_registry: Optional RecommendationRegistry whose
+                          `bronze_aggregations` is propagated into the multi
+                          findings so the NB10 parser sees the override.
+            bronze_aggregation_overrides: Direct override dict, used when no
+                          registry is available (e.g. cycles loading raw YAML).
+                          Wins over the registry when both are passed.
         """
         datasets_info = self.list_datasets(include_excluded=True)
 
@@ -503,12 +514,24 @@ class ExplorationManager:
 
         relationships = self._scaffold_to_relationships(merge_scaffold) if merge_scaffold else []
 
+        # Resolve bronze_aggregation_overrides: explicit arg > registry attr > {}.
+        resolved_overrides: Dict[str, Dict[str, Any]] = {}
+        if recommendations_registry is not None:
+            for attr in ("bronze_aggregations", "bronze_aggregation_overrides"):
+                _candidate = getattr(recommendations_registry, attr, None)
+                if _candidate:
+                    resolved_overrides = dict(_candidate)
+                    break
+        if bronze_aggregation_overrides:
+            resolved_overrides = dict(bronze_aggregation_overrides)
+
         return MultiDatasetFindings(
             datasets=datasets,
             relationships=relationships,
             primary_entity_dataset=primary,
             event_datasets=event_datasets,
             excluded_datasets=excluded,
+            bronze_aggregation_overrides=resolved_overrides,
         )
 
     @staticmethod

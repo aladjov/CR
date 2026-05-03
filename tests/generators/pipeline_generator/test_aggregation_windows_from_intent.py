@@ -43,11 +43,14 @@ _COVERAGE_NARROWED = ["365d", "all_time"]
 def oracle_expected_windows(intent, material, override):
     """Pure-python reference for the post-fix precedence rule.
 
-    10-line oracle: matches the invariant by construction, independent of
-    the production implementation. Every scenario test below parity-checks
-    the production path against this oracle.
+    Cycle-4 widening rule: when ``override`` is a (non-strict) subset of
+    ``intent``, treat the override as a redundant restatement and keep
+    intent breadth. Genuine narrowing requires the override to contain
+    at least one window NOT in intent.
     """
     if override:
+        if intent and set(override).issubset(set(intent)):
+            return list(intent)
         return list(override)
     if intent:
         return list(intent)
@@ -69,7 +72,10 @@ class TestResolveAggregationWindowsHelper:
             (_INTENT_WINDOWS, _INTENT_WINDOWS, None, _INTENT_WINDOWS),
             ([], _COVERAGE_NARROWED, None, _COVERAGE_NARROWED),
             ([], [], None, []),
-            (_INTENT_WINDOWS, _COVERAGE_NARROWED, ["30d"], ["30d"]),
+            # Override "30d" IS a subset of _INTENT_WINDOWS — widen to intent.
+            (_INTENT_WINDOWS, _COVERAGE_NARROWED, ["30d"], _INTENT_WINDOWS),
+            # Genuinely narrowing override (contains a window not in intent) wins.
+            (_INTENT_WINDOWS, _COVERAGE_NARROWED, ["1h"], ["1h"]),
             ([], _COVERAGE_NARROWED, ["7d", "30d"], ["7d", "30d"]),
             (_INTENT_WINDOWS, [], None, _INTENT_WINDOWS),
         ],
@@ -280,7 +286,25 @@ class TestParseHonorsIntentWindows:
         config = FindingsParser(str(findings_dir)).parse()
         assert config.bronze_event["orders"].aggregation.windows == _COVERAGE_NARROWED
 
-    def test_override_windows_beat_intent(self, tmp_path):
+    def test_override_windows_beat_intent_when_genuine_narrowing(self, tmp_path):
+        # Cycle-4 widening rule: override must contain at least one window
+        # NOT in intent for it to genuinely narrow. ["30d"] is a subset of
+        # _INTENT_WINDOWS so it widens — use ["1h"] which IS a strict
+        # narrowing (1h not in intent).
+        findings_dir = _write_findings_dir(
+            tmp_path, material_windows=_COVERAGE_NARROWED, intent_windows=_INTENT_WINDOWS
+        )
+        from customer_retention.generators.pipeline_generator.findings_parser import (
+            FindingsParser,
+        )
+
+        config = FindingsParser(
+            str(findings_dir),
+            bronze_aggregation_overrides={"orders": {"windows": ["1h"]}},
+        ).parse()
+        assert config.bronze_event["orders"].aggregation.windows == ["1h"]
+
+    def test_override_windows_widen_to_intent_when_subset(self, tmp_path):
         findings_dir = _write_findings_dir(
             tmp_path, material_windows=_COVERAGE_NARROWED, intent_windows=_INTENT_WINDOWS
         )
@@ -292,7 +316,7 @@ class TestParseHonorsIntentWindows:
             str(findings_dir),
             bronze_aggregation_overrides={"orders": {"windows": ["30d"]}},
         ).parse()
-        assert config.bronze_event["orders"].aggregation.windows == ["30d"]
+        assert config.bronze_event["orders"].aggregation.windows == _INTENT_WINDOWS
 
 
 # ---------------------------------------------------------------------------

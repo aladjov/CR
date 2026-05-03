@@ -2,7 +2,12 @@ from .ab_test_designer import ABTestDesign, ABTestDesigner, MeasurementPlan, Sam
 from .fairness_analyzer import FairnessAnalyzer, FairnessMetric, FairnessResult, GroupMetrics
 from .intervention_matcher import Intervention, InterventionCatalog, InterventionMatcher, InterventionRecommendation
 from .intervention_matcher import RiskSegment as MatcherRiskSegment
-from .ratio_features import DEFAULT_RATIO_WINDOWS, derive_contract_ratio_features
+from .ratio_features import (
+    DEFAULT_RATIO_WINDOWS,
+    derive_contract_ratio_features,
+    derive_event_ratio_features,
+    derive_subscription_ratio_features,
+)
 from .report_generator import (
     CampaignList,
     CustomerServiceReport,
@@ -24,5 +29,6 @@ __all__ = [
     "ProductInsights", "GovernanceReport",
     "ABTestDesigner", "ABTestDesign", "SampleSizeResult", "MeasurementPlan",
     "MatcherRiskSegment", "RiskIntervention",  # Aliases for disambiguation
-    "derive_contract_ratio_features", "DEFAULT_RATIO_WINDOWS",
+    "derive_contract_ratio_features", "derive_subscription_ratio_features",
+    "derive_event_ratio_features", "DEFAULT_RATIO_WINDOWS",
 ]
