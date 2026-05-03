@@ -121,6 +121,7 @@ def render_dashboard_view_sql(
     *,
     composite_name: Optional[str] = None,
     include_provenance: bool = True,
+    gold_struct_cols: Optional[List[str]] = None,
 ) -> str:
     """Substitute ``{catalog}`` / ``{schema}`` (and optionally ``{composite_name}``)
     into the raw SQL template.
@@ -131,10 +132,21 @@ def render_dashboard_view_sql(
     ``v_feature_provenance`` block — used by the publisher when the optional
     ``feature_meta`` / ``column_descriptions`` tables aren't materialized yet
     so the view's CREATE OR REPLACE wouldn't validate.
+
+    ``gold_struct_cols`` is the comma-separated list of NUMERIC columns from
+    ``gold_features_{composite_name}`` that get unpivoted into the deviation
+    view's ``gold_long`` CTE. Required when the deviation block is included
+    (i.e. ``composite_name`` is supplied). The publisher introspects the
+    gold table's schema and passes the filtered list; tests pass an explicit
+    list. Without this, ``STRUCT(*)`` would include non-double columns
+    (entity_id, as_of_date, scoring_run_id) and ``FROM_JSON`` would return
+    NULL for the entire map — silently zeroing the deviation view.
     """
     text = load_dashboard_view_sql()
     if composite_name:
         text = _strip_deviation_markers(text).replace("{composite_name}", composite_name)
+        struct_args = ", ".join(f"`{c}`" for c in (gold_struct_cols or [])) or "1"
+        text = text.replace("{gold_struct_cols}", struct_args)
     else:
         text = _strip_deviation_block(text)
     if include_provenance:
@@ -142,6 +154,44 @@ def render_dashboard_view_sql(
     else:
         text = _strip_provenance_block(text)
     return text.replace("{catalog}", catalog).replace("{schema}", schema)
+
+
+_GOLD_NUMERIC_SPARK_TYPES = (
+    "DoubleType", "FloatType", "IntegerType", "LongType", "ShortType", "ByteType",
+    "DecimalType",
+)
+_GOLD_EXCLUDED_COLS = frozenset({
+    "entity_id", "as_of_date", "scoring_run_id", "model_name", "model_version",
+    "inference_point_in_time",
+})
+
+
+def _gold_numeric_columns(spark: "SparkSession", gold_fqn: str) -> List[str]:
+    """Return the numeric (double-castable) columns of ``gold_features_<CN>``.
+
+    Used by ``publish_dashboard_views`` to substitute into the deviation
+    view's ``gold_long`` CTE so ``STRUCT(...)`` only carries columns that
+    can be JSON-parsed as DOUBLE. Excludes well-known metadata columns
+    (entity_id, as_of_date, scoring_run_id, ...) even when they happen to
+    be numeric — they're metadata, not features.
+
+    Returns an empty list when the table doesn't exist or the introspection
+    fails; the caller treats that as "publish without the deviation block".
+    """
+    try:
+        struct_type = spark.table(gold_fqn).schema
+    except Exception as exc:  # noqa: BLE001 — best-effort introspection
+        logger.warning("could not introspect %s schema for numeric cols: %s", gold_fqn, exc)
+        return []
+    out: List[str] = []
+    for field in struct_type:
+        name = field.name
+        if name in _GOLD_EXCLUDED_COLS:
+            continue
+        type_name = type(field.dataType).__name__
+        if type_name in _GOLD_NUMERIC_SPARK_TYPES:
+            out.append(name)
+    return out
 
 
 def split_view_statements(sql_text: str) -> List[str]:
@@ -445,6 +495,7 @@ def publish_dashboard_views(
     ensure_run_context_table(spark, f"{catalog}.{schema}.run_context")
 
     effective_composite = composite_name
+    gold_numeric_cols: List[str] = []
     if composite_name:
         ok, missing = _deviation_prerequisites_present(spark, catalog, schema, composite_name)
         if not ok:
@@ -455,6 +506,24 @@ def publish_dashboard_views(
                 ", ".join(missing),
             )
             effective_composite = None
+        else:
+            gold_fqn = f"{catalog}.{schema}.gold_features_{composite_name}"
+            gold_numeric_cols = _gold_numeric_columns(spark, gold_fqn)
+            if not gold_numeric_cols:
+                logger.warning(
+                    "deviation views skipped: %s has zero numeric columns "
+                    "after metadata filter -- the gold_long CTE would unpivot "
+                    "an empty struct. Re-run the gold materialisation step "
+                    "and republish.",
+                    gold_fqn,
+                )
+                effective_composite = None
+            else:
+                logger.info(
+                    "deviation views will project %d numeric columns from %s "
+                    "into the gold_long CTE",
+                    len(gold_numeric_cols), gold_fqn,
+                )
 
     include_provenance, prov_missing = _provenance_prerequisites_present(spark, catalog, schema)
     if not include_provenance:
@@ -470,6 +539,7 @@ def publish_dashboard_views(
         schema,
         composite_name=effective_composite,
         include_provenance=include_provenance,
+        gold_struct_cols=gold_numeric_cols,
     )
     statements = split_view_statements(rendered)
     submitted: List[str] = []

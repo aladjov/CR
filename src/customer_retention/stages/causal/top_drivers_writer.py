@@ -164,19 +164,52 @@ def _resolve_attribution(config: TopDriversConfig) -> ShapAttribution:
 
 
 def _select_top_per_slice(config: TopDriversConfig) -> "DataFrame":
-    """Window per ``(playbook, archetype, risk_tier)``, keep ranks ≤ K."""
+    """Window per ``(playbook, archetype, risk_tier)``, keep ranks ≤ K.
+
+    Two non-obvious correctness invariants:
+
+    (1) **PRIMARY-only slicing.** ``eligibility_snapshot`` carries one row
+        per ``(entity × policy)``, so each entity has many rows and shows
+        up in many ``(playbook, archetype, risk_tier)`` slices. If we
+        windowed over the unfiltered snapshot, the top-K per snapshot
+        slice would heavily overlap on the same high-``expected_loss``
+        customers, ``.distinct()`` would collapse the cache to a tiny
+        global set (~28 entities for ``per_slice_k=20`` in practice), and
+        the dashboard's "In Scope" filter (which lives on
+        ``v_account_primary_recommendation`` = primary-only) would see at
+        most a handful per slice. We anchor on
+        ``policy_rank_among_eligible = 1`` so each entity appears in
+        exactly its PRIMARY slice; ``per_slice_k`` then caps that
+        primary slice and the dashboard's slice and cache slice align
+        1:1.
+
+    (2) **Deterministic tiebreaker.** Low-risk slices have
+        ``churn_probability ≈ 0`` and frequently NULL ``value_at_risk``,
+        so ``expected_loss`` ties at 0 for thousands of entities; the
+        bare ``churn_probability DESC`` secondary doesn't break those
+        ties. Add ``value_at_risk DESC NULLS LAST`` (rewards populated
+        VAR over NULL VAR at the same probability) and ``entity_id ASC``
+        as the final-ditch deterministic key so the cache returns the
+        same K entities run-over-run.
+    """
     from pyspark.sql import Window
     from pyspark.sql import functions as F  # noqa: N812
 
     snapshot = config.spark.table(config.snapshot_table_fqn).filter(
-        F.col("scoring_run_id") == F.lit(config.scoring_run_id)
+        (F.col("scoring_run_id") == F.lit(config.scoring_run_id))
+        & (F.col("policy_rank_among_eligible") == F.lit(1))
     )
     expected_loss = F.coalesce(F.col(config.probability_column), F.lit(0.0)) * F.coalesce(
         F.col(config.value_at_risk_column), F.lit(0.0)
     )
     slice_window = Window.partitionBy(
         F.col("playbook_id"), F.col("archetype_id"), F.col("risk_tier"),
-    ).orderBy(expected_loss.desc(), F.col(config.probability_column).desc())
+    ).orderBy(
+        expected_loss.desc(),
+        F.col(config.probability_column).desc(),
+        F.col(config.value_at_risk_column).desc_nulls_last(),
+        F.col(config.entity_id_column).asc(),
+    )
     ranked = snapshot.withColumn("__cr_slice_rank", F.row_number().over(slice_window))
     return ranked.filter(F.col("__cr_slice_rank") <= F.lit(int(config.per_slice_k))).select(
         F.col(config.entity_id_column)

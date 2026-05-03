@@ -254,6 +254,83 @@ class TestGoldTimestampResolution:
             )
 
 
+class TestSelectTopPerSlice:
+    """Spec for the per-slice ranker.
+
+    The ranker is the load-bearing piece behind the dashboard's "In Scope"
+    coverage: the cache it produces (``top_shap_drivers``) is what the
+    dashboard later joins onto ``v_account_primary_recommendation`` to
+    decide which entities have a SHAP-row triplet to display. Two
+    invariants are non-obvious and worth a unit test:
+
+    (1) The snapshot is filtered to ``policy_rank_among_eligible = 1``
+        BEFORE the window so each entity lands in exactly one slice (its
+        primary). Without this, every entity's ~106 (entity × policy)
+        snapshot rows would smear across multiple slices, the same high-
+        ``expected_loss`` customers would be re-picked in many slices,
+        and ``.distinct()`` would collapse the cache to a tiny global
+        count -- starving the per-slice-K cap entirely.
+
+    (2) The ORDER BY carries a ``value_at_risk DESC NULLS LAST`` and a
+        final ``entity_id ASC`` so Low-tier slices (where
+        ``expected_loss`` ties at 0 across thousands of entities) still
+        return a deterministic top-K run-over-run.
+    """
+
+    def test_filters_snapshot_to_primary_recommendation_only(self):
+        cfg = _make_config()
+        snapshot_df = _fake_df("snapshot")
+        cfg.spark.table.return_value = snapshot_df
+
+        top_drivers_writer._select_top_per_slice(cfg)
+
+        # The snapshot is filtered with a single compound condition:
+        # ``scoring_run_id == X AND policy_rank_among_eligible == 1``.
+        # The MagicMock chain returns itself from each method, so the
+        # later ``ranked.filter(rank <= K)`` call lands on the same mock;
+        # walk every recorded filter and assert the primary-only key
+        # appears in at least one of them.
+        assert snapshot_df.filter.called
+        rendered_calls = [repr(c.args[0]) for c in snapshot_df.filter.call_args_list]
+        assert any("policy_rank_among_eligible" in r for r in rendered_calls), (
+            f"primary-only filter missing from snapshot read; got {rendered_calls!r}"
+        )
+
+    def test_order_by_includes_value_at_risk_and_entity_id_tiebreakers(self):
+        # Smoke check the Window's orderBy carries the deterministic keys.
+        # We don't run Spark; we just inspect the Column expressions
+        # passed to ``orderBy``.
+        cfg = _make_config()
+        captured: dict = {}
+
+        # Patch Window.partitionBy to record the orderBy chain
+        from pyspark.sql import Window
+        real_partition_by = Window.partitionBy
+
+        def _spy_partition(*args, **kwargs):
+            wspec = real_partition_by(*args, **kwargs)
+            real_order_by = wspec.orderBy
+
+            def _spy_order_by(*oargs, **okwargs):
+                captured["order_by"] = oargs
+                return real_order_by(*oargs, **okwargs)
+
+            wspec.orderBy = _spy_order_by  # type: ignore[method-assign]
+            return wspec
+
+        with patch.object(Window, "partitionBy", side_effect=_spy_partition):
+            top_drivers_writer._select_top_per_slice(cfg)
+
+        assert "order_by" in captured, "Window.orderBy was never invoked"
+        rendered = " ".join(repr(c) for c in captured["order_by"])
+        assert "value_at_risk" in rendered, (
+            f"value_at_risk tiebreaker missing from ORDER BY; got {rendered!r}"
+        )
+        assert "entity_id" in rendered, (
+            f"entity_id final tiebreaker missing from ORDER BY; got {rendered!r}"
+        )
+
+
 class TestResultSummary:
     def test_summary_string_carries_counts(self):
         result = top_drivers_writer.TopDriversResult(

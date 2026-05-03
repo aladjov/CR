@@ -732,6 +732,16 @@ WITH latest_run AS (
     LIMIT 1
 ),
 gold_long AS (
+    -- Unpivot gold features (one numeric column per feature) into long
+    -- form. STRUCT(*) was a trap: any non-double column (entity_id,
+    -- as_of_date, scoring_run_id, ...) inside STRUCT(*) makes
+    -- FROM_JSON(...) return NULL for the WHOLE map — Spark's documented
+    -- behaviour when MAP<STRING,DOUBLE> parsing hits a non-double — and
+    -- the LATERAL VIEW EXPLODE then produces zero rows, leaving the
+    -- entire deviation view empty. Substituting an explicit numeric-only
+    -- column list at publish time (computed by ``dashboard_views.py``
+    -- introspecting gold_features_<CN>'s schema) keeps the parse strict
+    -- and the explode honest.
     SELECT
         g.entity_id,
         kv_key   AS feature_name,
@@ -739,11 +749,10 @@ gold_long AS (
     FROM (
         SELECT
             entity_id,
-            FROM_JSON(TO_JSON(STRUCT(*)), 'MAP<STRING,DOUBLE>') AS feature_map
+            FROM_JSON(TO_JSON(STRUCT({gold_struct_cols})), 'MAP<STRING,DOUBLE>') AS feature_map
         FROM {catalog}.{schema}.gold_features_{composite_name}
     ) g
     LATERAL VIEW EXPLODE(g.feature_map) tbl AS kv_key, kv_value
-    WHERE kv_key NOT IN ('entity_id', 'as_of_date')
 ),
 latest_pop AS (
     SELECT

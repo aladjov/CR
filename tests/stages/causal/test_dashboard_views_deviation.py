@@ -103,13 +103,37 @@ def test_deviation_view_uses_latest_population_stats():
 
 
 def test_deviation_view_explodes_gold_features_into_long_form():
+    # When ``gold_struct_cols`` is supplied, the renderer substitutes the
+    # explicit numeric column list into ``STRUCT(...)`` so FROM_JSON's
+    # MAP<STRING,DOUBLE> parse stays strict (any non-double would NULL the
+    # whole map and silently zero the view).
+    block = _block(
+        render_dashboard_view_sql(
+            "c", "s",
+            composite_name="cn1",
+            gold_struct_cols=["feat_a", "feat_b"],
+        ),
+        "v_account_feature_deviation",
+    )
+    assert "FROM_JSON(TO_JSON(STRUCT(`feat_a`, `feat_b`))" in block
+    # ``STRUCT(*)`` only appears in explanatory comments, never in
+    # executable DDL (which would re-introduce the FROM_JSON-NULL trap).
+    code_only = "\n".join(line for line in block.splitlines()
+                          if not line.lstrip().startswith("--"))
+    assert "STRUCT(*)" not in code_only
+    assert "LATERAL VIEW EXPLODE" in block
+
+
+def test_deviation_view_struct_args_default_to_dummy_when_no_cols():
+    # ``render_dashboard_view_sql`` should never emit invalid SQL even when
+    # the caller forgets to pass ``gold_struct_cols`` -- substitute ``1`` so
+    # the view DDL stays parseable. The publisher catches this case earlier
+    # (logs a warning + skips deviation) but the renderer must not crash.
     block = _block(
         render_dashboard_view_sql("c", "s", composite_name="cn1"),
         "v_account_feature_deviation",
     )
-    assert "FROM_JSON(TO_JSON(STRUCT(*))" in block
-    assert "LATERAL VIEW EXPLODE" in block
-    assert "kv_key NOT IN ('entity_id', 'as_of_date')" in block
+    assert "STRUCT(1)" in block
 
 
 def test_deviation_topn_caps_at_12():
@@ -121,8 +145,26 @@ def test_deviation_topn_caps_at_12():
     assert "deviation_rank <= 12" in block
 
 
-def test_publish_with_composite_name_runs_extra_statements():
+def _spark_with_numeric_gold():
+    """MagicMock spark whose gold_features schema reports two DoubleType
+    columns plus an entity_id (string) so ``_gold_numeric_columns`` returns
+    a non-empty list and the publisher emits the deviation block."""
     spark = MagicMock()
+
+    class _F:
+        def __init__(self, name, type_name):
+            self.name = name
+            self.dataType = type(type_name, (), {})()
+
+    fields = [_F("entity_id", "StringType"),
+              _F("feat_a", "DoubleType"),
+              _F("feat_b", "DoubleType")]
+    spark.table.return_value.schema = fields
+    return spark
+
+
+def test_publish_with_composite_name_runs_extra_statements():
+    spark = _spark_with_numeric_gold()
     publish_dashboard_views(spark, "c", "s", composite_name="cn1")
     # MagicMock's tableExists returns truthy for every prereq, so the publisher
     # includes both the deviation block and the provenance view, plus the
@@ -133,6 +175,16 @@ def test_publish_with_composite_name_runs_extra_statements():
         if "CREATE OR REPLACE VIEW" in call.args[0]
     ]
     assert len(view_calls) == expected
+    submitted = "\n".join(call.args[0] for call in view_calls)
+    # The numeric-only struct projection landed in the rendered DDL --
+    # without this, FROM_JSON would NULL the whole map and the view would
+    # silently return zero rows on every dashboard page-hit.
+    assert "STRUCT(`feat_a`, `feat_b`)" in submitted
+    # ``STRUCT(*)`` only appears in the explanatory CTE comment, not in
+    # executable DDL.
+    code_only = "\n".join(line for line in submitted.splitlines()
+                          if not line.lstrip().startswith("--"))
+    assert "STRUCT(*)" not in code_only
 
 
 def test_publish_without_composite_name_keeps_original_count():
@@ -143,6 +195,35 @@ def test_publish_without_composite_name_keeps_original_count():
         if "CREATE OR REPLACE VIEW" in call.args[0]
     ]
     assert len(view_calls) == _BASE_NON_DEVIATION_VIEW_CALLS
+
+
+def test_publish_skips_deviation_when_gold_has_no_numeric_columns():
+    # Defensive: if the gold table exists but its schema is metadata-only
+    # (entity_id, as_of_date), STRUCT(...) would be empty and FROM_JSON
+    # would return an empty map. Publisher detects this and skips the
+    # deviation block instead of emitting a view that silently produces 0
+    # rows on every dashboard page-hit.
+    spark = MagicMock()
+
+    class _F:
+        def __init__(self, name, type_name):
+            self.name = name
+            self.dataType = type(type_name, (), {})()
+
+    spark.table.return_value.schema = [
+        _F("entity_id", "StringType"),
+        _F("as_of_date", "TimestampType"),
+    ]
+
+    publish_dashboard_views(spark, "c", "s", composite_name="cn1")
+    view_calls = [
+        call for call in spark.sql.call_args_list
+        if "CREATE OR REPLACE VIEW" in call.args[0]
+    ]
+    submitted = "\n".join(call.args[0] for call in view_calls)
+    # Deviation views absent because gold had no numerics to project.
+    for name in DASHBOARD_DEVIATION_VIEW_NAMES:
+        assert name not in submitted
 
 
 def test_publish_skips_deviation_when_population_stats_table_missing():
