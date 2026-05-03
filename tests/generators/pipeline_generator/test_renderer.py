@@ -404,3 +404,45 @@ class TestRenderTrainingCVProgress:
         result = renderer.render_training(sample_pipeline_config)
         assert "CrossValidator" not in result
         assert "_on_fold" not in result
+
+
+class TestRenderTrainingFullPanelFit:
+    @staticmethod
+    def _with_full_panel(config):
+        from customer_retention.generators.pipeline_generator.models import TrainingConfig
+        config.training = config.training or TrainingConfig()
+        config.training.production_full_panel_fit = True
+        return config
+
+    def test_full_panel_fit_skips_temporal_split(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(self._with_full_panel(sample_pipeline_config))
+        assert "splitter.split(" not in result
+        assert "DataSplitter(" not in result
+
+    def test_full_panel_fit_uses_full_panel_for_x_train(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(self._with_full_panel(sample_pipeline_config))
+        assert "X_train, y_train = X, y" in result
+        assert "Full-panel fit:" in result
+
+    def test_full_panel_fit_evaluates_on_train_set(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(self._with_full_panel(sample_pipeline_config))
+        assert "model.predict_proba(X_train)" in result
+        assert "compute_metrics(y_train, y_proba, y_pred)" in result
+
+    def test_full_panel_fit_tags_mlflow_mode(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(self._with_full_panel(sample_pipeline_config))
+        assert 'mlflow.set_tag("training_mode", "full_panel_fit")' in result
+
+    def test_full_panel_fit_xgboost_uses_train_as_eval(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(self._with_full_panel(sample_pipeline_config))
+        assert "train_xgboost(X_train, y_train, X_train, y_train, feature_names)" in result
+
+    def test_temporal_split_default_when_not_full_panel(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "DataSplitter(" in result
+        assert 'mlflow.set_tag("training_mode", "temporal_split")' in result
+        assert "X_train, y_train = X, y" not in result
+
+    def test_full_panel_fit_is_valid_python(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(self._with_full_panel(sample_pipeline_config))
+        ast.parse(result)

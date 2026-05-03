@@ -70,13 +70,18 @@ class PipelineGenerator(PipelineGeneratorBase):
             self._write_silver(config),
             self._write_gold(config),
             self._write_training(config),
+        ]
+        target_derive_path = self._write_target_derive(config)
+        if target_derive_path is not None:
+            generated_files.append(target_derive_path)
+        generated_files.extend([
             self._write_runner(config),
             self._write_workflow(config),
             *self._write_feast_repo(config),
             *self._write_validation(config),
             self._write_exploration_report(config),
             self._write_manifest(config),
-        ]
+        ])
         self._copy_holdout_ids()
         self._copy_feature_spec()
         user_ext_path = self._write_user_extensions()

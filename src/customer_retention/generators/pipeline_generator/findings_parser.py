@@ -1406,8 +1406,13 @@ class FindingsParser:
     def _apply_silver_recommendations(self, config: PipelineConfig, registry: RecommendationRegistry) -> None:
         if not hasattr(registry, "silver") or registry.silver is None:
             return
+        predicted_silver, _ = self._predict_silver_post_merge_columns(config)
+        per_source_names = list(config.bronze.keys()) + [
+            n for n in config.bronze_event.keys() if n not in config.bronze
+        ]
         pipeline_columns = self._collect_pipeline_columns(config)
         for rec in getattr(registry.silver, "derived_columns", []):
+            self._hydrate_silver_derived_params(rec, predicted_silver, per_source_names)
             if not self._silver_derived_sources_available(rec, pipeline_columns):
                 continue
             step = self._map_silver_derived(rec)
@@ -1428,21 +1433,142 @@ class FindingsParser:
         return None
 
     def _collect_pipeline_columns(self, config: PipelineConfig) -> Set[str]:
-        columns: Set[str] = {"entity_id", "as_of_date"}
+        columns, _ = self._predict_silver_post_merge_columns(config)
+        columns |= self._read_silver_merged_columns()
+        return columns
+
+    def _predict_silver_post_merge_columns(
+        self, config: PipelineConfig
+    ) -> Tuple[Set[str], Dict[str, str]]:
+        """Simulate `TemporalMerger._resolve_conflicts` (FW-2 parity) to predict
+        the post-merge silver column shape at codegen time.
+
+        Returns a tuple ``(merged_columns, name_to_source)`` where:
+        - ``merged_columns`` is the set of names a silver_featureset will carry
+          AFTER the merger applies ``{ds}__{col}`` on cross-dataset name
+          collision and leaves bare otherwise.
+        - ``name_to_source`` maps each predicted silver name to the source
+          dataset it originated from (or ``"spine"`` for entity_id/as_of_date).
+
+        Order of merge: the first dataset whose entries appear in
+        ``config.bronze``/``config.bronze_event`` is the merge base (its
+        columns enter ``merged`` bare). Subsequent datasets get prefixed on
+        collision with the running ``merged`` set.
+        """
+        spine = {"entity_id", "as_of_date"}
+        per_source: Dict[str, Set[str]] = {}
+        order: List[str] = []
         for name, bronze in config.bronze.items():
             raw_cols = self._raw_source_columns.get(name, set())
             dropped = {
                 step.column for step in bronze.transformations
                 if step.type == PipelineTransformationType.DROP_COLUMN
             }
-            columns |= (raw_cols - dropped)
-        for _name, event_cfg in config.bronze_event.items():
-            columns |= self._event_aggregated_columns(
+            cols = (raw_cols - dropped) - spine
+            if name not in per_source:
+                order.append(name)
+            per_source.setdefault(name, set()).update(cols)
+        for name, event_cfg in config.bronze_event.items():
+            agg_cols = self._event_aggregated_columns(
                 event_cfg,
-                unique_values_by_col=getattr(self, "_value_counts_by_source", {}).get(_name),
-            )
-        columns |= self._read_silver_merged_columns()
-        return columns
+                unique_values_by_col=getattr(self, "_value_counts_by_source", {}).get(name),
+            ) - spine
+            if name not in per_source:
+                order.append(name)
+            per_source.setdefault(name, set()).update(agg_cols)
+
+        merged: Set[str] = set(spine)
+        name_to_source: Dict[str, str] = {c: "spine" for c in spine}
+        for name in order:
+            cols = per_source.get(name, set())
+            conflicts = cols & merged
+            non_conflicts = cols - merged
+            for c in conflicts:
+                alias = f"{name}__{c}"
+                merged.add(alias)
+                name_to_source[alias] = name
+            for c in non_conflicts:
+                merged.add(c)
+                name_to_source.setdefault(c, name)
+        return merged, name_to_source
+
+    def _resolve_silver_derived_source(
+        self,
+        declared: str,
+        predicted: Set[str],
+        per_source_names: Optional[List[str]] = None,
+    ) -> Optional[str]:
+        """Resolve a registered silver-derived source column name against the
+        predicted post-merge silver shape (FW-2).
+
+        Order of attempts:
+        1. literal — matches when Lane-1 declared the actually-resolved name.
+        2. strip ``{ds}__`` prefix — matches when Lane-1 declared the prefixed
+           form but the column landed bare (first-non-base in merge order).
+        3. add ``{ds}__`` prefix for any known dataset — matches when Lane-1
+           declared the bare form but the column landed prefixed (collided
+           with an earlier merged source).
+        Returns the resolved name on first hit, else None.
+        """
+        if not declared:
+            return None
+        if declared in predicted:
+            return declared
+        if "__" in declared:
+            stripped = declared.split("__", 1)[1]
+            if stripped in predicted:
+                return stripped
+        if per_source_names:
+            for ds in per_source_names:
+                candidate = f"{ds}__{declared}"
+                if candidate in predicted:
+                    return candidate
+        return None
+
+    def _hydrate_silver_derived_params(
+        self,
+        rec,
+        predicted: Set[str],
+        per_source_names: List[str],
+    ) -> bool:
+        """Lift `source_columns` into action-specific keys (``numerator``/
+        ``denominator``/``features``/``columns``) for renderer parity (FW-2).
+
+        ``add_silver_derived(..., source_columns=[a, b])`` only stores the
+        flat list; the renderer's ``_derived_ratio``/``_derived_interaction``/
+        ``_derived_composite`` consume action-specific keys. Without this
+        lift, the rendered code emits ``F.col("")`` (broken at runtime).
+        Returns True when at least one source was resolved into a renderer-
+        consumable key, False when the rec carries no ``source_columns``
+        (caller falls back to legacy resolution).
+        """
+        sources = rec.parameters.get("source_columns") or []
+        if not sources:
+            return False
+        resolved: List[str] = []
+        for col in sources:
+            r = self._resolve_silver_derived_source(col, predicted, per_source_names)
+            if r is None:
+                return False
+            resolved.append(r)
+        action = rec.action
+        if action == "ratio":
+            if len(resolved) < 2:
+                return False
+            rec.parameters.setdefault("numerator", resolved[0])
+            rec.parameters.setdefault("denominator", resolved[1])
+            rec.parameters["source_columns"] = resolved
+        elif action == "interaction":
+            if len(resolved) < 2:
+                return False
+            rec.parameters.setdefault("features", resolved[:2])
+            rec.parameters["source_columns"] = resolved
+        elif action == "composite":
+            rec.parameters.setdefault("columns", resolved)
+            rec.parameters["source_columns"] = resolved
+        else:
+            rec.parameters["source_columns"] = resolved
+        return True
 
     def _read_silver_merged_columns(self) -> Set[str]:
         """Return ONLY unpaired ``_x``/``_y``-suffixed columns from stale silver.
@@ -2608,6 +2734,7 @@ class FindingsParser:
 
         exploration_profile = self._load_exploration_feature_profile()
         best_model_type = self._read_best_model_type()
+        full_panel_fit = bool(getattr(self._intent, "production_full_panel_fit", False)) if self._intent is not None else False
 
         return TrainingConfig(
             split_strategy=split_strategy,
@@ -2618,6 +2745,7 @@ class FindingsParser:
             imbalance_strategy=imbalance_strategy,
             exploration_feature_profile=exploration_profile,
             best_model_type=best_model_type,
+            production_full_panel_fit=full_panel_fit,
         )
 
     def _load_exploration_feature_profile(self) -> Optional[Dict[str, Any]]:

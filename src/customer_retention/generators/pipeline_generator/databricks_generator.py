@@ -76,8 +76,11 @@ class DatabricksPipelineGenerator(PipelineGeneratorBase):
             self._write_silver(config),
             self._write_gold(config),
             self._write_training(config),
-            self._write_runner(config),
         ]
+        target_derive_path = self._write_target_derive(config)
+        if target_derive_path is not None:
+            generated_files.append(target_derive_path)
+        generated_files.append(self._write_runner(config))
         user_ext_path = self._write_user_extensions()
         if user_ext_path is not None:
             generated_files.append(user_ext_path)

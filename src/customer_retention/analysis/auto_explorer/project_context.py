@@ -196,6 +196,7 @@ class IntentConfig(BaseModel):
     split_strategy: SplitStrategy = SplitStrategy.TEMPORAL
     history_upper_limit: Optional[str] = None
     lookback_periods: Optional[int] = None
+    production_full_panel_fit: bool = False
 
     @field_validator("lookback_periods")
     @classmethod

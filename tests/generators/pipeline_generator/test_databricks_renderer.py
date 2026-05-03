@@ -2328,6 +2328,262 @@ class TestDatabricksLandingTemplate:
         ast.parse(result)
 
 
+class TestFW4LandingBronzeGuards:
+    """FW-4: codegen-time landing/bronze guards retiring NB10 §2.1, §2.3, §2.4, §2.6."""
+
+    @pytest.fixture
+    def landing_with_self_key_join(self):
+        from customer_retention.generators.pipeline_generator.models import (
+            KeyResolutionStepConfig,
+        )
+        source = SourceConfig(
+            name="opportunity_product",
+            path="/data/oppty_product.parquet",
+            format="parquet",
+            entity_key="OPPORTUNITY_ID",
+            time_column="created_at",
+            is_event_level=True,
+        )
+        return LandingLayerConfig(
+            source=source,
+            raw_source_path="/data/oppty_product.parquet",
+            raw_source_format="parquet",
+            entity_column="OPPORTUNITY_ID",
+            time_column="created_at",
+            target_column="churn",
+            key_resolution_steps=[
+                KeyResolutionStepConfig(
+                    bridge_dataset="opportunity",
+                    source_key="OPPORTUNITY_ID",
+                    bridge_key="OPPORTUNITY_ID",
+                    resolve_column="ACCOUNT_ID",
+                ),
+            ],
+        )
+
+    @pytest.fixture
+    def landing_with_distinct_key_join(self):
+        from customer_retention.generators.pipeline_generator.models import (
+            KeyResolutionStepConfig,
+        )
+        source = SourceConfig(
+            name="case",
+            path="/data/case.parquet",
+            format="parquet",
+            entity_key="CASE_ID",
+            time_column="created_at",
+            is_event_level=True,
+        )
+        return LandingLayerConfig(
+            source=source,
+            raw_source_path="/data/case.parquet",
+            raw_source_format="parquet",
+            entity_column="CASE_ID",
+            time_column="created_at",
+            target_column="churn",
+            key_resolution_steps=[
+                KeyResolutionStepConfig(
+                    bridge_dataset="account",
+                    source_key="CASE_ID",
+                    bridge_key="CASE_ID",
+                    resolve_column="ACCOUNT_ID",
+                ),
+            ],
+        )
+
+    def test_landing_disables_zorder_advisory_check(self, renderer, landing_with_self_key_join):
+        """§2.1 part 1: zorder stats-collection check is silenced via spark.conf.set
+        at the top of every landing notebook (advisory only; data correctness
+        unaffected)."""
+        result = renderer.render_landing("opportunity_product", landing_with_self_key_join)
+        assert (
+            'spark.conf.set("spark.databricks.delta.optimize.zorder.checkStatsCollection.enabled", "false")'
+            in result
+        )
+
+    def test_landing_bridge_alias_in_select(self, renderer, landing_with_self_key_join):
+        """§2.1 part 2: the bridge frame aliases its key as ``__cr_bridge_<KEY>``
+        before the join so source_key == bridge_key never produces UC duplicates."""
+        result = renderer.render_landing("opportunity_product", landing_with_self_key_join)
+        assert 'F.col("OPPORTUNITY_ID").alias("__cr_bridge_OPPORTUNITY_ID")' in result
+        assert 'dropDuplicates(["__cr_bridge_OPPORTUNITY_ID"])' in result
+
+    def test_landing_bridge_alias_in_join_predicate(self, renderer, landing_with_self_key_join):
+        """The join predicate references the alias, not the original bridge key."""
+        result = renderer.render_landing("opportunity_product", landing_with_self_key_join)
+        assert (
+            'df.join(_bridge, df["OPPORTUNITY_ID"] == _bridge["__cr_bridge_OPPORTUNITY_ID"], "inner")'
+            in result
+        )
+
+    def test_landing_drops_alias_unconditionally(self, renderer, landing_with_self_key_join):
+        """Drop the aliased column unconditionally — works for both
+        source_key == bridge_key (collision) and source_key != bridge_key paths."""
+        result = renderer.render_landing("opportunity_product", landing_with_self_key_join)
+        assert 'df = df.drop("__cr_bridge_OPPORTUNITY_ID")' in result
+
+    def test_landing_no_legacy_unaliased_join(self, renderer, landing_with_self_key_join):
+        """The legacy unaliased ``_bridge.select("KEY", ...)`` form must be gone."""
+        result = renderer.render_landing("opportunity_product", landing_with_self_key_join)
+        assert '_bridge.select("OPPORTUNITY_ID", "ACCOUNT_ID")' not in result
+
+    def test_landing_distinct_key_also_uses_alias(
+        self, renderer, landing_with_distinct_key_join,
+    ):
+        """Even when source_key != bridge_key, the alias path is used so
+        codegen has one shape for both cases."""
+        result = renderer.render_landing("case", landing_with_distinct_key_join)
+        assert 'F.col("CASE_ID").alias("__cr_bridge_CASE_ID")' in result
+        assert 'df = df.drop("__cr_bridge_CASE_ID")' in result
+
+    def test_landing_with_key_resolution_is_valid_python(
+        self, renderer, landing_with_self_key_join,
+    ):
+        result = renderer.render_landing("opportunity_product", landing_with_self_key_join)
+        ast.parse(result)
+
+
+class TestFW4BronzeEventGuards:
+    """FW-4: codegen-time bronze_event guards retiring NB10 §2.3, §2.4, §2.6."""
+
+    @pytest.fixture
+    def bronze_event_with_temporal_features(self):
+        from customer_retention.generators.pipeline_generator.models import (
+            TemporalFeatureConfig,
+        )
+        source = SourceConfig(
+            name="case",
+            path="/data/case.parquet",
+            format="parquet",
+            entity_key="customer_id",
+            time_column="created_date",
+            is_event_level=True,
+        )
+        return BronzeEventConfig(
+            source=source,
+            entity_column="customer_id",
+            time_column="created_date",
+            aggregation=AggregationWindowConfig(
+                windows=["7d", "30d"],
+                value_columns=["amount"],
+                agg_funcs=["sum", "mean"],
+                binary_columns=["is_active"],
+            ),
+            temporal_features=TemporalFeatureConfig(
+                lag_window_days=7,
+                num_lags=4,
+                lag_columns=["amount"],
+                lag_agg_funcs=["sum", "mean"],
+                feature_groups=["lagged_windows", "velocity"],
+            ),
+        )
+
+    @pytest.fixture
+    def bronze_event_minimal(self):
+        source = SourceConfig(
+            name="orders",
+            path="/data/orders.parquet",
+            format="parquet",
+            entity_key="customer_id",
+            time_column="order_date",
+            is_event_level=True,
+        )
+        return BronzeEventConfig(
+            source=source,
+            entity_column="customer_id",
+            time_column="order_date",
+            aggregation=AggregationWindowConfig(
+                windows=["30d"],
+                value_columns=["amount"],
+                agg_funcs=["sum"],
+                binary_columns=["is_paid"],
+            ),
+        )
+
+    def test_bronze_event_filters_temporal_value_cols_by_dtype(
+        self, renderer, bronze_event_with_temporal_features,
+    ):
+        """§2.3: ``compute_temporal_features`` narrows ``value_cols`` to
+        columns that exist on raw_df AND carry a numeric Spark dtype, so the
+        engineer's ``cast("DOUBLE")`` never sees a STRING flag."""
+        result = renderer.render_bronze_event("case", bronze_event_with_temporal_features)
+        assert "_raw_dtypes = dict(raw_df.dtypes)" in result
+        assert '_raw_dtypes.get(_c, "string") in _numeric_dtypes' in result
+        assert '_raw_dtypes.get(_c, "string").startswith("decimal")' in result
+
+    def test_bronze_event_temporal_value_cols_filter_includes_existence(
+        self, renderer, bronze_event_with_temporal_features,
+    ):
+        """The filter must AND the existence check with the dtype check —
+        a value column missing from raw_df is also dropped."""
+        result = renderer.render_bronze_event("case", bronze_event_with_temporal_features)
+        assert "if _c in raw_df.columns" in result
+
+    def test_bronze_event_no_unfiltered_value_cols_call(
+        self, renderer, bronze_event_with_temporal_features,
+    ):
+        """The raw, unfiltered ``engineer.compute(..., value_cols)`` shape must
+        not appear unguarded — value_cols is rebound to the filtered list before
+        the call site."""
+        result = renderer.render_bronze_event("case", bronze_event_with_temporal_features)
+        # The engineer call still references value_cols, but value_cols was rebound.
+        assert "engineer.compute(raw_df, ENTITY_COLUMN, TIME_COLUMN, value_cols)" in result
+        # The numeric filter must precede the engineer call.
+        filter_pos = result.index("_numeric_dtypes")
+        engineer_pos = result.index("engineer.compute(raw_df")
+        assert filter_pos < engineer_pos
+
+    def test_bronze_event_compute_temporal_features_call_wrapped(
+        self, renderer, bronze_event_with_temporal_features,
+    ):
+        """§2.4: the call site of ``compute_temporal_features(agg_df, raw_df)``
+        runs inside try/except so any unforeseen failure logs and falls
+        through to saveAsTable."""
+        result = renderer.render_bronze_event("case", bronze_event_with_temporal_features)
+        assert "try:" in result
+        assert "agg_df = compute_temporal_features(agg_df, raw_df)" in result
+        assert "except Exception as _temporal_err:" in result
+        assert "writing without temporal features" in result
+
+    def test_bronze_event_no_temporal_wrap_when_no_temporal_features(
+        self, renderer, bronze_event_minimal,
+    ):
+        """When the source has no temporal_features at all, the try/except
+        wrapper must not be emitted (otherwise we'd wrap nothing)."""
+        result = renderer.render_bronze_event("orders", bronze_event_minimal)
+        assert "compute_temporal_features" not in result
+        assert "writing without temporal features" not in result
+
+    def test_bronze_event_binary_columns_dtype_filter(
+        self, renderer, bronze_event_with_temporal_features,
+    ):
+        """§2.6: ``apply_event_aggregation`` narrows BINARY_COLUMNS to columns
+        with a numerically coercible Spark dtype before any F.mean/F.sum/F.max
+        touches them. Required global declaration so the rebind is visible."""
+        result = renderer.render_bronze_event("case", bronze_event_with_temporal_features)
+        assert "global BINARY_COLUMNS" in result
+        assert "_numeric_dtype_prefixes" in result
+        assert "BINARY_COLUMNS = [c for c in BINARY_COLUMNS if _is_numeric_dtype(c)]" in result
+
+    def test_bronze_event_binary_filter_appears_in_apply_event_aggregation(
+        self, renderer, bronze_event_with_temporal_features,
+    ):
+        """The dtype filter must be inside ``apply_event_aggregation`` and
+        BEFORE the aggregation builds — so BINARY_COLUMNS is narrowed by the
+        time F.mean is wired up."""
+        result = renderer.render_bronze_event("case", bronze_event_with_temporal_features)
+        func_pos = result.index("def apply_event_aggregation(df):")
+        filter_pos = result.index("BINARY_COLUMNS = [c for c in BINARY_COLUMNS if _is_numeric_dtype(c)]")
+        for_pos = result.index("for col in BINARY_COLUMNS:")
+        assert func_pos < filter_pos < for_pos
+
+    def test_bronze_event_with_fw4_guards_is_valid_python(
+        self, renderer, bronze_event_with_temporal_features,
+    ):
+        result = renderer.render_bronze_event("case", bronze_event_with_temporal_features)
+        ast.parse(result)
+
+
 class TestDatabricksConfigLandingTable:
     def test_config_includes_landing_table_function(self, renderer, sample_pipeline_config):
         sample_pipeline_config.landing = {
@@ -3178,18 +3434,19 @@ class TestDatabricksGoldColumnFiltering:
         encode_fn = encode_fn[: encode_fn.index("\ndef ")]
         assert "col not in df.columns" in encode_fn
 
-    def test_encode_one_hot_raises_when_target_missing(self, renderer, sample_pipeline_config):
-        """Per Coding_Practices: fail fast when a configured encoding target has
-        been dropped upstream. Silently warning and returning unchanged caused
-        the gold table to end up without `{col}_*` columns, surfacing only at
-        training time as an unhelpful `FeatureSpec parity violation` on the
-        gate."""
+    def test_encode_one_hot_failsafe_when_target_missing(self, renderer, sample_pipeline_config):
+        """FW-5 §2.8: when a configured encoding target has been dropped
+        upstream (feature_selection / leakage exclusion / silver merge prefix
+        collision), `_encode_one_hot` warns and returns df unchanged instead
+        of raising. Raising blocks gold's saveAsTable 6-7h after the silent
+        drop happened — the PARITY_IGNORED_FEATURES escape hatch in training
+        handles the missing `<col>_<category>` columns downstream."""
         result = renderer.render_gold(sample_pipeline_config)
         encode_fn = result[result.index("def _encode_one_hot") :]
         encode_fn = encode_fn[: encode_fn.index("\ndef ")]
-        assert "raise RuntimeError" in encode_fn
-        assert "one-hot encoding target" in encode_fn
-        assert "skipping one-hot encoding" not in encode_fn, "silent skip must be removed"
+        assert "raise RuntimeError" not in encode_fn
+        assert "_encode_one_hot: skipping" in encode_fn
+        assert "return df" in encode_fn
 
     def test_label_encode_checks_column_exists(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
@@ -3197,22 +3454,119 @@ class TestDatabricksGoldColumnFiltering:
         encode_fn = encode_fn[: encode_fn.index("\ndef ")]
         assert "col not in df.columns" in encode_fn
 
-    def test_label_encode_raises_when_target_missing(self, renderer, sample_pipeline_config):
+    def test_label_encode_failsafe_when_target_missing(self, renderer, sample_pipeline_config):
+        """FW-5 §2.8: same fail-safe path for label encoding."""
         result = renderer.render_gold(sample_pipeline_config)
         encode_fn = result[result.index("def _label_encode") :]
         encode_fn = encode_fn[: encode_fn.index("\ndef ")]
-        assert "raise RuntimeError" in encode_fn
-        assert "skipping label encoding" not in encode_fn, "silent skip must be removed"
+        assert "raise RuntimeError" not in encode_fn
+        assert "_label_encode: skipping" in encode_fn
 
-    def test_label_encode_preserves_column_name_for_parity_with_exploration(self, renderer, sample_pipeline_config):
+    def test_label_encode_uses_spark_sql_broadcast_join(self, renderer, sample_pipeline_config):
+        """FW-5 §2.9: replace pyspark.ml.StringIndexer with a Spark-SQL
+        broadcast-join body. Coding_Practices.md:112 forbids ml estimators
+        for data prep — StringIndexer.fit/transform overflows the Spark
+        Connect ML cache (10 GB cap) on multi-million-row x ~1.2K-col silver."""
         result = renderer.render_gold(sample_pipeline_config)
         encode_fn = result[result.index("def _label_encode") :]
         encode_fn = encode_fn[: encode_fn.index("\ndef ")]
-        assert 'withColumnRenamed' in encode_fn
-        assert 'alphabetAsc' in encode_fn
+        # ML estimator path must be gone.
+        assert "StringIndexer" not in encode_fn
+        assert "indexer.fit(df)" not in encode_fn
+        # SQL broadcast-join path must be present.
+        assert "F.broadcast(_lookup)" in encode_fn
+        assert "createDataFrame" in encode_fn
+        # Output column name preserved for parity with exploration.
+        assert "withColumnRenamed" in encode_fn
 
     def test_batch_scale_standard_still_valid_python(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
+        ast.parse(result)
+
+
+class TestFW5TrainingGuards:
+    """FW-5: codegen-time training guards retiring NB10 §2.8, §2.9, §2.10."""
+
+    def test_label_encode_no_pyspark_ml_import(self, renderer, sample_pipeline_config):
+        # FW-5 §2.9: the rendered gold script no longer pulls anything from
+        # pyspark.ml.feature for label encoding. The entire ml estimator
+        # path is retired in favor of a Spark-SQL broadcast-join body.
+        result = renderer.render_gold(sample_pipeline_config)
+        assert "from pyspark.ml.feature import" not in result
+        assert "indexer.fit(df).transform" not in result
+
+    def test_label_encode_drops_when_no_non_null_values(self, renderer, sample_pipeline_config):
+        """§2.9 edge case: an all-null categorical column would otherwise
+        emit an empty lookup DataFrame; the broadcast-join body short-circuits
+        and drops the column."""
+        result = renderer.render_gold(sample_pipeline_config)
+        encode_fn = result[result.index("def _label_encode") :]
+        encode_fn = encode_fn[: encode_fn.index("\ndef ")]
+        assert "if not _vals:" in encode_fn
+        assert "return df.drop(col)" in encode_fn
+
+    def test_training_emits_target_resolver_helper(self, renderer, sample_pipeline_config):
+        """§2.10: the training script defines a runtime resolver that
+        reconciles the configured TARGET_COLUMN literal against gold's
+        actual schema. The literal can drift from gold reality through
+        landing original_target rename misses, case mismatch, or silver
+        prefix collisions."""
+        result = renderer.render_training(sample_pipeline_config)
+        assert "def _resolve_target_column(df_columns, requested):" in result
+
+    def test_training_resolver_has_priority_ladder(self, renderer, sample_pipeline_config):
+        """The resolver checks: exact > case-insensitive > original_<target>
+        prefix > substring > fuzzy."""
+        result = renderer.render_training(sample_pipeline_config)
+        resolver = result[result.index("def _resolve_target_column") :]
+        resolver = resolver[: resolver.index("\ndef ")]
+        assert "if requested in df_columns:" in resolver
+        assert "case-insensitive" in resolver or "_lower[requested.lower()]" in resolver
+        assert '_orig = f"original_{requested}"' in resolver
+        assert "difflib.get_close_matches" in resolver
+
+    def test_training_resolver_raises_with_label_shaped_diagnostic(
+        self, renderer, sample_pipeline_config,
+    ):
+        """0 candidates -> hard fail with label-shaped column dump.
+        Auto-picking from a label-shaped tie would silently train on the
+        wrong column and ship a model scored against the wrong label."""
+        result = renderer.render_training(sample_pipeline_config)
+        resolver = result[result.index("def _resolve_target_column") :]
+        resolver = resolver[: resolver.index("\ndef ")]
+        assert "Label-shaped cols" in resolver
+        assert "_label_shaped" in resolver
+        assert "raise RuntimeError" in resolver
+
+    def test_training_resolver_called_before_target_filter(
+        self, renderer, sample_pipeline_config,
+    ):
+        """The resolver must run BEFORE df.filter(F.col(TARGET).isNotNull())
+        — otherwise UNRESOLVED_COLUMN aborts training with a literal
+        TARGET that does not exist on gold."""
+        result = renderer.render_training(sample_pipeline_config)
+        train_fn = result[result.index("def train_and_evaluate"):]
+        resolve_pos = train_fn.index("TARGET = _resolve_target_column(df.columns, TARGET_COLUMN)")
+        filter_pos = train_fn.index("df.filter(F.col(TARGET).isNotNull())")
+        assert resolve_pos < filter_pos
+
+    def test_training_rebinds_exclude_cols_after_resolve(
+        self, renderer, sample_pipeline_config,
+    ):
+        """`_EXCLUDE_COLS` is built at module-load time using the unresolved
+        TARGET literal. After resolution, it must be rebuilt with the
+        resolved name, otherwise feature_cols would treat the resolved
+        target as a feature."""
+        result = renderer.render_training(sample_pipeline_config)
+        train_fn = result[result.index("def train_and_evaluate"):]
+        train_fn = train_fn[: train_fn.index("\ndef ")] if "\ndef " in train_fn else train_fn
+        assert "global TARGET, _EXCLUDE_COLS" in train_fn
+        assert "_EXCLUDE_COLS = {TARGET, TIMESTAMP_COLUMN, ENTITY_KEY} | GOLD_METADATA_COLUMNS" in train_fn
+
+    def test_training_with_fw5_guards_is_valid_python(
+        self, renderer, sample_pipeline_config,
+    ):
+        result = renderer.render_training(sample_pipeline_config)
         ast.parse(result)
 
 
@@ -4132,6 +4486,39 @@ class TestDatabricksTrainingSpecSnapshot:
 
     def test_rendered_training_is_valid_python(self, renderer, config_with_feature_spec):
         result = renderer.render_training(config_with_feature_spec)
+        ast.parse(result)
+
+
+class TestDatabricksTrainingFullPanelFit:
+    @staticmethod
+    def _with_full_panel(config):
+        from customer_retention.generators.pipeline_generator.models import TrainingConfig
+        config.training = config.training or TrainingConfig()
+        config.training.production_full_panel_fit = True
+        return config
+
+    def test_full_panel_fit_skips_temporal_split_call(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(self._with_full_panel(sample_pipeline_config))
+        assert "train_df, test_df, cutoff_date = _temporal_split(" not in result
+
+    def test_full_panel_fit_binds_train_to_assembled(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(self._with_full_panel(sample_pipeline_config))
+        assert "    train_df = assembled\n" in result
+        assert "    test_df = assembled\n" in result
+        assert "Full-panel fit:" in result
+
+    def test_full_panel_fit_tags_mlflow_mode(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(self._with_full_panel(sample_pipeline_config))
+        assert 'mlflow.set_tag("training_mode", "full_panel_fit")' in result
+
+    def test_temporal_split_default_when_not_full_panel(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "train_df, test_df, cutoff_date = _temporal_split(" in result
+        assert 'mlflow.set_tag("training_mode", "temporal_split")' in result
+        assert "    train_df = assembled\n" not in result
+
+    def test_full_panel_fit_is_valid_python(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(self._with_full_panel(sample_pipeline_config))
         ast.parse(result)
 
 

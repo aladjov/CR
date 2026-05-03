@@ -1,3 +1,5 @@
+from typing import Any, List, Optional
+
 from jinja2 import Environment
 
 from .models import (
@@ -833,6 +835,23 @@ def _get_numeric_columns(df, value_columns):
 
 def apply_event_aggregation(df):
     \"\"\"Source: Event Aggregation > Time-Window Analysis\"\"\"
+    # Narrow BINARY_COLUMNS to numerically-coercible Spark dtypes. F.mean / F.sum
+    # / F.max over a STRING column raise [CAST_INVALID_INPUT] under UC ANSI mode
+    # (where spark.conf.set("spark.sql.ansi.enabled","false") is admin-locked
+    # and silently no-ops). The renderer's existence guard checks names, not
+    # dtypes, so a binary-by-semantics column stored as STRING (e.g. "Yes"/"No")
+    # would otherwise reach the aggregator and fail.
+    global BINARY_COLUMNS
+    _numeric_dtype_prefixes = (
+        "int", "bigint", "tinyint", "smallint",
+        "double", "float", "long", "short", "byte",
+        "boolean", "decimal",
+    )
+    _df_dtypes = dict(df.dtypes)
+    def _is_numeric_dtype(_col):
+        _t = (_df_dtypes.get(_col) or "").lower()
+        return any(_t.startswith(_p) for _p in _numeric_dtype_prefixes)
+    BINARY_COLUMNS = [c for c in BINARY_COLUMNS if _is_numeric_dtype(c)]
     reference_date = df.agg(F.max(TIME_COLUMN)).collect()[0][0]
     numeric_columns = _get_numeric_columns(df, {{ config.aggregation.value_columns }})
     _schema_cols = {f.name for f in df.schema.fields}
@@ -905,6 +924,23 @@ def compute_temporal_features(agg_df, raw_df):
     from customer_retention.stages.profiling.spark_temporal_feature_engineer import SparkTemporalFeatureEngineer
     from customer_retention.stages.profiling.temporal_feature_engineer import TemporalAggregationConfig
     value_cols = {{ config.temporal_features.lag_columns or (config.aggregation.value_columns if config.aggregation else []) }}
+    # Narrow value_cols to columns that (a) exist on raw_df AND (b) carry a
+    # numeric Spark dtype that can be cast to DOUBLE. The temporal engineer
+    # casts each entry to DOUBLE for windowed aggregation; STRING flags like
+    # "Yes"/"No" otherwise raise [CAST_INVALID_INPUT] under UC ANSI mode.
+    _numeric_dtypes = (
+        "double", "float", "int", "bigint", "smallint", "tinyint",
+        "long", "short", "byte", "integer",
+    )
+    _raw_dtypes = dict(raw_df.dtypes)
+    value_cols = [
+        _c for _c in value_cols
+        if _c in raw_df.columns
+        and (
+            _raw_dtypes.get(_c, "string") in _numeric_dtypes
+            or _raw_dtypes.get(_c, "string").startswith("decimal")
+        )
+    ]
     eng_config = TemporalAggregationConfig(
         lag_window_days={{ config.temporal_features.lag_window_days }},
         num_lags={{ config.temporal_features.num_lags }},
@@ -965,7 +1001,19 @@ def run_bronze_event():
     agg_df, reference_date = apply_event_aggregation(df)
 {%- endif %}
 {%- if config.temporal_features and config.temporal_features.has_renderable_content() %}
-    agg_df = compute_temporal_features(agg_df, raw_df)
+    # Belt-and-suspenders: any unforeseen failure inside compute_temporal_features
+    # (empty filtered value_cols, schema drift, etc.) must not block the producer.
+    # The aggregation rollups in agg_df are already populated; we keep saveAsTable
+    # unconditional so bronze_entity_*_aggregated consumers can still read the
+    # producer table. Downstream missing temporal columns are handled at silver.
+    try:
+        agg_df = compute_temporal_features(agg_df, raw_df)
+    except Exception as _temporal_err:
+        print(
+            "[bronze_event] compute_temporal_features failed for", SOURCE_NAME,
+            "->", str(_temporal_err)[:200],
+            "; writing without temporal features",
+        )
 {%- endif %}
 {%- if config.text_features %}
     agg_df = compute_text_features(agg_df, raw_df)
@@ -1601,12 +1649,17 @@ from customer_retention.core.naming import sanitize_column_token
 
 def _encode_one_hot(df, col, max_categories=100):
     if col not in df.columns:
-        raise RuntimeError(
-            f"[GOLD] one-hot encoding target '{col}' missing from DataFrame. "
-            "An upstream step (feature_selection, leakage exclusion, or silver merge) "
-            "dropped it before apply_encodings ran. Regenerate the pipeline — the "
-            "post-encoding '{col}_*' columns will otherwise be silently absent from gold."
+        # Fail-safe: the encoder column was dropped upstream (feature_selection,
+        # leakage exclusion, silver merge prefix collision, etc.). Raising here
+        # would block gold's saveAsTable 6-7h after the silent drop happened.
+        # Instead, log and skip — gold ships without the affected one-hot
+        # columns. Training's PARITY_IGNORED_FEATURES is the operator escape
+        # hatch for the missing `<col>_<category>` columns.
+        print(
+            f"[GOLD] _encode_one_hot: skipping {col!r} - not in df.columns; "
+            f"will be absent from gold"
         )
+        return df
     categories = [row[col] for row in df.select(col).distinct().collect() if row[col] is not None]
     if len(categories) > max_categories:
         print(f"WARNING: column '{col}' has {len(categories)} categories (>{max_categories}), using label encoding instead")
@@ -1619,14 +1672,40 @@ def _encode_one_hot(df, col, max_categories=100):
 
 def _label_encode(df, col):
     if col not in df.columns:
-        raise RuntimeError(
-            f"[GOLD] label encoding target '{col}' missing from DataFrame. "
-            "An upstream step dropped it before apply_encodings ran."
+        # Same fail-safe as _encode_one_hot: warn + return df unchanged so gold
+        # completes; PARITY_IGNORED_FEATURES handles the downstream miss.
+        print(
+            f"[GOLD] _label_encode: skipping {col!r} - not in df.columns; "
+            f"will be absent from gold"
         )
-    from pyspark.ml.feature import StringIndexer
-    tmp = f"__{col}_idx"
-    indexer = StringIndexer(inputCol=col, outputCol=tmp, handleInvalid="keep", stringOrderType="alphabetAsc")
-    df = indexer.fit(df).transform(df).drop(col).withColumnRenamed(tmp, col)
+        return df
+    # Spark-SQL broadcast-join label encoding. Coding_Practices.md:112 forbids
+    # pyspark.ml estimators for data prep on shared clusters — the indexer fit
+    # path overflows the Spark Connect ML cache (10 GB cap) on multi-million-row
+    # silver outputs. Collect distinct non-null values, build a small
+    # (value, index) DataFrame, broadcast-join, coalesce nulls/unknowns to
+    # len(values).
+    _vals = sorted({
+        row[0] for row in
+        df.select(col).where(F.col(col).isNotNull()).distinct().collect()
+    })
+    if not _vals:
+        print(f"[GOLD] _label_encode: {col!r} has no non-null values; dropping")
+        return df.drop(col)
+    _n = len(_vals)
+    _col_dtype = df.schema[col].dataType.simpleString()
+    _lookup = df.sparkSession.createDataFrame(
+        [(_v, _i) for _i, _v in enumerate(_vals)],
+        schema=f"{col} {_col_dtype}, __idx int",
+    )
+    _tmp = f"__{col}_idx"
+    df = (
+        df.join(F.broadcast(_lookup), on=col, how="left")
+          .withColumn(_tmp, F.coalesce(F.col("__idx"), F.lit(_n)).cast("int"))
+          .drop("__idx")
+          .drop(col)
+          .withColumnRenamed(_tmp, col)
+    )
     return df
 
 def _batch_scale_standard(df, cols):
@@ -1914,6 +1993,7 @@ dbutils.notebook.exit(_summary)
 # COMMAND ----------
 {% set best_model_type = config.training.best_model_type if config.training else None %}
 {% set production_cv_folds = config.training.production_cv_folds if config.training else None %}
+{% set production_full_panel_fit = config.training.production_full_panel_fit if config.training else False %}
 {% set feature_spec_path = config.feature_spec_path %}
 import json
 import logging
@@ -2222,11 +2302,70 @@ def _promote_to_production(registered_name, parent_run_id):
     print(f"[TRAINING] Alias @production -> {registered_name} v{_latest.version}")
     return _latest.version
 
+def _resolve_target_column(df_columns, requested):
+    # Resolve TARGET_COLUMN against the actual gold schema. The configured
+    # `requested` literal can drift from gold reality when landing's
+    # original_target_column rename was unset, or a case mismatch
+    # ("Churned" vs "churned") leaks through, or silver's prefix collision
+    # moved the target under `<ds>__<col>`. Priority: exact > case-insensitive
+    # > original_<target> prefix > substring > fuzzy. Raises with a label-
+    # shaped diagnostic when no candidate is unambiguous.
+    import difflib
+
+    if requested in df_columns:
+        return requested
+    _lower = {c.lower(): c for c in df_columns}
+    if requested.lower() in _lower:
+        resolved = _lower[requested.lower()]
+        print(f"[TRAINING] target_column resolver: case-insensitive {requested!r} -> {resolved!r}")
+        return resolved
+    _ranked, _seen = [], set()
+    def _add(_name, _why):
+        if _name and _name not in _seen and _name in df_columns:
+            _ranked.append((_name, _why)); _seen.add(_name)
+    _orig = f"original_{requested}"
+    _add(_orig if _orig in df_columns else _lower.get(_orig.lower()), "original_prefix")
+    for _c in df_columns:
+        if requested.lower() in _c.lower():
+            _add(_c, "substring")
+    for _c in difflib.get_close_matches(requested, list(df_columns), n=5, cutoff=0.6):
+        _add(_c, "fuzzy")
+    if len(_ranked) == 1:
+        resolved, why = _ranked[0]
+        print(f"[TRAINING] target_column resolver: {requested!r} -> {resolved!r} ({why})")
+        return resolved
+    _label_shaped = [c for c in df_columns if any(t in c.lower() for t in
+                     ("churn", "label", "target", "flag", "is_", "has_", "_y"))]
+    if not _ranked:
+        raise RuntimeError(
+            f"[TRAINING] target_column {requested!r} not found in gold and no "
+            f"unambiguous candidate exists. Label-shaped cols ({len(_label_shaped)}): "
+            f"{_label_shaped[:30]}. First 30 cols: {list(df_columns)[:30]}. "
+            "Fix the layer that dropped the target (typically landing's "
+            "original_target_column rename or silver's prefix collision)."
+        )
+    raise RuntimeError(
+        f"[TRAINING] target_column {requested!r} ambiguous in gold — "
+        f"candidates: {[c for c, _ in _ranked]}. Pin TARGET_COLUMN in "
+        "config.py to disambiguate, or regenerate findings with the "
+        "correct target_column."
+    )
+
+
 def train_and_evaluate():
+    global TARGET, _EXCLUDE_COLS
     _results = {"models": {}, "feature_profile": {}}
     with log_timing("load_gold_table", logger):
         df = load_training_data()
     raw_count = _assert_rows(df.count(), "gold_table")
+    # Runtime target_column resolution: gold's actual schema is the
+    # source-of-truth. The configured TARGET literal can diverge when
+    # landing's original_target_column rename was unset, when case mismatch
+    # leaks through, or when silver's prefix collision moved the column.
+    # Rebind TARGET (and refresh _EXCLUDE_COLS so the resolved name is
+    # excluded from feature_cols too) before any df.filter touches it.
+    TARGET = _resolve_target_column(df.columns, TARGET_COLUMN)
+    _EXCLUDE_COLS = {TARGET, TIMESTAMP_COLUMN, ENTITY_KEY} | GOLD_METADATA_COLUMNS
     col_types = {}
     for field in df.schema.fields:
         col_types.setdefault(field.dataType.typeName(), []).append(field.name)
@@ -2363,6 +2502,20 @@ def train_and_evaluate():
                     _surv_str = ", ".join(_survivors[:3]) if _survivors else "none found"
                     print(f"[TRAINING]   {_c}: {_dropped_strong[_c]} -> survived by: {_surv_str}")
 
+{% if production_full_panel_fit %}
+    # Full-panel fit: skip temporal split. Both `train_df` and `test_df`
+    # bind to the full assembled frame so per-model evaluation reports
+    # train metrics (no holdout, no CV). Triggered by
+    # `TrainingConfig.production_full_panel_fit=True`.
+    train_df = assembled
+    test_df = assembled
+    cutoff_date = None
+    train_count = _assert_rows(train_df.count(), "full_panel_fit")
+    test_count = train_count
+    print(f"[TRAINING] Full-panel fit: train={train_count:,} rows (no holdout, no CV)")
+    split_info = {"mode": "full_panel_fit", "train_count": train_count, "test_count": 0}
+    _results["split"] = split_info
+{% else %}
     with log_timing("temporal_split", logger):
         train_df, test_df, cutoff_date = _temporal_split(assembled, {% if feature_spec_path %}PRODUCTION_TEST_SIZE{% else %}{{ config.training.test_size if config.training else 0.2 }}{% endif %})
     train_count = _assert_rows(train_df.count(), "train_set_after_split")
@@ -2371,6 +2524,7 @@ def train_and_evaluate():
     split_info = {"cutoff_date": str(cutoff_date), "train_count": train_count, "test_count": test_count}
     print(f"[TRAINING] Split info: {split_info}")
     _results["split"] = split_info
+{% endif %}
 
     label_dist = {float(row["label"]): row["count"] for row in train_df.groupBy("label").count().collect()}
     print(f"[TRAINING] Label distribution: {label_dist}")
@@ -2434,6 +2588,11 @@ def train_and_evaluate():
         mlflow.set_tag("timestamp_column", TIMESTAMP_COLUMN)
         if RECOMMENDATIONS_HASH:
             mlflow.set_tag("recommendations_hash", RECOMMENDATIONS_HASH)
+{% if production_full_panel_fit %}
+        mlflow.set_tag("training_mode", "full_panel_fit")
+{% else %}
+        mlflow.set_tag("training_mode", "temporal_split")
+{% endif %}
         mlflow.log_params({"train_samples": train_count, "test_samples": test_count, "n_features": len(feature_cols)})
 
         for name, model in models.items():
@@ -2564,6 +2723,15 @@ from pyspark.sql import functions as F
 
 # COMMAND ----------
 
+# Disable Delta's advisory zorder stats-collection check. The check fires
+# when a zorder target column falls outside the default 32-column stats
+# window; without this, executeZOrderBy aborts AFTER a successful write
+# with [DELTA_ZORDERING_ON_COLUMN_WITHOUT_STATS]. Advisory only — data
+# correctness and skipping behavior are unaffected.
+spark.conf.set("spark.databricks.delta.optimize.zorder.checkStatsCollection.enabled", "false")
+
+# COMMAND ----------
+
 SOURCE_NAME = "{{ name }}"
 ENTITY_COLUMN = "{{ config.entity_column }}"
 TIME_COLUMN = "{{ config.time_column }}"
@@ -2671,11 +2839,13 @@ def resolve_entity_key(df):
     \"\"\"Source: Intent Contract > Key Resolution\"\"\"
 {%- for step in config.key_resolution_steps %}
     _bridge = spark.read.format("delta").table(landing_table("{{ step.bridge_dataset }}"))
-    _bridge = _bridge.select("{{ step.bridge_key }}", "{{ step.resolve_column }}").dropDuplicates(["{{ step.bridge_key }}"])
-    df = df.join(_bridge, df["{{ step.source_key }}"] == _bridge["{{ step.bridge_key }}"], "inner")
-{%- if step.source_key != step.bridge_key %}
-    df = df.drop("{{ step.bridge_key }}")
-{%- endif %}
+    # Alias the bridge key as `__cr_bridge_<KEY>` so the inner join never produces
+    # two physical columns named identically when ``source_key == bridge_key``.
+    # UC's case-insensitive duplicate detection rejects such schemas at
+    # saveAsTable; aliasing + unconditional drop sidesteps the collision.
+    _bridge = _bridge.select(F.col("{{ step.bridge_key }}").alias("__cr_bridge_{{ step.bridge_key }}"), "{{ step.resolve_column }}").dropDuplicates(["__cr_bridge_{{ step.bridge_key }}"])
+    df = df.join(_bridge, df["{{ step.source_key }}"] == _bridge["__cr_bridge_{{ step.bridge_key }}"], "inner")
+    df = df.drop("__cr_bridge_{{ step.bridge_key }}")
 {%- endfor %}
     return df
 {%- endif %}
@@ -2738,6 +2908,75 @@ _summary = f"{result.count():,} rows, {len(result.columns)} columns"
 # Row-limited display (landing is narrow but uniform pattern across stages).
 display(result.limit(20))
 dbutils.notebook.exit(_summary)
+""",
+    "databricks_target_derive.py.j2": """# Databricks notebook source
+# MAGIC %md
+# MAGIC # Target Derivation: {{ config.name }}
+# MAGIC
+# MAGIC FW-3 imperative-lane replay. Reads the per-dataset `landing_*` UC
+# MAGIC tables that each registered function declares as inputs, calls the
+# MAGIC function via `user_extensions`, and writes the per-dataset outputs
+# MAGIC back to `landing_<dataset>` (overwrite mode). Bronze always reads
+# MAGIC `landing_<dataset>`, so the post-derive enrichment propagates
+# MAGIC automatically without any operator-side path rewiring.
+
+# COMMAND ----------
+
+# MAGIC %run ../config
+
+# COMMAND ----------
+
+import sys
+from pathlib import Path
+from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+
+# Resolve the pipeline root (one level above this `target_derive/` script)
+# and make the sibling `user_extensions.py` importable. `__file__` is set
+# under `dbutils.notebook.run`; the bare-CWD fallback covers exotic exec
+# contexts and unit-test invocations.
+try:
+    _PIPELINE_DIR = Path(__file__).resolve().parent.parent
+except NameError:
+    _PIPELINE_DIR = Path.cwd().parent
+if str(_PIPELINE_DIR) not in sys.path:
+    sys.path.insert(0, str(_PIPELINE_DIR))
+
+try:
+    _exp_dir = dbutils.widgets.get("experiments_dir")
+    _run_id = dbutils.widgets.get("run_id")
+    _NAMESPACE = RunNamespace(root=Path(_exp_dir), run_id=_run_id) if _exp_dir and _run_id else None
+except Exception:
+    _NAMESPACE = RunNamespace.from_env_or_latest()
+
+# COMMAND ----------
+
+{% for step in steps %}
+# ── target_derive: {{ step.name }} ─────────────────────────────────────
+print("[target_derive] running {{ step.name }} on datasets={{ step.datasets }}")
+from user_extensions import {{ step.name }} as _fn_{{ loop.index }}
+
+_frames_{{ loop.index }} = {
+{%- for ds in step.datasets %}
+    "{{ ds }}": spark.table(f"{CATALOG}.{SCHEMA}.landing_{{ ds }}"),
+{%- endfor %}
+}
+_result_{{ loop.index }} = _fn_{{ loop.index }}(spark, _frames_{{ loop.index }}, _NAMESPACE)
+
+if _result_{{ loop.index }} is None:
+    print("[target_derive] {{ step.name }}: returned None — no outputs to write")
+else:
+    for _ds_name, _df in _result_{{ loop.index }}.items():
+        _table = f"{CATALOG}.{SCHEMA}.landing_{_ds_name}"
+        (_df.write.format("delta")
+            .mode("overwrite")
+            .option("overwriteSchema", "true")
+            .saveAsTable(_table))
+        print(f"[target_derive] wrote {_table}: {_df.count():,} rows, {len(_df.columns)} columns")
+
+# COMMAND ----------
+
+{% endfor %}
+print("[target_derive] complete: {{ steps|length }} step(s)")
 """,
     "databricks_runner.py.j2": """# Databricks notebook source
 # MAGIC %md
@@ -2822,6 +3061,23 @@ def run_notebook(path, timeout=86400):
 {% for name in sorted_landing_names(config.landing) %}
 run_notebook("landing/landing_{{ name }}")
 {% endfor %}
+
+# COMMAND ----------
+{% endif %}
+{% if target_derive_steps %}
+
+# MAGIC %md
+# MAGIC ## Target-Derive Phase (FW-3 imperative replay)
+# MAGIC
+# MAGIC Runs registered cross-dataset functions whose `expected_stage` is
+# MAGIC `target_derive` between landing and bronze. Each function reads its
+# MAGIC declared `landing_<dataset>` UC tables, mutates them, and writes the
+# MAGIC enriched output back to `landing_<dataset>` (overwrite mode). Bronze
+# MAGIC consumes the post-derive view transparently.
+
+# COMMAND ----------
+
+run_notebook("target_derive/run_target_derive")
 
 # COMMAND ----------
 {% endif %}
@@ -3152,6 +3408,7 @@ class DatabricksCodeRenderer:
         "bronze": "databricks_bronze.py.j2",
         "bronze_event": "databricks_bronze_event.py.j2",
         "bronze_entity": "databricks_bronze_entity.py.j2",
+        "target_derive": "databricks_target_derive.py.j2",
         "silver": "databricks_silver.py.j2",
         "gold": "databricks_gold.py.j2",
         "training": "databricks_training.py.j2",
@@ -3241,8 +3498,15 @@ class DatabricksCodeRenderer:
     def render_training(self, config: PipelineConfig) -> str:
         return self._render("training", config=config)
 
-    def render_runner(self, config: PipelineConfig) -> str:
-        return self._render("runner", config=config)
+    def render_runner(self, config: PipelineConfig, target_derive_steps: Optional[List[Any]] = None) -> str:
+        return self._render(
+            "runner",
+            config=config,
+            target_derive_steps=list(target_derive_steps or []),
+        )
+
+    def render_target_derive(self, config: PipelineConfig, steps: List[Any]) -> str:
+        return self._render("target_derive", config=config, steps=steps)
 
     def render_exploration_runner(
         self, project_name: str, datasets, notebooks_base_path: str, findings_base_path: str,

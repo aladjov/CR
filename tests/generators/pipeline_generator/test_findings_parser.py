@@ -8417,3 +8417,276 @@ class TestBuildLifecycleConfigLandingSiblingPreferred:
         assert cfg is not None
         assert cfg.include_lifecycle_quadrant is True
         assert cfg.include_recency_bucket is True
+
+
+class TestFW2SilverCollisionParity:
+    """FW-2: predict TemporalMerger collision-aware silver shape and resolve
+    registered silver-derived `source_columns` against it. Closes C5/C10/C15
+    where Lane-1 declared `<ds>__<col>` but the column landed bare (or vice
+    versa) post-merge."""
+
+    def _make_parser(self, raw_source_columns):
+        from customer_retention.generators.pipeline_generator.findings_parser import (
+            FindingsParser,
+        )
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._raw_source_columns = raw_source_columns
+        parser._source_findings_paths = {}
+        return parser
+
+    def _two_event_config(self):
+        from customer_retention.generators.pipeline_generator.models import (
+            AggregationWindowConfig,
+            BronzeEventConfig,
+            BronzeLayerConfig,
+            PipelineConfig,
+            SilverLayerConfig,
+            SourceConfig,
+        )
+        account = SourceConfig(
+            name="account", path="a.csv", format="csv",
+            entity_key="account_id", raw_source_path="/data/a.csv",
+        )
+        contract = SourceConfig(
+            name="contract", path="c.csv", format="csv",
+            entity_key="account_id", raw_source_path="/data/c.csv",
+            is_event_level=True, time_column="event_timestamp",
+        )
+        subscription = SourceConfig(
+            name="subscription", path="s.csv", format="csv",
+            entity_key="account_id", raw_source_path="/data/s.csv",
+            is_event_level=True, time_column="event_timestamp",
+        )
+        config = PipelineConfig(
+            name="t", target_column="churned",
+            sources=[account, contract, subscription],
+            bronze={"account": BronzeLayerConfig(source=account)},
+            silver=SilverLayerConfig(), gold=None, output_dir=".",
+        )
+        agg = AggregationWindowConfig(
+            windows=["7d", "30d"],
+            value_columns=[], agg_funcs=[],
+            categorical_columns=["event_type"],
+            categorical_agg_funcs=["value_counts"],
+        )
+        config.bronze_event["contract"] = BronzeEventConfig(
+            source=contract, entity_column="account_id", time_column="event_timestamp",
+            aggregation=agg, value_counts_columns=["event_type"],
+        )
+        config.bronze_event["subscription"] = BronzeEventConfig(
+            source=subscription, entity_column="account_id", time_column="event_timestamp",
+            aggregation=agg, value_counts_columns=["event_type"],
+        )
+        return config
+
+    def test_predicts_bare_for_first_non_base_source(self):
+        parser = self._make_parser({"account": {"account_id", "churned"}})
+        parser._value_counts_by_source = {
+            "contract": {"event_type": ["start", "terminate"]},
+            "subscription": {"event_type": ["start", "terminate"]},
+        }
+        config = self._two_event_config()
+        merged, name_to_source = parser._predict_silver_post_merge_columns(config)
+        # contract enumerated before subscription → its event_type cols enter
+        # bare (no collision yet); subscription's collide and get prefixed.
+        assert "event_type_start_count_7d" in merged
+        assert name_to_source["event_type_start_count_7d"] == "contract"
+        assert "subscription__event_type_start_count_7d" in merged
+        assert name_to_source["subscription__event_type_start_count_7d"] == "subscription"
+
+    def test_resolves_declared_prefix_to_bare_when_first_non_base(self):
+        parser = self._make_parser({"account": {"account_id", "churned"}})
+        parser._value_counts_by_source = {
+            "contract": {"event_type": ["start", "terminate"]},
+            "subscription": {"event_type": ["start", "terminate"]},
+        }
+        config = self._two_event_config()
+        merged, _ = parser._predict_silver_post_merge_columns(config)
+        per_source = ["account", "contract", "subscription"]
+        # Operator declared the double-prefix form for contract — but contract
+        # was first non-base, so its column landed bare. Resolver should bridge.
+        assert (
+            parser._resolve_silver_derived_source(
+                "contract__event_type_start_count_7d", merged, per_source
+            )
+            == "event_type_start_count_7d"
+        )
+
+    def test_resolves_declared_bare_to_prefix_when_collision(self):
+        parser = self._make_parser({"account": {"account_id", "churned"}})
+        parser._value_counts_by_source = {
+            "contract": {"event_type": ["start", "terminate"]},
+            "subscription": {"event_type": ["start", "terminate"]},
+        }
+        config = self._two_event_config()
+        merged, _ = parser._predict_silver_post_merge_columns(config)
+        per_source = ["account", "contract", "subscription"]
+        # Subscription column landed prefixed because of contract collision —
+        # resolver finds the prefix variant from a bare declaration.
+        resolved = parser._resolve_silver_derived_source(
+            "event_type_terminate_count_7d", merged, per_source
+        )
+        # The bare form is itself in merged (from contract), so resolver picks
+        # that match first — confirming literal precedence.
+        assert resolved == "event_type_terminate_count_7d"
+
+    def test_hydrate_lifts_source_columns_to_numerator_denominator(self):
+        from customer_retention.analysis.auto_explorer.layered_recommendations import (
+            LayeredRecommendation,
+            RecommendationRegistry,
+            SilverRecommendations,
+        )
+        parser = self._make_parser({"account": {"account_id", "churned"}})
+        parser._value_counts_by_source = {
+            "contract": {"event_type": ["start", "terminate"]},
+            "subscription": {"event_type": ["start", "terminate"]},
+        }
+        config = self._two_event_config()
+        rec = LayeredRecommendation(
+            id="r1", layer="silver", category="derived_column", action="ratio",
+            target_column="contract_terminate_to_start_ratio_7d",
+            parameters={
+                "feature_type": "ratio",
+                "expression": "fillna(contract__event_type_terminate_count_7d, 0) / "
+                              "(fillna(contract__event_type_start_count_7d, 0) + 1)",
+                "source_columns": [
+                    "contract__event_type_terminate_count_7d",
+                    "contract__event_type_start_count_7d",
+                ],
+            },
+            rationale="ratio", source_notebook="06",
+        )
+        registry = RecommendationRegistry()
+        registry.silver = SilverRecommendations(
+            entity_column="account_id", derived_columns=[rec],
+        )
+        parser._apply_silver_recommendations(config, registry)
+        # Rec must survive the codegen gate — Lane-1 declared the prefix shape
+        # but contract landed bare; the resolver lifts it.
+        assert len(config.silver.derived_columns) == 1
+        step = config.silver.derived_columns[0]
+        assert step.parameters["numerator"] == "event_type_terminate_count_7d"
+        assert step.parameters["denominator"] == "event_type_start_count_7d"
+
+    def test_hydrate_handles_subscription_prefix_round_trip(self):
+        from customer_retention.analysis.auto_explorer.layered_recommendations import (
+            LayeredRecommendation,
+            RecommendationRegistry,
+            SilverRecommendations,
+        )
+        parser = self._make_parser({"account": {"account_id", "churned"}})
+        parser._value_counts_by_source = {
+            "contract": {"event_type": ["start", "terminate"]},
+            "subscription": {"event_type": ["start", "terminate"]},
+        }
+        config = self._two_event_config()
+        rec = LayeredRecommendation(
+            id="r2", layer="silver", category="derived_column", action="ratio",
+            target_column="subscription_terminate_to_start_ratio_7d",
+            parameters={
+                "feature_type": "ratio",
+                "source_columns": [
+                    "subscription__event_type_terminate_count_7d",
+                    "subscription__event_type_start_count_7d",
+                ],
+            },
+            rationale="ratio", source_notebook="06",
+        )
+        registry = RecommendationRegistry()
+        registry.silver = SilverRecommendations(
+            entity_column="account_id", derived_columns=[rec],
+        )
+        parser._apply_silver_recommendations(config, registry)
+        assert len(config.silver.derived_columns) == 1
+        step = config.silver.derived_columns[0]
+        # Subscription was the colliding source — its declared prefix matches
+        # the predicted prefix shape, so resolver picks the literal.
+        assert step.parameters["numerator"] == "subscription__event_type_terminate_count_7d"
+        assert step.parameters["denominator"] == "subscription__event_type_start_count_7d"
+
+    def test_hydrate_skips_when_no_source_columns(self):
+        from customer_retention.analysis.auto_explorer.layered_recommendations import (
+            LayeredRecommendation,
+            RecommendationRegistry,
+            SilverRecommendations,
+        )
+        parser = self._make_parser({"account": {"account_id", "churned", "age"}})
+        config = self._two_event_config()
+        rec = LayeredRecommendation(
+            id="r3", layer="silver", category="derived_column", action="ratio",
+            target_column="age_to_churned",
+            parameters={"numerator": "age", "denominator": "churned"},
+            rationale="legacy ratio", source_notebook="06",
+        )
+        registry = RecommendationRegistry()
+        registry.silver = SilverRecommendations(
+            entity_column="account_id", derived_columns=[rec],
+        )
+        parser._apply_silver_recommendations(config, registry)
+        assert len(config.silver.derived_columns) == 1
+        step = config.silver.derived_columns[0]
+        assert step.parameters["numerator"] == "age"
+        assert step.parameters["denominator"] == "churned"
+
+    def test_hydrate_drops_when_sources_truly_missing(self):
+        from customer_retention.analysis.auto_explorer.layered_recommendations import (
+            LayeredRecommendation,
+            RecommendationRegistry,
+            SilverRecommendations,
+        )
+        parser = self._make_parser({"account": {"account_id", "churned"}})
+        parser._value_counts_by_source = {
+            "contract": {"event_type": ["start", "terminate"]},
+        }
+        config = self._two_event_config()
+        rec = LayeredRecommendation(
+            id="r4", layer="silver", category="derived_column", action="ratio",
+            target_column="bogus_ratio",
+            parameters={
+                "feature_type": "ratio",
+                "source_columns": ["nonexistent_col_a", "nonexistent_col_b"],
+            },
+            rationale="bogus", source_notebook="06",
+        )
+        registry = RecommendationRegistry()
+        registry.silver = SilverRecommendations(
+            entity_column="account_id", derived_columns=[rec],
+        )
+        parser._apply_silver_recommendations(config, registry)
+        assert len(config.silver.derived_columns) == 0
+
+    def test_hydrate_composite_lifts_columns(self):
+        from customer_retention.analysis.auto_explorer.layered_recommendations import (
+            LayeredRecommendation,
+            RecommendationRegistry,
+            SilverRecommendations,
+        )
+        parser = self._make_parser({"account": {"account_id", "churned"}})
+        parser._value_counts_by_source = {
+            "contract": {"event_type": ["start", "terminate"]},
+            "subscription": {"event_type": ["start", "terminate"]},
+        }
+        config = self._two_event_config()
+        rec = LayeredRecommendation(
+            id="r5", layer="silver", category="derived_column", action="composite",
+            target_column="event_type_total_count_7d",
+            parameters={
+                "feature_type": "composite",
+                "source_columns": [
+                    "contract__event_type_start_count_7d",
+                    "subscription__event_type_start_count_7d",
+                ],
+            },
+            rationale="composite", source_notebook="06",
+        )
+        registry = RecommendationRegistry()
+        registry.silver = SilverRecommendations(
+            entity_column="account_id", derived_columns=[rec],
+        )
+        parser._apply_silver_recommendations(config, registry)
+        assert len(config.silver.derived_columns) == 1
+        step = config.silver.derived_columns[0]
+        assert step.parameters["columns"] == [
+            "event_type_start_count_7d",
+            "subscription__event_type_start_count_7d",
+        ]

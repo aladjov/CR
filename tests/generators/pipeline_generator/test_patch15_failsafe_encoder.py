@@ -201,9 +201,11 @@ class TestPatch15RegexRewrite:
 # ---------------------------------------------------------------------------
 
 class TestPatch15AgainstRenderedGold:
-    def test_rewrites_real_rendered_gold(self):
-        """Render gold via DatabricksCodeRenderer and confirm the patch's
-        regex matches both encoder definitions in the actual output."""
+    def test_patch15_is_noop_after_fw5(self):
+        # FW-5 retires this patch: the framework now emits the fail-safe
+        # encoder shape natively (warn + return df, no raise). The operator
+        # patch 15 becomes a no-op against fresh rendered gold; its regex
+        # matches 0 times because no raise block targets the column guard.
         from customer_retention.generators.pipeline_generator.databricks_renderer import (
             DatabricksCodeRenderer,
         )
@@ -235,20 +237,19 @@ class TestPatch15AgainstRenderedGold:
         renderer = DatabricksCodeRenderer(catalog="cat", schema="sch")
         rendered = renderer.render_gold(cfg)
 
-        # Both encoder definitions must be present in the rendered file
+        # Both encoder definitions are still present.
         assert "def _encode_one_hot(df, col, max_categories=100):" in rendered
         assert "def _label_encode(df, col):" in rendered
-        # Both must contain the raise-block the patch targets
-        assert rendered.count("raise RuntimeError") == 2
+        # FW-5 native shape: fail-safe warn + return df (no raise on guard).
+        assert "_encode_one_hot: skipping" in rendered
+        assert "_label_encode: skipping" in rendered
 
-        # Apply the patch
+        # Patch 15's regex no longer matches — the framework already emits
+        # the fail-safe shape, so the operator patch is a no-op.
         patched, n = PATCH15_PATTERN.subn(PATCH15_REPLACEMENT, rendered)
-        assert n == 2, f"expected 2 rewrites against real rendered gold, got {n}"
-        assert "raise RuntimeError" not in patched
-        assert patched.count(PATCH15_MARKER) == 2
-
-        # Patched output still compiles
-        compile(patched, "<rendered_patched>", "exec")
+        assert n == 0, f"expected 0 rewrites (FW-5 retired patch15), got {n}"
+        assert patched == rendered
+        compile(rendered, "<rendered_post_fw5>", "exec")
 
 
 # ---------------------------------------------------------------------------
@@ -428,10 +429,10 @@ class TestPatch16RegexRewrite:
 
 
 class TestPatch16AgainstRenderedGold:
-    def test_rewrites_real_rendered_gold(self):
-        """Render gold via DatabricksCodeRenderer and confirm patch 16's
-        regex matches the _label_encode body in the actual output. The
-        StringIndexer body appears exactly once per gold file."""
+    def test_patch16_is_noop_after_fw5(self):
+        # FW-5 retires this patch: the framework now emits the Spark-SQL
+        # broadcast-join label encoding body natively. Patch 16's regex
+        # targets the legacy estimator body which is no longer present.
         from customer_retention.generators.pipeline_generator.databricks_renderer import (
             DatabricksCodeRenderer,
         )
@@ -464,21 +465,20 @@ class TestPatch16AgainstRenderedGold:
         rendered = renderer.render_gold(cfg)
 
         assert "def _label_encode(df, col):" in rendered
-        assert "from pyspark.ml.feature import StringIndexer" in rendered
-        assert "indexer.fit(df).transform(df)" in rendered
+        # FW-5: ml estimator path is retired, replaced with broadcast-join.
+        assert "from pyspark.ml.feature import" not in rendered
+        assert "indexer.fit(df).transform" not in rendered
+        assert "F.broadcast(_lookup)" in rendered
 
+        # Patch 16's regex targets the now-removed ml estimator body.
         patched, n = PATCH16_PATTERN.subn(PATCH16_REPLACEMENT, rendered)
-        assert n == 1, f"expected 1 rewrite against real rendered gold, got {n}"
-        assert "from pyspark.ml.feature import StringIndexer" not in patched
-        assert "indexer.fit" not in patched
-        assert PATCH16_MARKER in patched
+        assert n == 0, f"expected 0 rewrites (FW-5 retired patch16), got {n}"
+        assert patched == rendered
+        compile(rendered, "<rendered_post_fw5>", "exec")
 
-        compile(patched, "<rendered_patched_16>", "exec")
-
-    def test_15_and_16_applied_together_against_rendered_gold(self):
-        """Operator workflow applies patch 15 (encoder guards) and patch 16
-        (label-encode body) in sequence. Both must complete and the result
-        must compile."""
+    def test_15_and_16_are_both_noops_after_fw5(self):
+        # FW-5 retires both patches. Applying them in sequence to a fresh
+        # rendered gold file produces no diff and the file still compiles.
         from customer_retention.generators.pipeline_generator.databricks_renderer import (
             DatabricksCodeRenderer,
         )
@@ -513,11 +513,9 @@ class TestPatch16AgainstRenderedGold:
         patched, n15 = PATCH15_PATTERN.subn(PATCH15_REPLACEMENT, rendered)
         patched, n16 = PATCH16_PATTERN.subn(PATCH16_REPLACEMENT, patched)
 
-        assert n15 == 2
-        assert n16 == 1
-        assert patched.count(PATCH15_MARKER) == 2
-        assert patched.count(PATCH16_MARKER) == 1
-        assert "raise RuntimeError" not in patched
-        assert "from pyspark.ml.feature import StringIndexer" not in patched
-
-        compile(patched, "<rendered_patched_15_and_16>", "exec")
+        assert n15 == 0
+        assert n16 == 0
+        # No raise / no ml import in the rendered output (FW-5 native shape).
+        assert "raise RuntimeError" not in rendered
+        assert "from pyspark.ml.feature import" not in rendered
+        compile(patched, "<rendered_post_fw5_both>", "exec")

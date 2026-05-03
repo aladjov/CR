@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from typing_extensions import Protocol, runtime_checkable
 
@@ -40,7 +40,7 @@ class CodeRendererProtocol(Protocol):
 
     def render_training(self, config: PipelineConfig) -> str: ...
 
-    def render_runner(self, config: PipelineConfig) -> str: ...
+    def render_runner(self, config: PipelineConfig, target_derive_steps: Optional[List[Any]] = None) -> str: ...
 
 
 class PipelineGeneratorBase(ABC):
@@ -203,7 +203,37 @@ class PipelineGeneratorBase(ABC):
     def _write_runner(self, config: PipelineConfig) -> Path:
         path = self._output_dir / "pipeline_runner.py"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self._renderer.render_runner(config))
+        steps = self._target_derive_steps()
+        path.write_text(self._renderer.render_runner(config, target_derive_steps=steps))
+        return path
+
+    def _target_derive_steps(self) -> List[Any]:
+        """Return the harvest's `cross_dataset_steps` filtered to those tagged
+        `expected_stage="target_derive"` and carrying at least one declared
+        dataset (FW-3 imperative replay scope). Single-dataset-scope functions
+        are routed through `functions_by_target` by the harvester and never
+        belong in this phase."""
+        harvest = getattr(self, "_harvest_result", None)
+        if harvest is None:
+            return []
+        if getattr(self._parser, "user_extensions_disabled", False):
+            return []
+        return [
+            rf for rf in (harvest.cross_dataset_steps or [])
+            if (rf.expected_stage or rf.inferred_stage) == "target_derive"
+            and (rf.datasets or [])
+        ]
+
+    def _write_target_derive(self, config: PipelineConfig) -> Optional[Path]:
+        steps = self._target_derive_steps()
+        if not steps:
+            return None
+        if not hasattr(self._renderer, "render_target_derive"):
+            return None
+        target_derive_dir = self._output_dir / "target_derive"
+        target_derive_dir.mkdir(parents=True, exist_ok=True)
+        path = target_derive_dir / "run_target_derive.py"
+        path.write_text(self._renderer.render_target_derive(config, steps))
         return path
 
     def _write_user_extensions(self) -> Optional[Path]:

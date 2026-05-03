@@ -1101,6 +1101,7 @@ if __name__ == "__main__":
 """,
     "training.py.j2": '''{% set best_model_type = config.training.best_model_type if config.training else None %}
 {% set production_cv_folds = config.training.production_cv_folds if config.training else None %}
+{% set production_full_panel_fit = config.training.production_full_panel_fit if config.training else False %}
 {% set feature_spec_path = config.feature_spec_path %}
 import json as _json
 import logging
@@ -1464,6 +1465,17 @@ def run_experiment():
         future_mask = training_data.loc[X.index, FEAST_TIMESTAMP_COL] <= datetime.now()
         X, y = X.loc[future_mask], y.loc[future_mask]
 {% endif %}
+{% if production_full_panel_fit %}
+    # Full-panel fit: skip temporal split and CV. Train each candidate on the
+    # entire labelled panel; report training metrics only. Triggered by
+    # `TrainingConfig.production_full_panel_fit=True` — the operator chose
+    # exploration's best_model_type and wants a single fit on all data.
+    X_train, y_train = X, y
+    X_test, y_test = X.iloc[:0], y.iloc[:0]
+    _assert_rows(len(X_train), "train_set_full_panel_fit")
+    print(f"[TRAINING] Full-panel fit: train={len(X_train):,} rows (no holdout, no CV)")
+    _results["split"] = {"mode": "full_panel_fit", "train": len(X_train), "test": 0}
+{% else %}
     with log_timing("temporal_split", logger):
         splitter = DataSplitter(
             target_column=TARGET_COLUMN,
@@ -1488,6 +1500,7 @@ def run_experiment():
     print(f"[TRAINING] Split: train={len(X_train):,}, test={len(X_test):,}")
     print(f"[TRAINING] Split info: {splits.split_info}")
     _results["split"] = {"train": len(X_train), "test": len(X_test), **splits.split_info}
+{% endif %}
     label_dist = dict(y_train.value_counts())
     print(f"[TRAINING] Label distribution: {label_dist}")
     _results["label_distribution"] = {str(k): int(v) for k, v in label_dist.items()}
@@ -1518,6 +1531,11 @@ def run_experiment():
         mlflow.set_tag("pipeline_name", PIPELINE_NAME)
         if RECOMMENDATIONS_HASH:
             mlflow.set_tag("recommendations_hash", RECOMMENDATIONS_HASH)
+{% if production_full_panel_fit %}
+        mlflow.set_tag("training_mode", "full_panel_fit")
+{% else %}
+        mlflow.set_tag("training_mode", "temporal_split")
+{% endif %}
         best_model, best_auc = None, -1
 
         for name, model in sklearn_models.items():
@@ -1537,9 +1555,16 @@ def run_experiment():
                     "display_name": name,
                     "wrapper_meta_artifact_path": None,
                 })
+{% if production_full_panel_fit %}
+                # Full-panel fit: no holdout — report train metrics for visibility.
+                y_proba = model.predict_proba(X_train)[:, 1]
+                y_pred = model.predict(X_train)
+                metrics = compute_metrics(y_train, y_proba, y_pred)
+{% else %}
                 y_proba = model.predict_proba(X_test)[:, 1]
                 y_pred = model.predict(X_test)
                 metrics = compute_metrics(y_test, y_proba, y_pred)
+{% endif %}
 {% if production_cv_folds %}
                 _cv = CrossValidator(strategy=CVStrategy.STRATIFIED_KFOLD, n_splits={{ production_cv_folds }}, scoring="roc_auc")
                 _cv_result = _cv.run(model, X_train, y_train, on_fold_complete=_on_fold)
@@ -1560,11 +1585,21 @@ def run_experiment():
             if RECOMMENDATIONS_HASH:
                 mlflow.set_tag("recommendations_hash", RECOMMENDATIONS_HASH)
             mlflow.set_tag("feature_source", "feast")
+{% if production_full_panel_fit %}
+            # Full-panel fit: pass train as both fit and eval set; metrics
+            # come from the train predictions below.
+            xgb_model = train_xgboost(X_train, y_train, X_train, y_train, feature_names)
+            dtrain = xgb.DMatrix(X_train, feature_names=feature_names)
+            y_proba = xgb_model.predict(dtrain)
+            y_pred = (y_proba > 0.5).astype(int)
+            metrics = compute_metrics(y_train, y_proba, y_pred)
+{% else %}
             xgb_model = train_xgboost(X_train, y_train, X_test, y_test, feature_names)
             dtest = xgb.DMatrix(X_test, feature_names=feature_names)
             y_proba = xgb_model.predict(dtest)
             y_pred = (y_proba > 0.5).astype(int)
             metrics = compute_metrics(y_test, y_proba, y_pred)
+{% endif %}
             xgb_model_name = get_model_name_with_hash("model_xgboost")
             _xgb_log_info = mlflow.xgboost.log_model(xgb_model, xgb_model_name)
             _logged_models.append({
@@ -1640,6 +1675,77 @@ if __name__ == "__main__":
     print("=" * 60)
     print(_json.dumps(_training_results, indent=2, default=str))
 ''',
+    "target_derive.py.j2": """\"\"\"FW-3 imperative-lane replay (local pipeline).
+
+Runs registered cross-dataset functions whose `expected_stage` is
+`target_derive`. For the local pipeline, the function still receives a
+``(spark, frames, namespace)`` signature for Databricks parity — but the
+local runner constructs `frames` from the on-disk Delta tables and writes
+outputs back to the same landing paths.
+
+Most engagements that use `target_derive` run on Databricks (Spark APIs
+in the function body); the local replay path is provided for parity but
+requires a local SparkSession.
+\"\"\"
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from config import PRODUCTION_DIR, EXPERIMENTS_DIR
+from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+from customer_retention.integrations.adapters.factory import get_delta
+
+# user_extensions is a sibling file written by the generator
+import user_extensions
+
+_NAMESPACE = RunNamespace.from_env_or_latest(EXPERIMENTS_DIR)
+_DELTA = get_delta(force_local=True)
+
+
+def _landing_path(name: str) -> Path:
+    return PRODUCTION_DIR / "data" / "landing" / name
+
+
+def run_target_derive(spark=None) -> None:
+{% if not steps %}
+    print("[target_derive] no registered cross-dataset steps; skipping")
+    return
+{% else %}
+    if spark is None:
+        try:
+            from pyspark.sql import SparkSession
+            spark = SparkSession.builder.getOrCreate()
+        except ImportError:
+            print(
+                "[target_derive] SKIPPED: pyspark not available locally — "
+                "this stage is Spark-only. Run on Databricks for full replay."
+            )
+            return
+{% for step in steps %}
+    print("[target_derive] running {{ step.name }} on datasets={{ step.datasets }}")
+    _frames_{{ loop.index }} = {
+{%- for ds in step.datasets %}
+        "{{ ds }}": spark.createDataFrame(_DELTA.read(str(_landing_path("{{ ds }}")))),
+{%- endfor %}
+    }
+    _result_{{ loop.index }} = user_extensions.{{ step.name }}(spark, _frames_{{ loop.index }}, _NAMESPACE)
+    if _result_{{ loop.index }} is not None:
+        for _ds_name, _df in _result_{{ loop.index }}.items():
+            _path = _landing_path(_ds_name)
+            _path.parent.mkdir(parents=True, exist_ok=True)
+            _DELTA.write(_df.toPandas(), str(_path))
+            print(f"[target_derive] wrote {_path}")
+{% endfor %}
+    print("[target_derive] complete: {{ steps|length }} step(s)")
+{% endif %}
+
+
+if __name__ == "__main__":
+    run_target_derive()
+""",
     "runner.py.j2": """import argparse
 import sys
 from pathlib import Path
@@ -1652,6 +1758,9 @@ from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
 {% for name in sorted_landing_names(config.landing) %}
 from landing.landing_{{ name }} import run_landing_{{ name }}
 {% endfor %}
+{% if target_derive_steps %}
+from target_derive.run_target_derive import run_target_derive
+{% endif %}
 {% for name in config.bronze %}
 from bronze.bronze_entity_{{ name }} import run_bronze_entity_{{ name }}
 {% endfor %}
@@ -1689,6 +1798,12 @@ def run_pipeline(validate=False):
     if validate:
         from validation.validate_pipeline import validate_landing
         validate_landing()
+{% endif %}
+{% if target_derive_steps %}
+
+    print("\\n[target_derive] FW-3 imperative replay phase...")
+    run_target_derive()
+    print("[target_derive] complete")
 {% endif %}
 
     _bronze_results = {}
@@ -3046,6 +3161,7 @@ class CodeRenderer:
         "gold": "gold.py.j2",
         "training": "training.py.j2",
         "runner": "runner.py.j2",
+        "target_derive": "target_derive.py.j2",
         "workflow": "workflow.json.j2",
         "run_all": "run_all.py.j2",
         "feast_config": "feature_store.yaml.j2",
@@ -3099,8 +3215,13 @@ class CodeRenderer:
     def render_training(self, config: PipelineConfig) -> str:
         return self._render("training", config=config)
 
-    def render_runner(self, config: PipelineConfig) -> str:
-        return self._render("runner", config=config)
+    def render_runner(self, config: PipelineConfig, target_derive_steps=None) -> str:
+        return self._render(
+            "runner", config=config, target_derive_steps=list(target_derive_steps or [])
+        )
+
+    def render_target_derive(self, config: PipelineConfig, steps) -> str:
+        return self._render("target_derive", config=config, steps=steps)
 
     def render_workflow(self, config: PipelineConfig) -> str:
         return self._render("workflow", config=config)

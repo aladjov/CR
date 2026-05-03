@@ -453,6 +453,7 @@ _MODULE_LEVEL_GUARDED_TEST_FILES = {
     "generators/pipeline_generator/test_databricks_renderer.py",
     "generators/pipeline_generator/test_databricks_renderer_optimize.py",
     "generators/pipeline_generator/test_databricks_generator.py",
+    "generators/pipeline_generator/test_patch15_failsafe_encoder.py",
     "generators/pipeline_generator/test_pipeline_parity.py",
     "generators/orchestration/test_databricks_exporter.py",
     "integrations/test_databricks_init.py",

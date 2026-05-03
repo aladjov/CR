@@ -190,6 +190,7 @@ class TrainingConfig:
     exploration_feature_profile: Optional[Dict[str, Any]] = None
     best_model_type: Optional[str] = None
     production_cv_folds: Optional[int] = None
+    production_full_panel_fit: bool = False
     feature_spec_path: Optional[str] = None
     production_internal_split_test_size: float = 0.1
 
