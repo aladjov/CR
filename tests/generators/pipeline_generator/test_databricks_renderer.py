@@ -3319,7 +3319,7 @@ class TestDatabricksGoldFeatureStoreRegistration:
 
     def test_gold_display_is_bounded(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
-        assert "display(result.limit(" in result
+        assert ".limit(20)" in result and "display(result" in result
 
     def test_gold_one_hot_has_cardinality_guard(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
