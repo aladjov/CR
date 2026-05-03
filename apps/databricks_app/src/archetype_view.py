@@ -62,38 +62,59 @@ def render() -> None:
         selection_mode="points",
     )
 
-    clicked = _extract_click(selected)
-    if clicked and clicked != pb:
-        if clicked != state.get("selected_archetype"):
-            state.set_archetype(clicked)
+    archetype, risk_tier = _extract_click(selected)
+    if archetype and archetype != pb:
+        # Update archetype if it changed; ALWAYS update risk_tier (None
+        # when the user clicked the archetype tile itself rather than a
+        # risk-tier leaf -- so re-clicking the parent archetype unfilters
+        # the previously-selected tier).
+        rerun = False
+        if archetype != state.get("selected_archetype"):
+            state.set_archetype(archetype)
+            rerun = True
+        if risk_tier != state.get("selected_risk_tier"):
+            state.set_risk_tier(risk_tier)
+            rerun = True
+        if rerun:
             st.rerun()
 
 
-def _extract_click(event) -> str | None:
-    """Return the clicked archetype name.
+_RISK_TIER_LABELS = ("High", "Medium", "Low")
 
-    Tree layout: <playbook> → archetype_name → risk_tier. Clicking any tile under
-    a given archetype (including its risk-tier leaves) should resolve to that
-    archetype, so we prefer `parent` when the label is a risk-tier leaf.
+
+def _extract_click(event) -> tuple[str | None, str | None]:
+    """Return ``(archetype_name, risk_tier_or_None)`` for the clicked tile.
+
+    Tree layout: ``<playbook> → archetype_name → risk_tier``. Clicking the
+    risk-tier leaf must resolve BOTH to the parent archetype AND to the
+    leaf's risk_tier so the In-Scope table can filter by tier (the user
+    just told us which slice they care about). Clicking the archetype
+    tile itself returns ``(archetype, None)`` so the table shows every
+    tier under that archetype.
     """
     if not event:
-        return None
+        return None, None
     points = (event.get("selection") or {}).get("points") or []
     if not points:
-        return None
+        return None, None
     p = points[0]
     label = (p.get("label") or "").strip()
     parent = (p.get("parent") or "").strip()
     if not label:
-        return None
-    # Root tile (playbook name used as synthetic root) — ignore
+        return None, None
     pb = state.get("selected_playbook") or ""
+    # Root tile (playbook name used as synthetic root) — ignore
     if label == pb:
-        return None
+        return None, None
     # Top-level archetype tile — parent is the root (playbook name or "")
     if parent in ("", pb) or parent.endswith(f"/{pb}") or parent == pb:
-        return label
-    # Drilled into risk-tier leaf — parent encodes archetype
+        return label, None
+    # Risk-tier leaf — label is the tier, parent encodes the archetype
+    if label in _RISK_TIER_LABELS:
+        archetype = parent.rsplit("/", 1)[-1] if "/" in parent else parent
+        return archetype, label
+    # Defensive fallback (unexpected layout): treat parent as archetype, no
+    # tier filter. Better to under-filter than to lose the click entirely.
     if "/" in parent:
-        return parent.rsplit("/", 1)[-1]
-    return parent
+        return parent.rsplit("/", 1)[-1], None
+    return parent, None

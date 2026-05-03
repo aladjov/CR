@@ -180,6 +180,13 @@ def accounts_in_scope(
         filters.append("risk_tier = :risk_tier")
         params["risk_tier"] = risk_tier
     where = f"WHERE {' AND '.join(filters)}" if filters else ""
+    # Multi-key ORDER BY so the table stays useful even when expected_loss
+    # ties at 0 across thousands of rows (Low-tier slices with NULL
+    # value_at_risk). Risk-tier rank (High before Medium before Low) is the
+    # primary fallback so the user's click on "High" surfaces High rows at
+    # the top even when the click hasn't propagated as a hard filter.
+    # entity_id ASC is the deterministic final tiebreaker so the same K
+    # rows return run-over-run.
     return _query(cfg, f"""
         SELECT entity_id, playbook_name, archetype_name, risk_tier,
                churn_probability, value_at_risk, expected_loss,
@@ -187,7 +194,17 @@ def accounts_in_scope(
                recommended, is_holdout, eligibility_evidence
         FROM {cfg.fqn_prefix}.v_eligible_all_playbooks
         {where}
-        ORDER BY expected_loss DESC
+        ORDER BY
+            expected_loss DESC,
+            CASE risk_tier
+                 WHEN 'High'   THEN 0
+                 WHEN 'Medium' THEN 1
+                 WHEN 'Low'    THEN 2
+                 ELSE 3
+            END ASC,
+            churn_probability DESC,
+            value_at_risk DESC NULLS LAST,
+            entity_id ASC
         LIMIT :limit
     """, params)
 

@@ -23,7 +23,8 @@ def _tier_label(tier) -> str:
 def render() -> None:
     pb = state.get("selected_playbook")
     ar = state.get("selected_archetype")
-    df = data.accounts_in_scope(playbook_name=pb, archetype_name=ar)
+    rt = state.get("selected_risk_tier")
+    df = data.accounts_in_scope(playbook_name=pb, archetype_name=ar, risk_tier=rt)
     if df.empty:
         st.info("No accounts in this scope.")
         return
