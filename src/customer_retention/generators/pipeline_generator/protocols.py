@@ -95,6 +95,15 @@ class PipelineGeneratorBase(ABC):
         against gold columns; without this redirect, generation would pass but
         the generated training step would still raise on the same missing
         feature. The on-disk source-of-truth (namespace) is never modified.
+
+        The path is resolved to an absolute form before being baked into the
+        rendered training script's ``_FEATURE_SPEC_PATH = Path(r"...")``
+        literal. NB10's typical ``output_dir = Path("../generated_pipelines")
+        / "databricks" / PIPELINE_NAME`` is relative to the codegen cwd; the
+        bare relative literal would resolve correctly at codegen time but
+        break under the training notebook's cwd at runtime
+        (`FileNotFoundError`). Resolves the §7.4 framework gap so the §2.12
+        operator patch becomes redundant against fresh codegen.
         """
         ignored = getattr(self._parser, "parity_ignored_features", frozenset())
         spec = getattr(self._parser, "_feature_spec", None)
@@ -102,7 +111,7 @@ class PipelineGeneratorBase(ABC):
             return
         dst_dir = self._output_dir / "findings"
         dst_dir.mkdir(parents=True, exist_ok=True)
-        patched_path = dst_dir / "feature_spec.yaml"
+        patched_path = (dst_dir / "feature_spec.yaml").resolve()
         spec.save(patched_path)
         config.feature_spec_path = str(patched_path)
         if config.training is not None:

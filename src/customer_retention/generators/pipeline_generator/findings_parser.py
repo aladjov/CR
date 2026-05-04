@@ -369,11 +369,16 @@ class FindingsParser:
         )
         config = self._build_pipeline_config(multi_dataset, source_findings, recommendations_hash)
         if self._feature_spec is not None:
-            spec_path_str = (
-                str(self._namespace.feature_spec_path)
+            # FW-9 (§7.4): write the absolute resolved path so the literal
+            # baked into the rendered training script's `_FEATURE_SPEC_PATH`
+            # works regardless of the runtime cwd. See `_materialize_patched
+            # _feature_spec` in protocols.py for the parity-ignored sibling.
+            raw_path = (
+                self._namespace.feature_spec_path
                 if self._namespace is not None
-                else str(self._findings_dir / "feature_spec.yaml")
+                else self._findings_dir / "feature_spec.yaml"
             )
+            spec_path_str = str(Path(raw_path).resolve())
             config.feature_spec_path = spec_path_str
         config.training = self._build_training_config(multi_dataset, source_findings)
         if self._feature_spec is not None and config.training is not None:
