@@ -75,22 +75,43 @@ class TestNB05LoadCoercesStringTargetToNumeric:
         src = _cell_source("05_relationship_analysis.ipynb", "09b14f1e")
         assert "_t_dtype" in src
         assert "if \"object\" in _t_dtype or \"string\" in _t_dtype:" in src
-        # Surgical fix replaced `df[_t] = df[_t].astype("float64")` (which
-        # raises CAST_INVALID_INPUT under UC ANSI mode for non-numeric
-        # categorical strings like 'Reseller') with a Spark `try_cast`
-        # pattern that coerces uncastable values to NULL and surfaces the
-        # offending rows via a one-shot agg. Test asserts the post-fix
-        # shape so we don't silently regress to the bare-cast antipattern.
+        # The string-target branch must use a Spark `try_cast` pattern that
+        # coerces uncastable values to NULL (no CAST_INVALID_INPUT under UC
+        # ANSI mode), and must surface the offending rows via a one-shot
+        # agg — never the bare-cast `astype("float64")` antipattern.
         assert "try_cast(" in src
         assert "as_spark_df(df)" in src
         assert "F.expr(" in src
 
+    def test_load_findings_surfaces_value_distribution_upfront(self):
+        """Engagement repro (PARTNER_CLASSIFICATION carrying 'Reseller'/
+        'Distributor'/...): the cell must always print the top-N value
+        distribution BEFORE attempting numeric coercion so the operator
+        sees the values they need to map even on a fresh failure."""
+        src = _cell_source("05_relationship_analysis.ipynb", "09b14f1e")
+        assert "groupBy(F.col(_t))" in src
+        assert "top-" in src and "value distribution" in src
+
+    def test_load_findings_supports_target_label_map_escape_hatch(self):
+        """When silver collapses a multi-class categorical onto the target
+        slot, the operator must be able to recover in-cell by pasting a
+        TARGET_LABEL_MAP without re-running exploration. Test pins the
+        escape-hatch contract: dict default-empty, mapped via Spark CASE
+        WHEN, unmapped values fall through to NULL."""
+        src = _cell_source("05_relationship_analysis.ipynb", "09b14f1e")
+        assert "TARGET_LABEL_MAP" in src
+        assert "TARGET_LABEL_MAP: dict = {}" in src
+        # CASE WHEN body using F.when(...).otherwise(...) chain.
+        assert "_case_when.when(" in src
+        assert "otherwise(F.lit(None).cast(\"double\"))" in src
+
     def test_load_findings_fails_fast_on_uncoercible_target(self):
         src = _cell_source("05_relationship_analysis.ipynb", "09b14f1e")
-        # The post-fix flow still aborts when EVERY row fails to coerce
-        # (target column is genuinely non-numeric) but with a richer
-        # diagnostic message naming the silver_merged source. The bare
-        # `raise RuntimeError(...)` was replaced by an aborts-on-100%-null
-        # check; assert the operator-facing language stays put.
+        # When 100% of rows go NULL post-coercion, the cell aborts with the
+        # observed distribution embedded in the message and a hint pointing
+        # at TARGET_LABEL_MAP — operator gets everything they need to
+        # recover from the message alone.
         assert "Target column" in src
-        assert ("TemporalMerger" in src) or ("silver_merged" in src.lower())
+        assert "silver_merged" in src.lower()
+        assert "Observed distribution:" in src
+        assert "TARGET_LABEL_MAP" in src
