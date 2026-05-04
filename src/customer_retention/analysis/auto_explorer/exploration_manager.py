@@ -16,6 +16,34 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 import yaml
 
 from customer_retention.core.config.column_config import DatasetGranularity
+
+
+# `multi_dataset_findings.yaml` is written with `safe_dump` (tuples → lists)
+# so new files never carry the `!!python/tuple` tag. Engagements built before
+# the writer switch (e.g. spschurn-92a9a005) DO carry the tag, and bare
+# `safe_load` raises ConstructorError on it. `_TupleSafeLoader` is a
+# SafeLoader subclass that accepts the single `!!python/tuple` tag by
+# converting the tagged sequence into a regular list — preserves the same
+# attack-surface guarantees as SafeLoader (no code execution; no arbitrary
+# Python types) while keeping old artifacts readable.
+class _TupleSafeLoader(yaml.SafeLoader):
+    pass
+
+
+def _construct_python_tuple_as_list(loader, node):
+    return loader.construct_sequence(node)
+
+
+_TupleSafeLoader.add_constructor(
+    "tag:yaml.org,2002:python/tuple", _construct_python_tuple_as_list,
+)
+
+
+def _safe_load_tuples_ok(stream) -> Any:
+    """Drop-in replacement for ``yaml.safe_load`` that tolerates legacy
+    ``!!python/tuple`` tags by reading them as lists. Use everywhere a YAML
+    artifact may have been written by an older `yaml.dump` writer."""
+    return yaml.load(stream, Loader=_TupleSafeLoader)
 from customer_retention.stages.modeling.feature_spec import LeakageExclusion
 
 from .findings import ExplorationFindings
@@ -248,16 +276,26 @@ class MultiDatasetFindings:
         p = path if isinstance(path, Path) else Path(str(path))
         p.parent.mkdir(parents=True, exist_ok=True)
         with p.open("w") as f:
-            yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+            # `safe_dump` converts tuples → lists at write time; older
+            # writers used bare `yaml.dump` which emitted `!!python/tuple`
+            # tags that bare `safe_load` cannot parse. See
+            # `_safe_load_tuples_ok` for the backward-compat reader.
+            yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
 
     @classmethod
     def load(cls, path) -> MultiDatasetFindings:
-        """Load multi-dataset findings from YAML."""
+        """Load multi-dataset findings from YAML.
+
+        Tolerant of legacy ``!!python/tuple`` tags written by pre-fix
+        engagements (e.g. ``spschurn-92a9a005``) — the loader converts them
+        into lists. New artifacts never carry the tag because the writer
+        uses ``safe_dump``.
+        """
         from customer_retention.generators.pipeline_generator.models import FeatureExclusion
 
         p = path if isinstance(path, Path) else Path(str(path))
         with p.open("r") as f:
-            data = yaml.safe_load(f)
+            data = _safe_load_tuples_ok(f)
 
         datasets = {}
         for name, info in data.get("datasets", {}).items():

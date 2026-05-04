@@ -320,7 +320,10 @@ class ExplorationFindings:
         return result
 
     def to_yaml(self) -> str:
-        return yaml.dump(self.to_dict(), default_flow_style=False, sort_keys=False)
+        # `safe_dump` emits tuples as lists; bare `yaml.dump` emitted
+        # `!!python/tuple` tags that bare `safe_load` cannot parse. The
+        # backward-compat reader (`from_yaml`) accepts both forms.
+        return yaml.safe_dump(self.to_dict(), default_flow_style=False, sort_keys=False)
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), indent=2)
@@ -375,7 +378,14 @@ class ExplorationFindings:
 
     @classmethod
     def from_yaml(cls, yaml_str: str) -> "ExplorationFindings":
-        return cls.from_dict(yaml.safe_load(yaml_str))
+        # Tolerant of `!!python/tuple` tags written by pre-fix engagements
+        # (e.g. spschurn-92a9a005). The shared loader maps the tag to a
+        # plain list — preserves SafeLoader's no-code-execution guarantee
+        # while keeping legacy artifacts readable.
+        from customer_retention.analysis.auto_explorer.exploration_manager import (
+            _safe_load_tuples_ok,
+        )
+        return cls.from_dict(_safe_load_tuples_ok(yaml_str))
 
     @classmethod
     def from_json(cls, json_str: str) -> "ExplorationFindings":
