@@ -449,8 +449,11 @@ def _normalize_timestamps_distributed(df: Any) -> Any:
     return as_pandas_api(clamped)
 
 
-def _infer_object_column_spark_type(series: _pandas.Series) -> "Any":
+def _infer_object_column_spark_type(series: Any) -> "Any":
     from pyspark.sql.types import BooleanType, DoubleType, LongType, StringType, TimestampNTZType
+
+    if _is_spark_pandas(series):
+        return series.spark.data_type
 
     inferred = _pandas.api.types.infer_dtype(series, skipna=True)
     _INFERRED_MAP = {

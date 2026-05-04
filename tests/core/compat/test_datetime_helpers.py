@@ -709,6 +709,27 @@ class TestPandasDtypeToSparkSchema:
         schema = pandas_dtype_to_spark_schema(df)
         assert isinstance(schema.fields[0].dataType, DoubleType)
 
+    def test_object_column_uses_spark_accessor_when_available(self):
+        from pyspark.sql.types import StringType
+
+        from customer_retention.core.compat import _infer_object_column_spark_type
+
+        class _FakeSparkAccessor:
+            data_type = StringType()
+
+        class _FakePpsSeries:
+            spark = _FakeSparkAccessor()
+
+            def __iter__(self):
+                raise AssertionError(
+                    "_infer_object_column_spark_type must NOT iterate a "
+                    "pyspark.pandas Series — it triggers "
+                    "PandasNotImplementedError on Databricks."
+                )
+
+        result = _infer_object_column_spark_type(_FakePpsSeries())
+        assert isinstance(result, StringType)
+
     def test_object_column_with_bools_inferred_as_boolean(self):
         from pyspark.sql.types import BooleanType
 
