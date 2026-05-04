@@ -159,6 +159,19 @@ import re as _re
 
 _LAG_VELOCITY_RE = _re.compile(r"^(?:lag\d+|velocity)_")
 
+# Suffix grammar for datetime-derived features. The four "kinds" map to
+# `derive_extra_datetime_features` outputs (`{src}_delta_hours`, `{src}_hour`,
+# `{src}_dow`, `{src}_is_weekend`). When a kind is followed by an aggregation
+# stat + window, the column originates from the bronze_event windowed
+# aggregator (`{src}_{kind}_{stat}_{window}`). `_DATETIME_DERIVED_KINDS`
+# stays in sync with `BronzeEventConfig._event_aggregated_columns` and the
+# landing/bronze_event templates' `derive_extra_datetime_features` calls.
+_DATETIME_DERIVED_KINDS = ("delta_hours", "hour", "dow", "is_weekend")
+_DATETIME_AGG_WINDOW_RE = _re.compile(
+    r"^(?P<base>.+?)_(?P<kind>delta_hours|hour|dow|is_weekend)"
+    r"(?:_(?P<stat>min|max|avg|mean|sum|count|std)_(?P<window>\d+[dhw]|all_time))?$"
+)
+
 
 _WINDOW_DAYS = {
     "24h": 1.0, "7d": 7.0, "30d": 30.0, "90d": 90.0,
@@ -228,6 +241,7 @@ class FindingsParser:
         landing_lifecycle_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
         landing_filter_overrides: Optional[Dict[str, str]] = None,
         landing_drop_columns_overrides: Optional[Dict[str, Iterable[str]]] = None,
+        strict_datetime_parity: bool = True,
     ):
         self._findings_dir = Path(findings_dir)
         self._namespace = namespace
@@ -292,6 +306,13 @@ class FindingsParser:
         )
         from customer_retention.runtime.flags import is_user_extensions_disabled
         self._ext_disabled: bool = is_user_extensions_disabled(disable_user_extensions)
+        # `strict_datetime_parity=True` (default) raises when `FeatureSpec`
+        # selects a datetime-derived feature whose source column is not
+        # declared in the dataset's `datetime_derivation_sources`. When
+        # `False`, the parser auto-extends the source list (warn-only)
+        # and lets codegen continue. The runtime gate in NB07/NB08 still
+        # catches the missing column at training time.
+        self._strict_datetime_parity: bool = bool(strict_datetime_parity)
 
     @property
     def user_extensions_disabled(self) -> bool:
@@ -376,10 +397,28 @@ class FindingsParser:
         return config
 
     def _enforce_spec_schema_parity(self, config: PipelineConfig) -> None:
-        pipeline_columns = set(config.gold.feature_selections or []) | self._collect_known_pipeline_columns(config)
+        # FW-6: reconcile spec-implied datetime derivations into the config
+        # before prediction so any auto-extended `datetime_derivation_sources`
+        # are visible to `_predict_datetime_derivation_expanded_columns`. Runs
+        # under `strict_datetime_parity=True` by default (raises on
+        # undeclared sources); `False` mutates the config and lets codegen
+        # continue. (Doc: sps_nb10_runtime_patches_v1.md §7.7.)
+        self._reconcile_datetime_derivation_with_spec(config)
+        # FW-7: `config.gold.feature_selections` is the DROP pool (NB05's
+        # `apply_feature_selection` removes it from gold), not the keep
+        # pool. Earlier shape unioned it into `pipeline_columns`, which let
+        # a feature in BOTH `selected_features` and `feature_selections`
+        # silently pass codegen — the runtime gate then aborted training
+        # with a missing-features error. Subtract instead so codegen raises
+        # with the precise conflict list. (Doc: sps_nb10_runtime_patches_v1.md
+        # §7.1; SPS engagement_e4ad6e1b 197-feature explosion.)
+        pipeline_columns = self._collect_known_pipeline_columns(config) - set(
+            config.gold.feature_selections or []
+        )
         pipeline_columns |= self._predict_one_hot_expanded_columns(
             config, self._feature_spec, pipeline_columns,
         )
+        pipeline_columns |= self._predict_datetime_derivation_expanded_columns(config)
         self._collect_allowlist_drops(
             self._feature_spec, pipeline_columns, config.target_column,
             post_selection_step_targets=self._gold_post_selection_step_targets(config),
@@ -1656,6 +1695,256 @@ class FindingsParser:
         return expanded
 
     @staticmethod
+    def _predict_datetime_derivation_expanded_columns(
+        config: "PipelineConfig",
+    ) -> Set[str]:
+        """Symbolically expand datetime-derived columns into the gold schema.
+
+        Closes the codegen-time gap that produced the SPS engagement_e4ad6e1b
+        ``197 missing features`` explosion (doc §7.7): the renderer's bronze
+        templates call ``derive_extra_datetime_features`` (yielding
+        ``{src}_delta_hours``, ``{src}_hour``, ``{src}_dow``,
+        ``{src}_is_weekend``), and on the event lane those derived columns
+        then flow through ``time_window_aggregator`` along with every other
+        bronze numeric (yielding ``{src}_{kind}_{stat}_{window}``). Neither
+        shape was being predicted by ``_collect_known_pipeline_columns``, so
+        the parity gate raised against features that DO get materialized at
+        runtime.
+
+        Two emitters:
+
+        * Landing-level ``LandingLayerConfig.datetime_derivation`` adds the
+          bare ``{src}_{kind}`` shape into the entity-table schema.
+        * Event-level ``BronzeEventConfig.datetime_derivation`` adds the bare
+          shape into the un-aggregated event row, and (when the event_cfg
+          has an ``AggregationWindowConfig``) the aggregator subsequently
+          emits ``{src}_{kind}_{stat}_{window}`` for every
+          ``(stat, window)`` pair in ``agg.agg_funcs × agg.windows``.
+
+        The numeric stats (``min/max/avg/mean/sum/count/std``) are the only
+        ones the aggregator applies to numeric-cast derived columns;
+        non-numeric kinds (``hour``, ``dow``, ``is_weekend``) are still
+        passed through the same numeric agg path because the aggregator
+        casts them to long. Mirrors the runtime emission shape exactly so
+        the parity gate stays in lock-step with what gold actually contains.
+        """
+        expanded: Set[str] = set()
+        for landing in config.landing.values():
+            dd = getattr(landing, "datetime_derivation", None)
+            if not dd:
+                continue
+            for src in dd.source_columns:
+                for kind in _DATETIME_DERIVED_KINDS:
+                    expanded.add(f"{src}_{kind}")
+        for event_cfg in config.bronze_event.values():
+            dd = getattr(event_cfg, "datetime_derivation", None)
+            if not dd:
+                continue
+            agg = getattr(event_cfg, "aggregation", None)
+            for src in dd.source_columns:
+                for kind in _DATETIME_DERIVED_KINDS:
+                    bare = f"{src}_{kind}"
+                    expanded.add(bare)
+                    if agg is None:
+                        continue
+                    blocked = set((agg.column_blocked_funcs or {}).get(bare, []))
+                    for stat in agg.agg_funcs:
+                        if stat in blocked:
+                            continue
+                        for window in agg.windows:
+                            expanded.add(f"{bare}_{stat}_{window}")
+        return expanded
+
+    def _reconcile_datetime_derivation_with_spec(
+        self, config: "PipelineConfig",
+    ) -> None:
+        """Auto-extend or raise on datetime features whose source is undeclared.
+
+        ``FeatureSpec`` is the oracle. When a selected feature parses as
+        ``{base}_{kind}[_{stat}_{window}]`` AND ``{base}`` is a column the
+        bronze stage can produce (raw landing column, bronze derived
+        column, etc.) but is NOT yet listed in any ``datetime_derivation
+        .source_columns`` set, the reconciler must close the gap so the
+        landing/bronze templates emit the derived column at runtime.
+
+        ``_strict_datetime_parity=True`` raises a precise error pointing at
+        the suspected source column, so the operator either declares it
+        explicitly or removes the feature from the spec. ``False`` adds the
+        column to the matching layer's ``source_columns`` and logs a
+        warning so the operator can audit later. Either way, the gold
+        schema and the spec stay in sync — no silent drift.
+        """
+        spec = self._feature_spec
+        if spec is None:
+            return
+        existing_landing_sources: Dict[str, Set[str]] = {}
+        for ds, landing in config.landing.items():
+            dd = getattr(landing, "datetime_derivation", None)
+            existing_landing_sources[ds] = set(dd.source_columns) if dd else set()
+        existing_event_sources: Dict[str, Set[str]] = {}
+        for ds, event_cfg in config.bronze_event.items():
+            dd = getattr(event_cfg, "datetime_derivation", None)
+            existing_event_sources[ds] = set(dd.source_columns) if dd else set()
+        # Set of every column the parser can prove the bronze stage emits
+        # (raw source columns, bronze derived columns, landing entity/time
+        # columns). Used to disambiguate a base name that could plausibly
+        # be a datetime source vs one that just happens to share a suffix.
+        producible: Set[str] = set()
+        for raw_cols in self._raw_source_columns.values():
+            producible |= raw_cols
+        for landing in config.landing.values():
+            for col in (landing.entity_column, landing.time_column, landing.target_column):
+                if col:
+                    producible.add(col)
+        for bronze in config.bronze.values():
+            agg = getattr(bronze, "aggregation", None)
+            if agg is None:
+                continue
+            producible |= set(agg.value_columns or [])
+            producible |= set(agg.categorical_columns or [])
+            producible |= set(agg.binary_columns or [])
+        if config.silver is not None:
+            for step in config.silver.derived_columns:
+                producible.add(step.column)
+        unresolved: List[Tuple[str, str]] = []
+        # Collect proposed extensions per dataset/layer so we apply them
+        # after the spec walk (mutating mid-iteration is unnecessary).
+        proposed_landing: Dict[str, Set[str]] = {}
+        proposed_event: Dict[str, Set[str]] = {}
+        for feature in spec.selected_features:
+            match = _DATETIME_AGG_WINDOW_RE.match(feature)
+            if match is None:
+                continue
+            base = match.group("base")
+            stat = match.group("stat")
+            already_declared = any(
+                base in src_set for src_set in existing_landing_sources.values()
+            ) or any(
+                base in src_set for src_set in existing_event_sources.values()
+            )
+            if already_declared:
+                continue
+            if base not in producible:
+                # Feature parses as a datetime shape but the base isn't a
+                # column we can prove the bronze stage emits — leave it for
+                # the existing parity gate to flag with its standard
+                # missing-column message.
+                continue
+            if stat is not None:
+                # Aggregation suffix means the source MUST attach to a
+                # bronze_event datetime_derivation. Pick the first event
+                # config that lists `base` as a producible column.
+                target_event_ds = None
+                for ds, event_cfg in config.bronze_event.items():
+                    agg = getattr(event_cfg, "aggregation", None)
+                    if agg is None:
+                        continue
+                    if base in (agg.value_columns or []) or base in (
+                        agg.categorical_columns or []
+                    ) or base in (agg.binary_columns or []):
+                        target_event_ds = ds
+                        break
+                if target_event_ds is None:
+                    # Fall back to the first event config that has any
+                    # aggregation — operator can move it later.
+                    for ds, event_cfg in config.bronze_event.items():
+                        if getattr(event_cfg, "aggregation", None) is not None:
+                            target_event_ds = ds
+                            break
+                if target_event_ds is None:
+                    unresolved.append((feature, base))
+                    continue
+                proposed_event.setdefault(target_event_ds, set()).add(base)
+            else:
+                # Bare-form feature; attach to landing if `base` is a
+                # landing-stage column, else to the matching event config.
+                attached = False
+                for ds, landing in config.landing.items():
+                    raw_cols = self._raw_source_columns.get(ds, set())
+                    if base in raw_cols or base in (
+                        landing.time_column,
+                        landing.entity_column,
+                        landing.target_column,
+                    ):
+                        proposed_landing.setdefault(ds, set()).add(base)
+                        attached = True
+                        break
+                if attached:
+                    continue
+                for ds, event_cfg in config.bronze_event.items():
+                    raw_cols = self._raw_source_columns.get(ds, set())
+                    if base in raw_cols or base in (
+                        event_cfg.time_column, event_cfg.entity_column,
+                    ):
+                        proposed_event.setdefault(ds, set()).add(base)
+                        attached = True
+                        break
+                if not attached:
+                    unresolved.append((feature, base))
+        # `getattr` default keeps tests that build a parser via
+        # `FindingsParser.__new__(...)` (skipping __init__) on the
+        # strict-by-default behavior the production constructor enforces.
+        strict = getattr(self, "_strict_datetime_parity", True)
+        if strict and (unresolved or proposed_landing or proposed_event):
+            # Strict mode: any spec feature whose source isn't declared raises,
+            # whether or not the parser could guess a target layer to attach it
+            # to. The operator must explicitly add the source to NB01's
+            # `DATETIME_DERIVATION_SOURCES` so the codegen path is auditable.
+            offenders: List[Tuple[str, str]] = list(unresolved)
+            for ds, sources in proposed_landing.items():
+                offenders.extend((f"<landing[{ds}]>", b) for b in sorted(sources))
+            for ds, sources in proposed_event.items():
+                offenders.extend((f"<bronze_event[{ds}]>", b) for b in sorted(sources))
+            details = ", ".join(f"{f!r} (source={b!r})" for f, b in offenders)
+            raise ValueError(
+                "FeatureSpec selects datetime-derived features whose source "
+                f"column is not declared in any landing/bronze_event "
+                f"`datetime_derivation_sources`: {details}. Either add the "
+                f"source column to NB01's `DATETIME_DERIVATION_SOURCES` for "
+                f"that dataset, or remove the feature from the spec. To "
+                f"auto-extend instead, pass `strict_datetime_parity=False` "
+                f"to FindingsParser. (Doc: sps_nb10_runtime_patches_v1.md §7.7)"
+            )
+        if not (proposed_landing or proposed_event):
+            return
+        # Auto-extension path: mutate config in place and emit a
+        # warn-level audit trail naming each extended column.
+        for ds, sources in proposed_landing.items():
+            landing = config.landing[ds]
+            dd = landing.datetime_derivation
+            if dd is None:
+                landing.datetime_derivation = DatetimeDerivationConfig(
+                    source_columns=sorted(sources),
+                    reference_column=landing.time_column,
+                    mask_future_columns=[],
+                )
+            else:
+                merged = list(dict.fromkeys(list(dd.source_columns) + sorted(sources)))
+                dd.source_columns = merged
+            logger.warning(
+                "Auto-extended landing[%s].datetime_derivation_sources with %s "
+                "(driven by FeatureSpec; strict_datetime_parity=False)",
+                ds, sorted(sources),
+            )
+        for ds, sources in proposed_event.items():
+            event_cfg = config.bronze_event[ds]
+            dd = event_cfg.datetime_derivation
+            if dd is None:
+                event_cfg.datetime_derivation = DatetimeDerivationConfig(
+                    source_columns=sorted(sources),
+                    reference_column=event_cfg.time_column,
+                    mask_future_columns=[],
+                )
+            else:
+                merged = list(dict.fromkeys(list(dd.source_columns) + sorted(sources)))
+                dd.source_columns = merged
+            logger.warning(
+                "Auto-extended bronze_event[%s].datetime_derivation_sources with %s "
+                "(driven by FeatureSpec; strict_datetime_parity=False)",
+                ds, sorted(sources),
+            )
+
+    @staticmethod
     def _event_aggregated_columns(
         event_cfg: "BronzeEventConfig",
         unique_values_by_col: Optional[Dict[str, List[str]]] = None,
@@ -2140,6 +2429,7 @@ class FindingsParser:
             if step:
                 config.gold.transformations.append(step)
         pipeline_columns |= self._predict_gold_generated_columns(config)
+        pipeline_columns |= self._predict_datetime_derivation_expanded_columns(config)
         spec = getattr(self, "_feature_spec", None)
         if spec is not None:
             pipeline_columns |= self._predict_one_hot_expanded_columns(

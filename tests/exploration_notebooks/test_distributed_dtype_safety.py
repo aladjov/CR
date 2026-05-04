@@ -75,10 +75,22 @@ class TestNB05LoadCoercesStringTargetToNumeric:
         src = _cell_source("05_relationship_analysis.ipynb", "09b14f1e")
         assert "_t_dtype" in src
         assert "if \"object\" in _t_dtype or \"string\" in _t_dtype:" in src
-        assert "df[_t] = df[_t].astype(\"float64\")" in src
+        # Surgical fix replaced `df[_t] = df[_t].astype("float64")` (which
+        # raises CAST_INVALID_INPUT under UC ANSI mode for non-numeric
+        # categorical strings like 'Reseller') with a Spark `try_cast`
+        # pattern that coerces uncastable values to NULL and surfaces the
+        # offending rows via a one-shot agg. Test asserts the post-fix
+        # shape so we don't silently regress to the bare-cast antipattern.
+        assert "try_cast(" in src
+        assert "as_spark_df(df)" in src
+        assert "F.expr(" in src
 
     def test_load_findings_fails_fast_on_uncoercible_target(self):
         src = _cell_source("05_relationship_analysis.ipynb", "09b14f1e")
-        assert "raise RuntimeError(" in src
+        # The post-fix flow still aborts when EVERY row fails to coerce
+        # (target column is genuinely non-numeric) but with a richer
+        # diagnostic message naming the silver_merged source. The bare
+        # `raise RuntimeError(...)` was replaced by an aborts-on-100%-null
+        # check; assert the operator-facing language stays put.
         assert "Target column" in src
-        assert "TemporalMerger" in src
+        assert ("TemporalMerger" in src) or ("silver_merged" in src.lower())

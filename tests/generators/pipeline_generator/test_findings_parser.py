@@ -7765,6 +7765,449 @@ class TestEnforceSpecSchemaParityWithOneHotEncoding:
             parser._enforce_spec_schema_parity(config)
 
 
+class TestEnforceSpecSchemaParityRejectsSelectedInDropPool:
+    """FW-7: a feature that lives in BOTH ``selected_features`` and
+    ``config.gold.feature_selections`` (the drop pool) used to silently pass
+    codegen — the previous shape unioned the drop list into the parity column
+    set, so the gate could not see the conflict. The runtime gate then
+    aborted training with a confusing missing-features error.
+
+    Now `_enforce_spec_schema_parity` subtracts the drop pool first; the
+    standard parity violation surfaces with a clear list of conflicts so the
+    operator knows exactly which feature to remove from one of the two
+    pools. (Doc: sps_nb10_runtime_patches_v1.md §7.1.)
+    """
+
+    @staticmethod
+    def _parser_and_config(*, drop_pool, raw_columns=("cid", "amt", "amt_sum_180d")):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeLayerConfig,
+            GoldLayerConfig,
+            PipelineConfig,
+            SilverLayerConfig,
+            SourceConfig,
+        )
+        entity_src = SourceConfig(name="cust", path="c.csv", format="csv",
+                                  entity_key="cid", raw_source_path="/c.csv")
+        config = PipelineConfig(
+            name="t", target_column="churn", sources=[entity_src],
+            bronze={"cust": BronzeLayerConfig(source=entity_src)},
+            silver=SilverLayerConfig(),
+            gold=GoldLayerConfig(feature_selections=list(drop_pool)),
+            output_dir=".",
+        )
+        config.bronze_event = {}
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._raw_source_columns = {"cust": set(raw_columns)}
+        parser._source_findings_paths = {}
+        parser._silver_merged_columns_cache = None
+        parser._namespace = None
+        parser._strict_datetime_parity = True
+        return parser, config
+
+    @staticmethod
+    def _make_spec(selected_features):
+        from customer_retention.stages.modeling.feature_spec import FeatureSpec, FittedTransform
+        return FeatureSpec(
+            exploration_run_id="r", target_column="churn",
+            entity_column="entity_id", timestamp_column="as_of_date",
+            horizon_days=30, selected_features=list(selected_features),
+            fitted_transforms=[
+                FittedTransform(column=c, action="impute", method="median")
+                for c in selected_features
+            ],
+        )
+
+    def test_codegen_parity_check_rejects_selected_in_drop_pool(self):
+        """Direct repro of §7.1: ``amt_sum_180d`` is in BOTH the spec's
+        selected_features AND ``feature_selections``. Pre-FW-7 this passed
+        silently; now it raises with a precise missing-feature list."""
+        import pytest
+        parser, config = self._parser_and_config(drop_pool=["amt_sum_180d"])
+        parser._feature_spec = self._make_spec(["amt_sum_180d"])
+        with pytest.raises(ValueError, match="amt_sum_180d"):
+            parser._enforce_spec_schema_parity(config)
+
+    def test_codegen_parity_passes_when_drop_pool_disjoint_from_spec(self):
+        """When ``feature_selections`` only contains columns NOT in the spec,
+        FW-7's subtraction must NOT produce false positives — the parity
+        check stays silent and the standard codegen flow continues."""
+        parser, config = self._parser_and_config(
+            drop_pool=["amt", "cid"],  # neither in spec
+        )
+        parser._feature_spec = self._make_spec(["amt_sum_180d"])
+        parser._enforce_spec_schema_parity(config)  # must not raise
+
+
+class TestPredictDatetimeDerivationExpandedColumns:
+    """FW-6: ``_predict_datetime_derivation_expanded_columns`` mirrors the
+    runtime emission shape of ``derive_extra_datetime_features`` (landing +
+    bronze_event) and the windowed aggregator. Closes the codegen gap that
+    produced the SPS engagement_e4ad6e1b ``197 missing features`` explosion.
+    """
+
+    @staticmethod
+    def _config(*, landing_dd_sources=(), event_dd_sources=(),
+                event_agg_funcs=("sum", "avg", "count"),
+                event_windows=("30d", "180d"),
+                event_value_columns=("amt",)):
+        from customer_retention.generators.pipeline_generator.models import (
+            AggregationWindowConfig,
+            BronzeEventConfig,
+            BronzeLayerConfig,
+            DatetimeDerivationConfig,
+            GoldLayerConfig,
+            LandingLayerConfig,
+            PipelineConfig,
+            SilverLayerConfig,
+            SourceConfig,
+        )
+        entity_src = SourceConfig(name="cust", path="c.csv", format="csv",
+                                  entity_key="cid", raw_source_path="/c.csv")
+        landing = LandingLayerConfig(
+            source=entity_src, raw_source_path="/c.csv", raw_source_format="csv",
+            entity_column="cid", time_column="ts", target_column="churn",
+        )
+        if landing_dd_sources:
+            landing.datetime_derivation = DatetimeDerivationConfig(
+                source_columns=list(landing_dd_sources),
+                reference_column="ts",
+            )
+        bronze_events = {}
+        sources = [entity_src]
+        if event_dd_sources:
+            event_src = SourceConfig(name="evt", path="e.csv", format="csv",
+                                     entity_key="cid", raw_source_path="/e.csv",
+                                     is_event_level=True, time_column="ts")
+            sources.append(event_src)
+            event_cfg = BronzeEventConfig(
+                source=event_src, entity_column="cid", time_column="ts",
+                aggregation=AggregationWindowConfig(
+                    windows=list(event_windows),
+                    value_columns=list(event_value_columns),
+                    agg_funcs=list(event_agg_funcs),
+                ),
+                datetime_derivation=DatetimeDerivationConfig(
+                    source_columns=list(event_dd_sources),
+                    reference_column="ts",
+                ),
+            )
+            bronze_events["evt"] = event_cfg
+        config = PipelineConfig(
+            name="t", target_column="churn", sources=sources,
+            bronze={"cust": BronzeLayerConfig(source=entity_src)},
+            silver=SilverLayerConfig(),
+            gold=GoldLayerConfig(),
+            output_dir=".",
+        )
+        config.landing = {"cust": landing}
+        config.bronze_event = bronze_events
+        return config
+
+    def test_codegen_predicts_landing_datetime_expansion(self):
+        """Landing-level ``datetime_derivation`` adds the bare suffix shape
+        for each source column. Mirrors `derive_extra_datetime_features`."""
+        from customer_retention.generators.pipeline_generator.findings_parser import (
+            FindingsParser,
+        )
+        config = self._config(landing_dd_sources=("contract_term_in_months",))
+        cols = FindingsParser._predict_datetime_derivation_expanded_columns(config)
+        assert {
+            "contract_term_in_months_delta_hours",
+            "contract_term_in_months_hour",
+            "contract_term_in_months_dow",
+            "contract_term_in_months_is_weekend",
+        } <= cols
+
+    def test_codegen_predicts_datetime_window_expansion(self):
+        """Direct repro of §7.7: bronze_event datetime sources MUST expand
+        through the aggregator into ``{base}_{kind}_{stat}_{window}`` for
+        every (stat, window) pair. Pre-FW-6 these were missing from
+        `pipeline_columns` and parity raised against valid features."""
+        from customer_retention.generators.pipeline_generator.findings_parser import (
+            FindingsParser,
+        )
+        config = self._config(
+            event_dd_sources=("opportunity_close_date",),
+            event_agg_funcs=("avg", "min", "max"),
+            event_windows=("30d", "180d"),
+        )
+        cols = FindingsParser._predict_datetime_derivation_expanded_columns(config)
+        # Bare suffix shape must be present.
+        assert "opportunity_close_date_delta_hours" in cols
+        assert "opportunity_close_date_hour" in cols
+        # Every (stat × window × kind) combo must be predicted.
+        for kind in ("delta_hours", "hour", "dow", "is_weekend"):
+            for stat in ("avg", "min", "max"):
+                for window in ("30d", "180d"):
+                    expected = f"opportunity_close_date_{kind}_{stat}_{window}"
+                    assert expected in cols, f"missing {expected}"
+
+    def test_codegen_predicts_empty_when_no_datetime_derivation(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import (
+            FindingsParser,
+        )
+        config = self._config()
+        cols = FindingsParser._predict_datetime_derivation_expanded_columns(config)
+        assert cols == set()
+
+    def test_codegen_skips_blocked_funcs_in_event_window_expansion(self):
+        """If `column_blocked_funcs` excludes a stat for a derived column,
+        the predictor must not emit the suppressed `{kind}_{stat}_{window}`
+        shape — keeps the parity column set in lockstep with what the
+        aggregator actually emits at runtime."""
+        from customer_retention.generators.pipeline_generator.findings_parser import (
+            FindingsParser,
+        )
+        from customer_retention.generators.pipeline_generator.models import (
+            AggregationWindowConfig,
+            BronzeEventConfig,
+            BronzeLayerConfig,
+            DatetimeDerivationConfig,
+            GoldLayerConfig,
+            LandingLayerConfig,
+            PipelineConfig,
+            SilverLayerConfig,
+            SourceConfig,
+        )
+        entity_src = SourceConfig(name="cust", path="c.csv", format="csv",
+                                  entity_key="cid", raw_source_path="/c.csv")
+        event_src = SourceConfig(name="evt", path="e.csv", format="csv",
+                                 entity_key="cid", raw_source_path="/e.csv",
+                                 is_event_level=True, time_column="ts")
+        event_cfg = BronzeEventConfig(
+            source=event_src, entity_column="cid", time_column="ts",
+            aggregation=AggregationWindowConfig(
+                windows=["30d"], value_columns=["amt"],
+                agg_funcs=["sum", "avg"],
+                column_blocked_funcs={"opportunity_close_date_delta_hours": ["sum"]},
+            ),
+            datetime_derivation=DatetimeDerivationConfig(
+                source_columns=["opportunity_close_date"], reference_column="ts",
+            ),
+        )
+        config = PipelineConfig(
+            name="t", target_column="churn", sources=[entity_src, event_src],
+            bronze={"cust": BronzeLayerConfig(source=entity_src)},
+            silver=SilverLayerConfig(),
+            gold=GoldLayerConfig(),
+            output_dir=".",
+        )
+        config.landing = {
+            "cust": LandingLayerConfig(
+                source=entity_src, raw_source_path="/c.csv", raw_source_format="csv",
+                entity_column="cid", time_column="ts", target_column="churn",
+            )
+        }
+        config.bronze_event = {"evt": event_cfg}
+        cols = FindingsParser._predict_datetime_derivation_expanded_columns(config)
+        # Blocked combo must be absent.
+        assert "opportunity_close_date_delta_hours_sum_30d" not in cols
+        # Unblocked combos must be present.
+        assert "opportunity_close_date_delta_hours_avg_30d" in cols
+        assert "opportunity_close_date_hour_sum_30d" in cols
+
+
+class TestReconcileDatetimeDerivationWithSpec:
+    """FW-6: when ``FeatureSpec.selected_features`` references a datetime-
+    derived column whose source is not declared in any
+    ``datetime_derivation_sources`` set, the reconciler must (strict mode)
+    raise with a precise actionable error or (lenient mode) auto-extend the
+    matching layer's source list. Either way, the gold schema and the spec
+    stay in sync.
+    """
+
+    @staticmethod
+    def _parser_and_config(*, raw_columns_by_ds=None, has_event=True,
+                           landing_existing_sources=(),
+                           event_existing_sources=(),
+                           strict=True):
+        from customer_retention.generators.pipeline_generator.findings_parser import (
+            FindingsParser,
+        )
+        from customer_retention.generators.pipeline_generator.models import (
+            AggregationWindowConfig,
+            BronzeEventConfig,
+            BronzeLayerConfig,
+            DatetimeDerivationConfig,
+            GoldLayerConfig,
+            LandingLayerConfig,
+            PipelineConfig,
+            SilverLayerConfig,
+            SourceConfig,
+        )
+        entity_src = SourceConfig(name="cust", path="c.csv", format="csv",
+                                  entity_key="cid", raw_source_path="/c.csv")
+        landing = LandingLayerConfig(
+            source=entity_src, raw_source_path="/c.csv", raw_source_format="csv",
+            entity_column="cid", time_column="ts", target_column="churn",
+        )
+        if landing_existing_sources:
+            landing.datetime_derivation = DatetimeDerivationConfig(
+                source_columns=list(landing_existing_sources),
+                reference_column="ts",
+            )
+        sources = [entity_src]
+        bronze_events = {}
+        if has_event:
+            event_src = SourceConfig(name="evt", path="e.csv", format="csv",
+                                     entity_key="cid", raw_source_path="/e.csv",
+                                     is_event_level=True, time_column="ts")
+            sources.append(event_src)
+            event_cfg = BronzeEventConfig(
+                source=event_src, entity_column="cid", time_column="ts",
+                aggregation=AggregationWindowConfig(
+                    windows=["30d", "180d"], value_columns=["amt"],
+                    agg_funcs=["sum", "avg"],
+                ),
+            )
+            if event_existing_sources:
+                event_cfg.datetime_derivation = DatetimeDerivationConfig(
+                    source_columns=list(event_existing_sources),
+                    reference_column="ts",
+                )
+            bronze_events["evt"] = event_cfg
+        config = PipelineConfig(
+            name="t", target_column="churn", sources=sources,
+            bronze={"cust": BronzeLayerConfig(source=entity_src)},
+            silver=SilverLayerConfig(),
+            gold=GoldLayerConfig(),
+            output_dir=".",
+        )
+        config.landing = {"cust": landing}
+        config.bronze_event = bronze_events
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._raw_source_columns = dict(
+            raw_columns_by_ds or {"cust": {"cid", "ts"}, "evt": {"cid", "ts", "amt"}}
+        )
+        parser._source_findings_paths = {}
+        parser._silver_merged_columns_cache = None
+        parser._namespace = None
+        parser._strict_datetime_parity = strict
+        return parser, config
+
+    @staticmethod
+    def _make_spec(selected_features):
+        from customer_retention.stages.modeling.feature_spec import FeatureSpec, FittedTransform
+        return FeatureSpec(
+            exploration_run_id="r", target_column="churn",
+            entity_column="entity_id", timestamp_column="as_of_date",
+            horizon_days=30, selected_features=list(selected_features),
+            fitted_transforms=[
+                FittedTransform(column=c, action="impute", method="median")
+                for c in selected_features
+            ],
+        )
+
+    def test_codegen_rejects_spec_referencing_undeclared_datetime_source_event_window(self):
+        """Direct repro of §7.7: spec selects
+        ``opportunity_close_date_delta_hours_avg_30d`` but
+        ``opportunity_close_date`` is NOT in any
+        ``datetime_derivation_sources`` list — strict mode raises."""
+        import pytest
+        parser, config = self._parser_and_config(
+            raw_columns_by_ds={
+                "cust": {"cid", "ts"},
+                "evt": {"cid", "ts", "amt", "opportunity_close_date"},
+            },
+            strict=True,
+        )
+        parser._feature_spec = self._make_spec([
+            "opportunity_close_date_delta_hours_avg_30d",
+        ])
+        with pytest.raises(ValueError, match="opportunity_close_date"):
+            parser._reconcile_datetime_derivation_with_spec(config)
+
+    def test_codegen_rejects_spec_referencing_undeclared_datetime_source_landing_bare(self):
+        """Bare landing-shape feature (no aggregation suffix) must also raise
+        when the source is undeclared and strict mode is on."""
+        import pytest
+        parser, config = self._parser_and_config(
+            raw_columns_by_ds={
+                "cust": {"cid", "ts", "first_seen_at"},
+                "evt": {"cid", "ts", "amt"},
+            },
+            strict=True,
+        )
+        parser._feature_spec = self._make_spec(["first_seen_at_delta_hours"])
+        with pytest.raises(ValueError, match="first_seen_at"):
+            parser._reconcile_datetime_derivation_with_spec(config)
+
+    def test_lenient_mode_auto_extends_event_sources(self):
+        """``strict_datetime_parity=False``: parser mutates the matching
+        bronze_event's ``datetime_derivation`` instead of raising.
+        Subsequent call to `_predict_datetime_derivation_expanded_columns`
+        now emits the windowed expansion shape."""
+        from customer_retention.generators.pipeline_generator.findings_parser import (
+            FindingsParser,
+        )
+        parser, config = self._parser_and_config(
+            raw_columns_by_ds={
+                "cust": {"cid", "ts"},
+                "evt": {"cid", "ts", "amt", "opportunity_close_date"},
+            },
+            strict=False,
+        )
+        parser._feature_spec = self._make_spec([
+            "opportunity_close_date_delta_hours_avg_30d",
+        ])
+        parser._reconcile_datetime_derivation_with_spec(config)
+        event_cfg = config.bronze_event["evt"]
+        assert event_cfg.datetime_derivation is not None
+        assert "opportunity_close_date" in event_cfg.datetime_derivation.source_columns
+        # Predictor now sees the auto-extended source and expands accordingly.
+        cols = FindingsParser._predict_datetime_derivation_expanded_columns(config)
+        assert "opportunity_close_date_delta_hours_avg_30d" in cols
+
+    def test_lenient_mode_auto_extends_landing_sources(self):
+        """Bare-form datetime feature without aggregation suffix attaches to
+        the landing layer (entity-level pre-event) — that's where
+        `derive_extra_datetime_features` runs in the entity pipeline."""
+        parser, config = self._parser_and_config(
+            raw_columns_by_ds={
+                "cust": {"cid", "ts", "first_seen_at"},
+                "evt": {"cid", "ts", "amt"},
+            },
+            strict=False,
+        )
+        parser._feature_spec = self._make_spec(["first_seen_at_dow"])
+        parser._reconcile_datetime_derivation_with_spec(config)
+        landing = config.landing["cust"]
+        assert landing.datetime_derivation is not None
+        assert "first_seen_at" in landing.datetime_derivation.source_columns
+
+    def test_no_op_when_source_already_declared(self):
+        """Spec selects a datetime feature whose source is already in
+        ``datetime_derivation_sources`` — reconciler must NOT mutate the
+        config and must NOT raise."""
+        parser, config = self._parser_and_config(
+            event_existing_sources=("opportunity_close_date",),
+            strict=True,
+        )
+        parser._feature_spec = self._make_spec([
+            "opportunity_close_date_delta_hours_avg_30d",
+        ])
+        before = list(config.bronze_event["evt"].datetime_derivation.source_columns)
+        parser._reconcile_datetime_derivation_with_spec(config)  # must not raise
+        after = list(config.bronze_event["evt"].datetime_derivation.source_columns)
+        assert before == after
+
+    def test_skips_features_whose_base_is_not_producible(self):
+        """If ``{base}`` of ``{base}_delta_hours`` is not a column the parser
+        can prove the bronze stage emits, the reconciler leaves it alone —
+        the standard parity gate will surface the missing-column error
+        with its richer context."""
+        parser, config = self._parser_and_config(
+            raw_columns_by_ds={"cust": {"cid", "ts"}, "evt": {"cid", "ts", "amt"}},
+            strict=True,
+        )
+        # `random_unknown` is not in any raw_source_columns / silver / etc.
+        parser._feature_spec = self._make_spec(["random_unknown_delta_hours_avg_30d"])
+        # Must not raise — base is not producible, leave to standard gate.
+        parser._reconcile_datetime_derivation_with_spec(config)
+
+
 class TestGoldPostSelectionStepTargets:
     """Gold's `apply_feature_selection` runs BEFORE `apply_encodings` and
     `apply_scalings`. Any column that is still needed by a post-selection step
