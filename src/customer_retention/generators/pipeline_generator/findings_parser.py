@@ -397,9 +397,75 @@ class FindingsParser:
         self._reconcile_event_post_shaping(config)
         self._reconcile_bronze_columns(config)
         self._reconcile_gold_columns(config)
+        # FW-12: codegen-time check that the target column is either numeric
+        # or has a `target_label_map` registered. Mirrors NB01's
+        # `validate_target_dtype` strict-mode behavior so an operator who
+        # skips NB01 still gets a clear codegen-time error instead of a
+        # confusing silver/training failure.
+        self._enforce_target_dtype_parity(config, source_findings)
         if self._feature_spec is not None:
             self._enforce_spec_schema_parity(config)
         return config
+
+    def _enforce_target_dtype_parity(
+        self,
+        config: "PipelineConfig",
+        source_findings: Dict[str, "ExplorationFindings"],
+    ) -> None:
+        """Refuse codegen on a non-numeric target with no encoding registered.
+
+        Reads ``findings.metadata["target_validation"]`` (set by NB01's
+        `validate_target_dtype` cell) and confirms one of:
+
+        * the target was classified ``numeric`` / ``boolean``, OR
+        * a ``target_label_map`` is registered (on findings.metadata or in
+          ``config.gold.target_label_map``).
+
+        Raises ``ValueError`` with the same paste-ready
+        ``registry.set_target_label_map(...)`` template the validator emits
+        so an operator who hit codegen before running NB01 still has a
+        single-paste recovery path. No-op when no findings carry a
+        ``target_validation`` entry — preserves backward compat for
+        engagements built before FW-12.
+        """
+        target = config.target_column
+        registered_map = bool(getattr(config.gold, "target_label_map", None))
+        # Look at any per-dataset findings.metadata entry for our target.
+        for findings in source_findings.values():
+            if not findings.metadata:
+                continue
+            tv = findings.metadata.get("target_validation")
+            if not isinstance(tv, dict):
+                continue
+            kind = tv.get("kind")
+            if kind in ("numeric", "boolean"):
+                return
+            if registered_map or findings.metadata.get("target_label_map"):
+                return
+            if kind in ("multi_class_string", "single_value", "missing"):
+                distinct = tv.get("distinct_count")
+                raise ValueError(
+                    f"Target column {target!r} was classified as "
+                    f"{kind!r} (distinct={distinct}) at NB01 profile time "
+                    f"but no `target_label_map` is registered. Codegen "
+                    f"would ship silver/gold with a non-numeric target. "
+                    f"In NB01 paste a TARGET_LABEL_MAP_OVERRIDE in the "
+                    f"`validate_target_dtype` cell, or call "
+                    f"`registry.set_target_label_map({target!r}, "
+                    f"{{...}}, rationale=..., source_notebook=...)` in "
+                    f"NB05 before re-running NB10. (Doc: docs/sps_fw1_to_"
+                    f"fw11_release_notes.md FW-12)"
+                )
+            if kind == "binary_string":
+                # NB01 should have auto-encoded by sort order; if no map is
+                # registered, the binary encoding was lost — surface it.
+                raise ValueError(
+                    f"Target column {target!r} is a binary string but no "
+                    f"`target_label_map` was registered. Re-run NB01's "
+                    f"`validate_target_dtype` cell to auto-encode the "
+                    f"binary target, or set TARGET_LABEL_MAP_OVERRIDE "
+                    f"explicitly."
+                )
 
     def _enforce_spec_schema_parity(self, config: PipelineConfig) -> None:
         # FW-6: reconcile spec-implied datetime derivations into the config
@@ -1092,7 +1158,21 @@ class FindingsParser:
                             rationale=f"Standardize {col_name}",
                         )
                     )
-        return GoldLayerConfig(encodings=encodings, scalings=scalings)
+        target_label_map: Dict[Any, int] = {}
+        for findings in sources.values():
+            persisted = (findings.metadata or {}).get("target_label_map")
+            if persisted:
+                # FW-12: hoist findings.metadata["target_label_map"] (set by
+                # NB01's `validate_target_dtype` cell) onto the gold config
+                # so silver merge applies it during codegen even when the
+                # operator hasn't run NB05's registry-init pass yet. NB05
+                # later overwrites this if it edits the registry.
+                target_label_map = dict(persisted)
+                break
+        return GoldLayerConfig(
+            encodings=encodings, scalings=scalings,
+            target_label_map=target_label_map,
+        )
 
     def _find_target_column(self, sources: Dict[str, ExplorationFindings]) -> str:
         for findings in sources.values():
@@ -2361,6 +2441,12 @@ class FindingsParser:
         if not hasattr(registry, "gold") or registry.gold is None:
             return
         gold = registry.gold
+        # FW-12: hoist the registered target_label_map onto the codegen
+        # config. Silver template applies it during the target write so
+        # gold ships a numeric target column; downstream training reads
+        # the encoded form unchanged.
+        if getattr(gold, "target_label_map", None):
+            config.gold.target_label_map = dict(gold.target_label_map)
         opt_in_prefixes = list(zero_inflation_opt_in_prefixes or [])
         pipeline_columns = self._collect_pipeline_columns(config)
         for step in config.silver.derived_columns:

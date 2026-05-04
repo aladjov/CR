@@ -92,6 +92,11 @@ class GoldLayerConfig:
     feature_selections: List[str] = field(default_factory=list)
     feature_exclusion_prefixes: List[str] = field(default_factory=list)
     transformations: List[TransformationStep] = field(default_factory=list)
+    # FW-12: ``{value: 0|1}`` mapping silver merge applies during the target
+    # write so gold sees a numeric target column. Sourced from
+    # `RecommendationRegistry.gold.target_label_map`. Empty dict means no
+    # mapping (target is expected to be numeric already).
+    target_label_map: Dict[Any, int] = field(default_factory=dict)
 
 
 @dataclass

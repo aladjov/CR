@@ -99,6 +99,12 @@ class GoldRecommendations:
     feature_selection: List[LayeredRecommendation] = field(default_factory=list)
     transformations: List[LayeredRecommendation] = field(default_factory=list)
     feature_selection_config: Optional[FeatureSelectionConfig] = None
+    # FW-12: ``{value: 0|1}`` mapping that silver merge applies during the
+    # target-column write so gold sees a numeric column. Set via
+    # ``RecommendationRegistry.set_target_label_map``. Empty dict (default)
+    # means no mapping — target is expected to be numeric already.
+    target_label_map: Dict[Any, int] = field(default_factory=dict)
+    target_label_map_rationale: str = ""
 
     @property
     def all_recommendations(self) -> List[LayeredRecommendation]:
@@ -175,6 +181,65 @@ class RecommendationRegistry:
 
     def init_gold(self, target_column: str) -> None:
         self.gold = GoldRecommendations(target_column=target_column)
+
+    def set_target_label_map(
+        self,
+        target_column: str,
+        mapping: Dict[Any, int],
+        rationale: str = "",
+        source_notebook: str = "",
+    ) -> None:
+        """Register a ``{value: 0|1}`` mapping for the target column (FW-12).
+
+        Silver merge applies the mapping during the target write so gold ships
+        with a numeric column. NB05's ``load_findings`` cell reads the mapping
+        from the registry first, falls back to the in-cell ``TARGET_LABEL_MAP``
+        only when no mapping is registered.
+
+        Validates that:
+
+        * ``target_column`` matches the gold target (or initializes gold).
+        * Every mapping value is 0 or 1 (binary classification only).
+        * The mapping is non-empty.
+
+        ``rationale`` and ``source_notebook`` are recorded on the gold
+        recommendations object for the audit trail; they appear in the
+        rendered recommendations.yaml so reviewers can trace why the
+        mapping was chosen.
+        """
+        if not mapping:
+            raise ValueError(
+                "set_target_label_map: mapping must be non-empty. "
+                "Pass at least two entries (one for each binary class)."
+            )
+        bad_labels = sorted({v for v in mapping.values() if v not in (0, 1)})
+        if bad_labels:
+            raise ValueError(
+                f"set_target_label_map: mapping values must be 0 or 1; "
+                f"got: {bad_labels!r}. Multi-class classification is not "
+                f"supported by the framework — pick a binary collapse "
+                f"(e.g. churn-positive vs all-others)."
+            )
+        if self.gold is None:
+            self.init_gold(target_column)
+        elif self.gold.target_column != target_column:
+            raise ValueError(
+                f"set_target_label_map: target_column mismatch. Registry "
+                f"already initialized with gold.target_column="
+                f"{self.gold.target_column!r}; got {target_column!r}. "
+                f"Re-init via init_gold(target_column) first if you mean "
+                f"to switch targets."
+            )
+        self.gold.target_label_map = dict(mapping)
+        self.gold.target_label_map_rationale = (
+            rationale if rationale else f"set via {source_notebook or 'unknown notebook'}"
+        )
+
+    def get_target_label_map(self) -> Dict[Any, int]:
+        """Return the registered ``{value: 0|1}`` map or empty dict."""
+        if self.gold is None:
+            return {}
+        return dict(self.gold.target_label_map or {})
 
     def init_landing(self) -> None:
         self.landing = LandingRecommendations()
@@ -674,6 +739,10 @@ class RecommendationRegistry:
             "encoding": self._recs_to_hashable(self.gold.encoding),
             "scaling": self._recs_to_hashable(self.gold.scaling),
             "feature_selection": self._recs_to_hashable(self.gold.feature_selection),
+            "target_label_map": sorted(
+                ((str(k), int(v)) for k, v in (self.gold.target_label_map or {}).items()),
+                key=lambda kv: kv[0],
+            ),
         }
 
     def _recs_to_hashable(self, recs: List[LayeredRecommendation]) -> List[Dict]:
@@ -787,6 +856,8 @@ class RecommendationRegistry:
             feature_selection=[cls._rec_from_dict(r) for r in data.get("feature_selection", [])],
             transformations=[cls._rec_from_dict(r) for r in data.get("transformations", [])],
             feature_selection_config=FeatureSelectionConfig(**data["feature_selection_config"]) if data.get("feature_selection_config") else None,
+            target_label_map=dict(data.get("target_label_map") or {}),
+            target_label_map_rationale=data.get("target_label_map_rationale", ""),
         )
 
     @classmethod

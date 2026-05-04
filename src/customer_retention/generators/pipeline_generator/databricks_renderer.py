@@ -224,6 +224,10 @@ DATABRICKS_TEMPLATES = {
 PIPELINE_NAME = "{{ config.name }}"
 COMPOSITE_NAME = "{{ config.composite_name or config.name }}"
 TARGET_COLUMN = "{{ config.target_column }}"
+# FW-12: codegen-time target_label_map ({value: 0|1}) for silver merge to
+# apply during the target write. Empty dict means no encoding (numeric
+# target). Sourced from `RecommendationRegistry.gold.target_label_map`.
+TARGET_LABEL_MAP = {{ config.gold.target_label_map | tojson if config.gold and config.gold.target_label_map else '{}' }}
 TIMESTAMP_COLUMN = "event_timestamp"
 FIT_MODE = {{ 'True' if config.fit_mode else 'False' }}
 RECOMMENDATIONS_HASH = {{ '"%s"' % config.recommendations_hash if config.recommendations_hash else 'None' }}
@@ -1496,6 +1500,32 @@ def {{ func_name }}(df):
 
 # COMMAND ----------
 
+def apply_target_label_map(df):
+    # FW-12: encode a categorical target via the registered TARGET_LABEL_MAP.
+    # No-op when the map is empty (numeric target = standard path) or when
+    # the target column already evaluates as numeric. When the map is set,
+    # applies a Spark CASE WHEN that maps each value to 0/1; unmapped values
+    # become NULL and the null-label filter at training time drops them.
+    # Mirrors `customer_retention.stages.profiling.target_validator
+    # .apply_target_encoding` so exploration and codegen stay in lock-step.
+    if not TARGET_LABEL_MAP:
+        return df
+    if TARGET_COLUMN not in [f.name for f in df.schema.fields]:
+        return df
+    _dtype = df.schema[TARGET_COLUMN].dataType.simpleString()
+    if _dtype.startswith(("int", "long", "double", "float", "decimal", "bigint",
+                          "smallint", "tinyint", "byte", "short")):
+        # Already numeric — do not double-encode.
+        return df
+    _case = F
+    for _val, _lbl in TARGET_LABEL_MAP.items():
+        _case = _case.when(F.col(TARGET_COLUMN) == F.lit(_val), F.lit(int(_lbl)))
+    print(f"  silver target encoding: applying TARGET_LABEL_MAP "
+          f"({len(TARGET_LABEL_MAP)} entries) to {TARGET_COLUMN!r}")
+    return df.withColumn(TARGET_COLUMN, _case.otherwise(F.lit(None).cast("double")))
+
+# COMMAND ----------
+
 def create_holdout_mask(df, holdout_fraction=0.1, random_state=42):
     original_col = f"original_{TARGET_COLUMN}"
     if original_col in df.columns:
@@ -1548,6 +1578,11 @@ def run_silver():
     _timings["apply_derived"] = round(_time.monotonic() - _t2, 2)
     print(f"  apply_derived: {_timings['apply_derived']:.1f}s")
 {% endif %}
+    _t_tlm = _time.monotonic()
+    merged = apply_target_label_map(merged)
+    _timings["target_label_map"] = round(_time.monotonic() - _t_tlm, 2)
+    if _timings["target_label_map"] > 0.05:
+        print(f"  target_label_map: {_timings['target_label_map']:.1f}s")
     _t3 = _time.monotonic()
     merged = create_holdout_mask(merged)
     _timings["holdout_mask"] = round(_time.monotonic() - _t3, 2)
