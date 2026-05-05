@@ -300,7 +300,12 @@ def load_notebook_findings(
     exclude_aggregated: bool = False,
     prefer_merged: bool = False,
     root: Optional[Path] = None,
+    dataset_name: Optional[str] = None,
 ) -> tuple[str, Optional[RunNamespace], Optional[str]]:
+    # Explicit `dataset_name` (typically the Databricks for_each task widget
+    # `dataset_id`) bypasses session-state / list_datasets()[0] fallback.
+    # Without it, every parallel for_each task would resolve to the same
+    # dataset and collide on the same per-task path.
     namespace = RunNamespace.from_env_or_latest(root=root)
 
     if namespace and prefer_merged:
@@ -309,7 +314,8 @@ def load_notebook_findings(
             return str(namespace.merged_findings_path), namespace, None
 
     if namespace:
-        dataset_name = resolve_active_dataset(namespace)
+        if not dataset_name:
+            dataset_name = resolve_active_dataset(namespace)
         if dataset_name:
             if exclude_aggregated:
                 resolved = resolve_findings_path(
