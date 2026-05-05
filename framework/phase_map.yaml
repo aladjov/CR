@@ -1,5 +1,5 @@
 version: 1
-source_fingerprint: sha256:a94f47962bf3fdbe3cb261ae856765227c4ebdd511e410528b3bdab9c5f8e4a6
+source_fingerprint: sha256:cb6462b04f88ee7dcdbab01a57ebb8462451e2408b41b8eec8694acfd3601ae5
 generated_from:
 - exploration_notebooks/00_start_here.ipynb
 - exploration_notebooks/01_data_discovery.ipynb
@@ -90,6 +90,10 @@ sections:
     notebook: 00_start_here
     source: notebook_fallback
   00_start_here#project_bootstrap_guided_setup:
+    stage: landing_post
+    notebook: 00_start_here
+    source: notebook_fallback
+  00_start_here#user_code_assimilation_summary_intro:
     stage: landing_post
     notebook: 00_start_here
     source: notebook_fallback

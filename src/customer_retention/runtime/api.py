@@ -10,6 +10,13 @@ from .decorator import register
 from .logging import in_notebook, log, log_table
 from .registry import registry
 from .replay import replay_registered_landing_steps
+from .summary import (
+    AssimilationReport,
+    AssimilationRow,
+    print_user_code_summary,
+    snapshot_landing_state,
+    summarize_user_code,
+)
 
 
 def mark_lane2_executed(name: str) -> None:
@@ -26,4 +33,7 @@ def mark_lane2_executed(name: str) -> None:
 __all__ = [
     "register", "log", "log_table", "in_notebook", "registry",
     "replay_registered_landing_steps", "mark_lane2_executed",
+    # User-code assimilation summary
+    "snapshot_landing_state", "summarize_user_code", "print_user_code_summary",
+    "AssimilationReport", "AssimilationRow",
 ]

@@ -20,3 +20,11 @@ class TestNamespaceFacade:
         from customer_retention.runtime import cr
         from customer_retention.runtime.registry import registry as direct
         assert cr.registry is direct
+
+    def test_summary_helpers_exported(self):
+        from customer_retention.runtime import cr
+        assert hasattr(cr, "snapshot_landing_state")
+        assert hasattr(cr, "summarize_user_code")
+        assert hasattr(cr, "print_user_code_summary")
+        assert hasattr(cr, "AssimilationReport")
+        assert hasattr(cr, "AssimilationRow")
