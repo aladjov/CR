@@ -13,6 +13,21 @@ if TYPE_CHECKING:
     from customer_retention.runtime.harvest import HarvestResult
 
 
+def _auto_harvest() -> Optional["HarvestResult"]:
+    """FW-15b — same auto-harvest fallback as the Databricks generator.
+    Real harvest failures propagate."""
+    try:
+        from customer_retention.runtime.harvest import Harvester  # noqa: PLC0415
+        from customer_retention.runtime.registry import registry  # noqa: PLC0415
+    except ImportError:
+        return None
+    if not registry.get_registered():
+        registry.load_from_disk()
+    if not registry.get_registered():
+        return None
+    return Harvester().harvest()
+
+
 class PipelineGenerator(PipelineGeneratorBase):
     def __init__(
         self,
@@ -56,7 +71,9 @@ class PipelineGenerator(PipelineGeneratorBase):
             landing_drop_columns_overrides=landing_drop_columns_overrides,
         )
         self._renderer = CodeRenderer()
-        self._harvest_result = harvest_result
+        self._harvest_result = (
+            harvest_result if harvest_result is not None else _auto_harvest()
+        )
 
     def generate(self) -> List[Path]:
         config = self._build_config()

@@ -92,6 +92,16 @@ class RunNamespace:
         return self.merged_dir / "recommendations.yaml"
 
     @property
+    def registered_functions_path(self) -> Path:
+        """FW-15b — disk-backed `runtime.registry` snapshot.
+
+        `@cr.register` writes to this file on every decoration so a fresh
+        kernel (e.g. NB10 in a multi-task Databricks job) can rehydrate
+        the in-memory registry via `Registry.load_from_disk()`.
+        """
+        return self.merged_dir / "registered_functions.json"
+
+    @property
     def exploration_feature_profile_path(self) -> Path:
         return self.merged_dir / "exploration_feature_profile.yaml"
 

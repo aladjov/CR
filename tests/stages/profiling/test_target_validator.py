@@ -40,7 +40,7 @@ class TestClassifyTargetDtype:
 
     def test_binary_string_target_yields_proposed_mapping(self):
         df = pd.DataFrame({"y": ["Active", "Churned", "Active", "Churned"]})
-        c = classify_target_dtype(df, "y")
+        c = classify_target_dtype(df, "y", min_non_null=0)
         assert c.kind == KIND_BINARY_STRING
         assert c.distinct_count == 2
         # Sort order: 'Active' < 'Churned' → 0, 1
@@ -52,7 +52,7 @@ class TestClassifyTargetDtype:
             "y": ["Reseller", "Distributor", "Retailer",
                   "Reseller", "Distributor", "Retailer"],
         })
-        c = classify_target_dtype(df, "y")
+        c = classify_target_dtype(df, "y", min_non_null=0)
         assert c.kind == KIND_MULTI_CLASS_STRING
         assert c.distinct_count == 3
         assert c.proposed_mapping is None
@@ -61,9 +61,23 @@ class TestClassifyTargetDtype:
 
     def test_single_value_target_yields_single_value_kind(self):
         df = pd.DataFrame({"y": ["Active"] * 10})
-        c = classify_target_dtype(df, "y")
+        c = classify_target_dtype(df, "y", min_non_null=0)
         assert c.kind == KIND_SINGLE_VALUE
         assert c.distinct_count == 1
+
+    def test_degenerate_target_below_threshold(self):
+        """FW-13 — 99.97%-NULL binary target classifies as degenerate even
+        though distinct_count is 2."""
+        df = pd.DataFrame({"y": ["Reseller", "Customer Referral"] + [None] * 6998})
+        c = classify_target_dtype(df, "y")
+        assert c.kind == "degenerate"
+        assert "non-null" in c.recommendation
+
+    def test_degenerate_threshold_overridable(self):
+        """FW-13 — `min_non_null=0` bypasses the degenerate check."""
+        df = pd.DataFrame({"y": ["Reseller", "Customer Referral"] + [None] * 6998})
+        c = classify_target_dtype(df, "y", min_non_null=0)
+        assert c.kind == KIND_BINARY_STRING
 
     def test_missing_target_column(self):
         df = pd.DataFrame({"x": [1, 2, 3]})
@@ -131,14 +145,14 @@ class TestValidateTargetOrRaise:
 
     def test_binary_string_target_returns_classification_no_raise(self):
         df = pd.DataFrame({"y": ["Active", "Churned"] * 5})
-        c = validate_target_or_raise(df, "y")
+        c = validate_target_or_raise(df, "y", min_non_null=0)
         assert c.kind == KIND_BINARY_STRING
         assert c.proposed_mapping == {"Active": 0, "Churned": 1}
 
     def test_multi_class_string_without_map_raises_with_template(self):
         df = pd.DataFrame({"y": ["Reseller", "Distributor", "Retailer"] * 3})
         with pytest.raises(ValueError) as exc:
-            validate_target_or_raise(df, "y")
+            validate_target_or_raise(df, "y", min_non_null=0)
         msg = str(exc.value)
         # Message names the column, lists distinct values, and embeds the
         # paste-ready registry call so the operator copy-pastes once.
@@ -151,7 +165,7 @@ class TestValidateTargetOrRaise:
         df = pd.DataFrame({"y": ["Reseller", "Distributor", "Retailer"] * 3})
         c = validate_target_or_raise(df, "y", label_map={
             "Reseller": 1, "Distributor": 0, "Retailer": 0,
-        })
+        }, min_non_null=0)
         assert c.kind == KIND_MULTI_CLASS_STRING
 
     def test_multi_class_string_with_incomplete_map_raises(self):
@@ -159,12 +173,12 @@ class TestValidateTargetOrRaise:
         with pytest.raises(ValueError, match="Retailer"):
             validate_target_or_raise(df, "y", label_map={
                 "Reseller": 1, "Distributor": 0,
-            })
+            }, min_non_null=0)
 
     def test_single_value_target_raises(self):
         df = pd.DataFrame({"y": ["Only"] * 10})
         with pytest.raises(ValueError, match="only one distinct value"):
-            validate_target_or_raise(df, "y")
+            validate_target_or_raise(df, "y", min_non_null=0)
 
     def test_missing_target_raises(self):
         df = pd.DataFrame({"x": [1, 2, 3]})
@@ -173,8 +187,15 @@ class TestValidateTargetOrRaise:
 
     def test_strict_false_does_not_raise_on_multi_class(self):
         df = pd.DataFrame({"y": ["A", "B", "C"] * 3})
-        c = validate_target_or_raise(df, "y", strict=False)
+        c = validate_target_or_raise(df, "y", strict=False, min_non_null=0)
         assert c.kind == KIND_MULTI_CLASS_STRING
+
+    def test_degenerate_target_raises_with_actionable_recommendation(self):
+        """FW-13 — engagement repro: 99.97% NULL binary column raises with
+        the FW-13 message before FW-12 auto-encoding runs."""
+        df = pd.DataFrame({"y": ["Reseller", "Customer Referral"] + [None] * 6998})
+        with pytest.raises(ValueError, match="degenerate"):
+            validate_target_or_raise(df, "y")
 
 
 class TestRenderLabelMapTemplate:

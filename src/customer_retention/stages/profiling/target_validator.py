@@ -57,7 +57,14 @@ KIND_BINARY_STRING = "binary_string"        # exactly 2 non-null distinct values
 KIND_MULTI_CLASS_STRING = "multi_class_string"  # >2 distinct values
 KIND_SINGLE_VALUE = "single_value"  # 1 distinct value — degenerate target
 KIND_MISSING = "missing"            # target column absent / all null
+KIND_DEGENERATE = "degenerate"      # FW-13 — too few non-null rows to model
 KIND_UNKNOWN = "unknown"             # could not classify (treat as failure)
+
+# FW-13 — minimum non-null rows the target must carry to be considered
+# modelable. Caller can override via `min_non_null=` on classify/validate.
+# Threshold is `max(MIN_NON_NULL_FOR_TARGET, MIN_NON_NULL_FRACTION * total)`.
+MIN_NON_NULL_FOR_TARGET = 100
+MIN_NON_NULL_FRACTION = 0.005  # 0.5% of total rows
 
 
 @dataclass
@@ -136,7 +143,7 @@ def auto_binary_encoding(distinct_values: List[Any]) -> Optional[Dict[Any, int]]
     return {a: 0, b: 1}
 
 
-def _classify_pandas_like(df, target_column: str, distinct_cap: int) -> TargetClassification:
+def _classify_pandas_like(df, target_column: str, distinct_cap: int, *, min_non_null=None) -> TargetClassification:
     if target_column not in df.columns:
         return TargetClassification(
             kind=KIND_MISSING, column=target_column, dtype="absent",
@@ -179,10 +186,11 @@ def _classify_pandas_like(df, target_column: str, distinct_cap: int) -> TargetCl
         total_rows=total_rows, null_rows=null_rows,
         distinct_values=distinct_values,
         distinct_count_total=distinct_count_total,
+        min_non_null=min_non_null,
     )
 
 
-def _classify_spark_like(df, target_column: str, distinct_cap: int) -> TargetClassification:
+def _classify_spark_like(df, target_column: str, distinct_cap: int, *, min_non_null=None) -> TargetClassification:
     """Distributed classifier path for PySpark / pyspark.pandas inputs."""
     from customer_retention.core.compat import as_spark_df  # noqa: PLC0415
 
@@ -236,12 +244,13 @@ def _classify_spark_like(df, target_column: str, distinct_cap: int) -> TargetCla
         total_rows=total_rows, null_rows=null_rows,
         distinct_values=distinct_values,
         distinct_count_total=distinct_count_total,
+        min_non_null=min_non_null,
     )
 
 
 def _classify_from_distinct_values(
     *, target_column, dtype_str, total_rows, null_rows,
-    distinct_values, distinct_count_total,
+    distinct_values, distinct_count_total, min_non_null=None,
 ) -> TargetClassification:
     """Shared classification logic given a distinct-value list bounded by cap."""
     if distinct_count_total == 0:
@@ -249,6 +258,31 @@ def _classify_from_distinct_values(
             kind=KIND_MISSING, column=target_column, dtype=dtype_str,
             total_rows=total_rows, null_rows=null_rows,
             recommendation="target column is entirely NULL",
+        )
+    # FW-13 — degenerate-target rejection BEFORE the binary-string fast path.
+    # `PARTNER_CLASSIFICATION` had `total_rows=7000`, `null_rows=6998`,
+    # `distinct_count=2` — without this guard FW-12 cheerfully auto-encoded
+    # `{Customer Referral: 0, Reseller: 1}` and propagated a 99.97%-NULL
+    # column through silver / gold / training.
+    non_null = max(0, (total_rows or 0) - (null_rows or 0))
+    threshold = (
+        min_non_null
+        if min_non_null is not None
+        else max(MIN_NON_NULL_FOR_TARGET, int(MIN_NON_NULL_FRACTION * (total_rows or 0)))
+    )
+    if total_rows and non_null < threshold:
+        pct = (100.0 * (null_rows or 0) / total_rows) if total_rows else 0.0
+        return TargetClassification(
+            kind=KIND_DEGENERATE, column=target_column, dtype=dtype_str,
+            total_rows=total_rows, null_rows=null_rows,
+            distinct_values=distinct_values, distinct_count=distinct_count_total,
+            recommendation=(
+                f"target {target_column!r} has only {non_null} non-null rows "
+                f"out of {total_rows} ({pct:.2f}% missing) — below the modelable "
+                f"threshold of {threshold} non-null rows. Pick a different "
+                f"target column or fix the upstream derivation that should "
+                f"populate this column."
+            ),
         )
     if distinct_count_total == 1:
         return TargetClassification(
@@ -293,26 +327,25 @@ def classify_target_dtype(
     target_column: str,
     *,
     distinct_cap: int = DEFAULT_DISTINCT_CAP,
+    min_non_null: Optional[int] = None,
 ) -> TargetClassification:
     """Inspect ``target_column`` on ``df`` and return its classification.
 
     Dispatches to a Spark-distributed path when ``df`` is a pyspark.pandas
     DataFrame or PySpark DataFrame, else uses pandas. Bounded by
-    ``distinct_cap`` to avoid OOM on high-cardinality columns.
+    ``distinct_cap`` to avoid OOM on high-cardinality columns. ``min_non_null``
+    overrides the FW-13 degenerate-target threshold.
     """
     from customer_retention.core.compat import _is_spark_pandas  # noqa: PLC0415
 
     has_to_spark = hasattr(df, "to_spark")
-    is_pyspark = (
-        type(df).__module__.startswith("pyspark.sql")
-        or hasattr(df, "schema") and hasattr(df, "rdd")
-    )
+    is_pyspark = type(df).__module__.startswith("pyspark.sql")
     if _is_spark_pandas(df) or is_pyspark or has_to_spark:
         try:
-            return _classify_spark_like(df, target_column, distinct_cap)
+            return _classify_spark_like(df, target_column, distinct_cap, min_non_null=min_non_null)
         except Exception as e:  # pragma: no cover — fall back gracefully
             logger.debug("Spark classifier failed (%s); using pandas path", e)
-    return _classify_pandas_like(df, target_column, distinct_cap)
+    return _classify_pandas_like(df, target_column, distinct_cap, min_non_null=min_non_null)
 
 
 def render_label_map_template(distinct_values: List[Any], indent: str = "    ") -> str:
@@ -345,10 +378,7 @@ def apply_target_encoding(df: Any, target_column: str, mapping: Dict[Any, int]) 
     from customer_retention.core.compat import _is_spark_pandas  # noqa: PLC0415
 
     has_to_spark = hasattr(df, "to_spark")
-    is_pyspark = (
-        type(df).__module__.startswith("pyspark.sql")
-        or (hasattr(df, "schema") and hasattr(df, "rdd"))
-    )
+    is_pyspark = type(df).__module__.startswith("pyspark.sql")
     if _is_spark_pandas(df) or is_pyspark or has_to_spark:
         from pyspark.sql import functions as F  # noqa: PLC0415,N812
 
@@ -379,6 +409,7 @@ def validate_target_or_raise(
     *,
     label_map: Optional[Dict[Any, int]] = None,
     distinct_cap: int = DEFAULT_DISTINCT_CAP,
+    min_non_null: Optional[int] = None,
     strict: bool = True,
 ) -> TargetClassification:
     """Single entry point used by NB01 and codegen.
@@ -397,7 +428,9 @@ def validate_target_or_raise(
     raise so the operator catches typos / case mismatches before the
     encoded column ships through silver / gold / training.
     """
-    classification = classify_target_dtype(df, target_column, distinct_cap=distinct_cap)
+    classification = classify_target_dtype(
+        df, target_column, distinct_cap=distinct_cap, min_non_null=min_non_null,
+    )
     if classification.kind in (KIND_NUMERIC, KIND_BOOLEAN):
         return classification
     if not strict:
@@ -406,6 +439,11 @@ def validate_target_or_raise(
         raise ValueError(
             f"Target column {target_column!r} is missing / entirely NULL on "
             f"the input DataFrame. {classification.recommendation}"
+        )
+    if classification.kind == KIND_DEGENERATE:
+        raise ValueError(
+            f"Target column {target_column!r} is degenerate: "
+            f"{classification.recommendation}"
         )
     if classification.kind == KIND_SINGLE_VALUE:
         raise ValueError(

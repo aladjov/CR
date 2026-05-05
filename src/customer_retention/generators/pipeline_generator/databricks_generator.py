@@ -14,6 +14,25 @@ if TYPE_CHECKING:
     from customer_retention.runtime.harvest import HarvestResult
 
 
+def _auto_harvest() -> Optional["HarvestResult"]:
+    """FW-15b — when the caller did not pass `harvest_result=`, hydrate the
+    `runtime.registry` from disk (multi-task Databricks job: NB10 runs in a
+    fresh kernel) and run the harvester. Real harvest failures propagate
+    so codegen never silently produces a pipeline without user_extensions
+    when the operator clearly intended one (engagement spschurn-01bb634c
+    failure mode)."""
+    try:
+        from customer_retention.runtime.harvest import Harvester  # noqa: PLC0415
+        from customer_retention.runtime.registry import registry  # noqa: PLC0415
+    except ImportError:
+        return None
+    if not registry.get_registered():
+        registry.load_from_disk()
+    if not registry.get_registered():
+        return None
+    return Harvester().harvest()
+
+
 class DatabricksPipelineGenerator(PipelineGeneratorBase):
     def __init__(
         self,
@@ -58,7 +77,9 @@ class DatabricksPipelineGenerator(PipelineGeneratorBase):
             landing_filter_overrides=landing_filter_overrides,
             landing_drop_columns_overrides=landing_drop_columns_overrides,
         )
-        self._harvest_result = harvest_result
+        self._harvest_result = (
+            harvest_result if harvest_result is not None else _auto_harvest()
+        )
         self._renderer = DatabricksCodeRenderer(
             catalog=catalog, schema=schema,
             framework_repo_path=framework_repo_path or get_framework_repo_path(),
