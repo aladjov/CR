@@ -79,9 +79,15 @@ def get_current_username() -> str:
 def resolve_active_dataset(
     namespace: RunNamespace, username: Optional[str] = None
 ) -> Optional[str]:
-    env_dataset = os.environ.get("CR_DATASET_ID")
-    if env_dataset:
-        return env_dataset
+    # `CR_DATASET_ID` is honored only outside Databricks. Env vars do not
+    # propagate between Databricks multi-task notebook tasks, so reading
+    # one in NB01..NB09 would either pick up a stale value from the
+    # cluster's prior session or miss entirely. Local dev (papermill,
+    # plain Python) keeps the env-var fast path.
+    if not os.environ.get("DATABRICKS_RUNTIME_VERSION"):
+        env_dataset = os.environ.get("CR_DATASET_ID")
+        if env_dataset:
+            return env_dataset
 
     if username is None:
         username = get_current_username()
@@ -161,15 +167,37 @@ def resolve_data_path(
     data_path: Optional[str],
     namespace: RunNamespace,
     project_ctx: Optional[Any] = None,
+    dataset_name: Optional[str] = None,
 ) -> tuple[str, str]:
-    env_dataset_id = os.environ.get("CR_DATASET_ID")
-    if env_dataset_id:
-        if project_ctx and env_dataset_id in project_ctx.datasets:
-            return project_ctx.datasets[env_dataset_id].path, env_dataset_id
+    """Resolve ``(DATA_PATH, dataset_name)`` for an exploration notebook.
+
+    Resolution priority (highest to lowest):
+
+    1. Explicit ``dataset_name`` kwarg — used by NB01..NB09 when the
+       caller has read a Databricks widget (``dataset_name``) set by the
+       parent multi-task job's ``for_each`` task.
+    2. Explicit ``data_path`` argument.
+    3. ``CR_DATASET_ID`` env var — **only outside Databricks**. Env vars
+       don't propagate between Databricks notebook tasks, so relying on
+       them for cross-notebook handoff produces silent run failures in
+       multi-task jobs. Local dev (papermill, plain Python) still
+       respects the var.
+    4. Session-state autodetect (``resolve_active_dataset``).
+    5. First dataset in ``project_ctx``.
+
+    Never raises on env-var miss alone — the env var is treated as a hint
+    that's silently ignored when not on the local resolver path.
+    """
+    if dataset_name:
+        if project_ctx and dataset_name in project_ctx.datasets:
+            return project_ctx.datasets[dataset_name].path, dataset_name
         raise ValueError(
-            f"CR_DATASET_ID={env_dataset_id!r} is set but cannot be resolved. "
-            f"Available datasets: {list(project_ctx.datasets.keys()) if project_ctx else '(no project context)'}. "
-            "Check that notebook 00 registered this dataset."
+            f"dataset_name={dataset_name!r} not found in project context. "
+            f"Available datasets: "
+            f"{list(project_ctx.datasets.keys()) if project_ctx else '(no project context)'}. "
+            "Verify notebook 00 saved project_context.yaml at "
+            f"{namespace.project_context_path} and that the widget value "
+            "matches a registered dataset."
         )
 
     if data_path is not None:
@@ -178,6 +206,12 @@ def resolve_data_path(
             or Path(data_path).stem
         )
         return data_path, name
+
+    on_databricks = bool(os.environ.get("DATABRICKS_RUNTIME_VERSION"))
+    if not on_databricks:
+        env_dataset_id = os.environ.get("CR_DATASET_ID")
+        if env_dataset_id and project_ctx and env_dataset_id in project_ctx.datasets:
+            return project_ctx.datasets[env_dataset_id].path, env_dataset_id
 
     auto_name = resolve_active_dataset(namespace)
     if auto_name and project_ctx and auto_name in project_ctx.datasets:
@@ -188,8 +222,9 @@ def resolve_data_path(
         return project_ctx.datasets[first_name].path, first_name
 
     raise ValueError(
-        "DATA_PATH is None but no project context found for autodetection. "
-        "Set DATA_PATH explicitly or run notebook 00 first."
+        "DATA_PATH is None and no project context found for autodetection. "
+        "Set DATA_PATH explicitly, pass dataset_name=..., or run notebook 00 first "
+        f"(expected project_context.yaml at {namespace.project_context_path})."
     )
 
 

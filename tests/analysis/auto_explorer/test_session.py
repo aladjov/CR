@@ -855,27 +855,68 @@ class TestResolveDataPath:
         assert name == "customers"
         assert path == str(tmp_path / "customers.csv")
 
-    def test_cr_dataset_id_overrides_hardcoded_data_path(self, tmp_path, monkeypatch):
+    def test_explicit_data_path_takes_precedence_over_env(self, tmp_path, monkeypatch):
+        # Env-var CR_DATASET_ID does NOT override an explicit data_path
+        # argument. The explicit arg is the operator's intent; env vars
+        # are last-resort hints (and ignored on Databricks entirely).
         monkeypatch.setenv("CR_DATASET_ID", "customers")
+        monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
         ns = RunNamespace.create(root=tmp_path, project_name="test")
         ctx = self._make_project_ctx(tmp_path)
         path, name = resolve_data_path("hardcoded/other.csv", ns, project_ctx=ctx)
-        assert name == "customers"
-        assert path == str(tmp_path / "customers.csv")
-        monkeypatch.delenv("CR_DATASET_ID")
+        # data_path wins; name is derived from the path stem.
+        assert path == "hardcoded/other.csv"
+        assert name == "other"
 
-    def test_cr_dataset_id_fails_without_context(self, tmp_path, monkeypatch):
+    def test_cr_dataset_id_used_when_no_data_path_off_databricks(self, tmp_path, monkeypatch):
+        # Outside Databricks, CR_DATASET_ID is a valid hint when project
+        # context is loaded and the env value matches a known dataset.
         monkeypatch.setenv("CR_DATASET_ID", "customers")
-        ns = RunNamespace.create(root=tmp_path, project_name="test")
-        with pytest.raises(ValueError, match="CR_DATASET_ID.*cannot be resolved"):
-            resolve_data_path("hardcoded/other.csv", ns)
-
-    def test_cr_dataset_id_fails_when_not_in_context(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("CR_DATASET_ID", "unknown_ds")
+        monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
         ns = RunNamespace.create(root=tmp_path, project_name="test")
         ctx = self._make_project_ctx(tmp_path)
-        with pytest.raises(ValueError, match="CR_DATASET_ID.*cannot be resolved"):
-            resolve_data_path("hardcoded/other.csv", ns, project_ctx=ctx)
+        path, name = resolve_data_path(None, ns, project_ctx=ctx)
+        assert name == "customers"
+        assert path == str(tmp_path / "customers.csv")
+
+    def test_cr_dataset_id_silently_ignored_on_databricks(self, tmp_path, monkeypatch):
+        # On Databricks, env vars don't propagate between multi-task
+        # notebooks. CR_DATASET_ID is silently ignored to avoid stale
+        # cross-task state poisoning the resolver.
+        monkeypatch.setenv("CR_DATASET_ID", "customers")
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "13.3.x-scala2.12")
+        ns = RunNamespace.create(root=tmp_path, project_name="test")
+        ctx = self._make_project_ctx(tmp_path)
+        # No explicit data_path or dataset_name; env var would have
+        # picked "customers" off-Databricks. On Databricks, the
+        # resolver falls through to the first dataset in project_ctx.
+        path, name = resolve_data_path(None, ns, project_ctx=ctx)
+        assert name == next(iter(ctx.datasets))
+
+    def test_dataset_name_kwarg_takes_precedence(self, tmp_path, monkeypatch):
+        # Widget-driven path: NB01 reads `dbutils.widgets.get("dataset_name")`
+        # and passes it to resolve_data_path. The kwarg wins over data_path
+        # and env var alike.
+        monkeypatch.setenv("CR_DATASET_ID", "ghost")
+        ns = RunNamespace.create(root=tmp_path, project_name="test")
+        ctx = self._make_project_ctx(tmp_path)
+        # Use the only dataset registered in the fixture as the widget value.
+        target = next(iter(ctx.datasets))
+        path, name = resolve_data_path(
+            "hardcoded/other.csv", ns, project_ctx=ctx, dataset_name=target,
+        )
+        assert name == target
+        assert path == ctx.datasets[target].path
+
+    def test_dataset_name_kwarg_unknown_raises(self, tmp_path, monkeypatch):
+        # When the widget value doesn't match any registered dataset,
+        # raise a clear error pointing at project_context.yaml.
+        ns = RunNamespace.create(root=tmp_path, project_name="test")
+        ctx = self._make_project_ctx(tmp_path)
+        with pytest.raises(ValueError, match="dataset_name.*not found"):
+            resolve_data_path(
+                None, ns, project_ctx=ctx, dataset_name="ghost_dataset",
+            )
 
     def test_no_cr_dataset_id_uses_data_path(self, tmp_path, monkeypatch):
         monkeypatch.delenv("CR_DATASET_ID", raising=False)
