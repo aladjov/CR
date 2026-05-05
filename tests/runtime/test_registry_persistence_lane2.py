@@ -65,9 +65,10 @@ class TestDiskPersistence:
         ))
         assert isolated_persist.exists()
         payload = json.loads(isolated_persist.read_text())
-        assert payload["version"] == 1
+        assert payload["version"] == 2
         assert payload["records"][0]["name"] == "derive_churn_target"
         assert payload["records"][0]["expected_stage"] == "target_derive"
+        assert payload.get("lane2_executed") == {}
         live_registry.clear()
 
     def test_load_from_disk_round_trips(self, isolated_persist):
@@ -175,3 +176,93 @@ class TestAutoHarvestFallback:
             for rf in result.all_functions()
         )
         live_registry.clear()
+
+
+class TestAutoHydrateOnFreshKernel:
+    """A fresh NB01 kernel must see what NB00 wrote to the sidecar.
+    These tests simulate the cross-kernel boundary by using a separate
+    Registry instance pointed at the same on-disk path."""
+
+    def test_get_registered_auto_hydrates(self, isolated_persist):
+        live_registry.clear()
+        live_registry.register(RegisteredFunction(
+            name="derive_churn_target", source="def f(): pass",
+            scope="datasets", datasets=["account"], primary="account",
+        ))
+        live_registry.mark_lane2_executed("derive_churn_target")
+
+        # Fresh kernel: a NEW Registry that has not loaded yet.
+        fresh = Registry()
+        records = fresh.get_registered()
+        assert len(records) == 1
+        assert records[0].name == "derive_churn_target"
+
+    def test_lane2_executed_survives_fresh_kernel(self, isolated_persist):
+        live_registry.clear()
+        live_registry.register(RegisteredFunction(
+            name="derive_churn_target", source="def f(): pass",
+            scope="datasets", datasets=["account"], primary="account",
+        ))
+        live_registry.mark_lane2_executed("derive_churn_target")
+
+        fresh = Registry()
+        # First read triggers hydration of records AND lane2 flags.
+        fresh.get_registered()
+        assert fresh.is_lane2_executed("derive_churn_target") is True
+
+    def test_auto_hydrate_is_idempotent(self, isolated_persist):
+        live_registry.clear()
+        live_registry.register(RegisteredFunction(
+            name="f", source="", scope="dataset", dataset="a",
+        ))
+
+        fresh = Registry()
+        first = fresh.get_registered()
+        # Second call must not duplicate records.
+        second = fresh.get_registered()
+        assert len(first) == 1
+        assert len(second) == 1
+
+    def test_auto_hydrate_skipped_when_records_already_present(
+        self, isolated_persist
+    ):
+        # Disk has one record; in-memory registry already has a different
+        # one — auto-hydrate must NOT clobber the in-memory state. This
+        # protects unit tests that pre-populate a Registry().
+        live_registry.clear()
+        live_registry.register(RegisteredFunction(
+            name="from_disk", source="", scope="dataset", dataset="a",
+        ))
+
+        fresh = Registry()
+        fresh.register(RegisteredFunction(
+            name="from_memory", source="", scope="dataset", dataset="b",
+        ))
+        records = fresh.get_registered()
+        names = {r.name for r in records}
+        # Disk hydration is suppressed when the registry already has data.
+        assert names == {"from_memory"}
+
+    def test_auto_hydrate_no_sidecar_is_safe(self, tmp_path, monkeypatch):
+        missing = tmp_path / "no_such_file.json"
+        monkeypatch.setenv("CR_RUNTIME_REGISTRY_PATH", str(missing))
+        fresh = Registry()
+        assert fresh.get_registered() == []
+        assert fresh.is_lane2_executed("anything") is False
+
+    def test_clear_resets_auto_hydrate_marker(self, isolated_persist):
+        live_registry.clear()
+        live_registry.register(RegisteredFunction(
+            name="f", source="", scope="dataset", dataset="a",
+        ))
+
+        fresh = Registry()
+        fresh.get_registered()  # triggers hydration
+        fresh.clear()
+        # After clear, a new sidecar entry written by the live registry
+        # must be picked up on the next read.
+        live_registry.register(RegisteredFunction(
+            name="g", source="", scope="dataset", dataset="b",
+        ))
+        records = fresh.get_registered()
+        assert {r.name for r in records} == {"f", "g"}

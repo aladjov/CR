@@ -918,6 +918,7 @@ class FindingsParser:
         return PipelineConfig(
             name="",
             target_column=self._find_target_column(sources),
+            target_dataset=self._find_target_dataset(sources),
             sources=source_configs,
             bronze=bronze_configs,
             silver=self._build_silver_config(multi, sources),
@@ -1179,6 +1180,27 @@ class FindingsParser:
             if findings.target_column:
                 return findings.target_column
         return "target"
+
+    def _find_target_dataset(
+        self, sources: Dict[str, ExplorationFindings]
+    ) -> Optional[str]:
+        """Return the dataset name whose findings carry the operator's
+        configured ``target_column``.
+
+        The operator pinned ``target_dataset`` and ``target_column`` once
+        in NB00 (cell ``target_overrides``) and the exploration pass
+        wrote ``target_column`` only on that dataset's findings. The
+        codegen target_derive selector keys off this name (matched
+        against ``rf.primary``) instead of relying on the harvester's
+        stage inference, which only sees notebook number and cannot
+        distinguish a target-derive function from a generic landing_post
+        helper. No magic, no body inspection — pure deterministic match
+        on what the operator already declared.
+        """
+        for name, findings in sources.items():
+            if findings.target_column:
+                return name
+        return None
 
     def _apply_recommendations_to_config(
         self,

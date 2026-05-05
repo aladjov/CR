@@ -7,6 +7,7 @@ The pipeline runner orchestrates the new phase between landing and bronze.
 from __future__ import annotations
 
 import ast
+from typing import Optional
 
 import pytest
 
@@ -52,13 +53,15 @@ def _rf_target_derive(
     )
 
 
-def _bare_pipeline_config(name: str = "p") -> PipelineConfig:
+def _bare_pipeline_config(
+    name: str = "p", target_dataset: Optional[str] = "account"
+) -> PipelineConfig:
     src = SourceConfig(
         name="account", path="account.csv", format="csv",
         entity_key="account_id", raw_source_path="/data/account.csv",
     )
     return PipelineConfig(
-        name=name, target_column="churned",
+        name=name, target_column="churned", target_dataset=target_dataset,
         sources=[src],
         landing={
             "account": LandingLayerConfig(
@@ -250,6 +253,113 @@ class TestDatabricksGeneratorWritesTargetDerive:
             schema="sch",
             harvest_result=hr,
             disable_user_extensions=True,
+        )
+        gen.generate()
+        assert not (out / "target_derive" / "run_target_derive.py").exists()
+
+
+class TestTargetDeriveSelectionByPrimary:
+    """The target_derive selector must be deterministic — keyed off the
+    operator's project_context (target_dataset) matching the decorator's
+    primary= argument. No expected_stage tagging required, no body
+    inspection, no notebook-number heuristics."""
+
+    @pytest.fixture
+    def findings_dir(self, tmp_path):
+        d = tmp_path / "findings"
+        d.mkdir()
+        return d
+
+    def _rf_no_stage(self, primary: str = "account") -> RegisteredFunction:
+        """A registered function as it would actually appear in a
+        flawless cell: no expected_stage, no inferred_stage, just the
+        operator's @cr.register(datasets=..., primary=..., ...) call."""
+        return RegisteredFunction(
+            name="derive_churn_target",
+            source=(
+                "def derive_churn_target(spark, datasets, namespace):\n"
+                "    return {'account': datasets['account']}\n"
+            ),
+            scope="datasets",
+            datasets=["account", "contract", "case"],
+            primary=primary,
+            replay_at_scoring=False,
+            expected_stage=None,
+            inferred_stage=None,
+        )
+
+    def test_target_derive_emitted_when_primary_matches_target_dataset(
+        self, findings_dir, tmp_path, monkeypatch
+    ):
+        out = tmp_path / "generated"
+        from customer_retention.generators.pipeline_generator import findings_parser as fp
+
+        def _stub_parse(self):
+            return _bare_pipeline_config(target_dataset="account")
+
+        monkeypatch.setattr(fp.FindingsParser, "parse", _stub_parse, raising=True)
+        hr = HarvestResult(cross_dataset_steps=[self._rf_no_stage(primary="account")])
+        gen = DatabricksPipelineGenerator(
+            findings_dir=str(findings_dir),
+            output_dir=str(out),
+            pipeline_name="p",
+            catalog="cat",
+            schema="sch",
+            harvest_result=hr,
+        )
+        gen.generate()
+        td = out / "target_derive" / "run_target_derive.py"
+        assert td.exists(), (
+            "primary='account' matches PipelineConfig.target_dataset='account' "
+            "— codegen must render run_target_derive.py without expected_stage"
+        )
+
+    def test_target_derive_skipped_when_primary_mismatches_target_dataset(
+        self, findings_dir, tmp_path, monkeypatch
+    ):
+        out = tmp_path / "generated"
+        from customer_retention.generators.pipeline_generator import findings_parser as fp
+
+        def _stub_parse(self):
+            return _bare_pipeline_config(target_dataset="account")
+
+        monkeypatch.setattr(fp.FindingsParser, "parse", _stub_parse, raising=True)
+        # Primary on the registered function is 'contract' — does NOT
+        # match the configured target_dataset 'account'. The selector
+        # must skip it; otherwise the wrong function would run on the
+        # wrong landing table in production.
+        hr = HarvestResult(cross_dataset_steps=[self._rf_no_stage(primary="contract")])
+        gen = DatabricksPipelineGenerator(
+            findings_dir=str(findings_dir),
+            output_dir=str(out),
+            pipeline_name="p",
+            catalog="cat",
+            schema="sch",
+            harvest_result=hr,
+        )
+        gen.generate()
+        assert not (out / "target_derive" / "run_target_derive.py").exists()
+
+    def test_target_derive_skipped_when_target_dataset_unset(
+        self, findings_dir, tmp_path, monkeypatch
+    ):
+        out = tmp_path / "generated"
+        from customer_retention.generators.pipeline_generator import findings_parser as fp
+
+        def _stub_parse(self):
+            # target_dataset=None — operator did not configure a target
+            # dataset, so codegen has nothing to bind the primary against.
+            return _bare_pipeline_config(target_dataset=None)
+
+        monkeypatch.setattr(fp.FindingsParser, "parse", _stub_parse, raising=True)
+        hr = HarvestResult(cross_dataset_steps=[self._rf_no_stage(primary="account")])
+        gen = DatabricksPipelineGenerator(
+            findings_dir=str(findings_dir),
+            output_dir=str(out),
+            pipeline_name="p",
+            catalog="cat",
+            schema="sch",
+            harvest_result=hr,
         )
         gen.generate()
         assert not (out / "target_derive" / "run_target_derive.py").exists()

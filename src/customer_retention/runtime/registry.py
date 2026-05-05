@@ -97,6 +97,7 @@ class Registry:
         self._records: List[RegisteredFunction] = []
         self._lane2_executed: Dict[str, bool] = {}
         self._lock = Lock()
+        self._auto_hydrated = False
 
     def register(self, rf: RegisteredFunction) -> None:
         with self._lock:
@@ -110,12 +111,34 @@ class Registry:
             self._persist_unlocked()
 
     def get_registered(self) -> List[RegisteredFunction]:
+        self._maybe_auto_hydrate()
         return list(self._records)
 
     def clear(self) -> None:
         with self._lock:
             self._records.clear()
             self._lane2_executed.clear()
+            self._auto_hydrated = False
+
+    def _maybe_auto_hydrate(self) -> None:
+        """Hydrate from the on-disk sidecar on first read in a fresh kernel.
+
+        Exploration notebooks 01-09 start in their own kernels (Databricks
+        multi-task jobs, separate `papermill` invocations, manual reruns).
+        Without auto-hydration, `get_registered()` returns [] in those
+        kernels even when NB00 successfully wrote the JSON sidecar — and
+        every diagnostic that uses ``rf.expected_stage`` /
+        ``is_lane2_executed`` becomes structurally wrong. We auto-load
+        once on the first read and only when the in-memory registry is
+        empty (so explicit ``register()`` calls in tests are not shadowed).
+        """
+        if self._auto_hydrated or self._records:
+            return
+        path = _resolve_persistence_path()
+        self._auto_hydrated = True
+        if path is None or not path.exists():
+            return
+        self.load_from_disk(path)
 
     def validate(self):
         from .validation import validate_registered_function
@@ -137,9 +160,15 @@ class Registry:
         when verifying that registered functions actually executed in
         exploration; codegen-track replay is verified separately via
         `user_extensions.py` emission.
+
+        Persists the updated flag map to the on-disk sidecar so a fresh
+        NB01 kernel can hydrate Lane-2 state via auto-hydrate. Without
+        this call, the ``lane2_executed`` flag in the FW-14 diagnostic
+        always reads False after the kernel boundary.
         """
         with self._lock:
             self._lane2_executed[name] = True
+            self._persist_unlocked()
 
     def is_lane2_executed(self, name: str) -> bool:
         return self._lane2_executed.get(name, False)
@@ -162,14 +191,22 @@ class Registry:
         is not part of the `RemotePath` surface, and the file is small
         enough that a partial write would be caught by the load-time JSON
         parse, which raises with an actionable message rather than
-        silently zero-rehydrating."""
+        silently zero-rehydrating.
+
+        ``lane2_executed`` is persisted alongside ``records`` so the FW-14
+        diagnostic in a fresh NB01 kernel can tell whether NB00 actually
+        ran the in-cell Lane-2 path. Without persistence the flag resets
+        on every kernel boundary and the diagnostic always reports
+        ``lane2_executed=False`` even on a fully-correct run.
+        """
         path = _resolve_persistence_path()
         if path is None:
             return
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
-            "version": 1,
+            "version": 2,
             "records": [rf.to_dict() for rf in self._records],
+            "lane2_executed": dict(self._lane2_executed),
         }
         path.write_text(json.dumps(payload, indent=2))
 
@@ -212,6 +249,15 @@ class Registry:
             rf = RegisteredFunction.from_dict(d)
             self.register(rf)
             loaded += 1
+        # Hydrate the Lane-2 execution flags — version 2 sidecars carry
+        # them. Version 1 files (no key) leave the dict alone, matching
+        # the pre-FW-14-diagnostic behaviour.
+        lane2 = payload.get("lane2_executed")
+        if isinstance(lane2, dict):
+            with self._lock:
+                for name, flag in lane2.items():
+                    if flag:
+                        self._lane2_executed[str(name)] = True
         return loaded
 
 

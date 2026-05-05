@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from .decorator import register
 from .logging import in_notebook, log, log_table
+from .persistence import persist_dataset, register_session_view
 from .registry import registry
 from .replay import replay_registered_landing_steps
 from .summary import (
@@ -36,4 +37,6 @@ __all__ = [
     # User-code assimilation summary
     "snapshot_landing_state", "summarize_user_code", "print_user_code_summary",
     "AssimilationReport", "AssimilationRow",
+    # Durable Lane-2 rebind
+    "persist_dataset", "register_session_view",
 ]

@@ -308,3 +308,4 @@ class PipelineConfig:
     landing: Dict[str, LandingLayerConfig] = field(default_factory=dict)
     bronze_event: Dict[str, BronzeEventConfig] = field(default_factory=dict)
     feature_spec_path: Optional[str] = None
+    target_dataset: Optional[str] = None

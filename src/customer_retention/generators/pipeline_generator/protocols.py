@@ -212,29 +212,46 @@ class PipelineGeneratorBase(ABC):
     def _write_runner(self, config: PipelineConfig) -> Path:
         path = self._output_dir / "pipeline_runner.py"
         path.parent.mkdir(parents=True, exist_ok=True)
-        steps = self._target_derive_steps()
+        steps = self._target_derive_steps(config)
         path.write_text(self._renderer.render_runner(config, target_derive_steps=steps))
         return path
 
-    def _target_derive_steps(self) -> List[Any]:
-        """Return the harvest's `cross_dataset_steps` filtered to those tagged
-        `expected_stage="target_derive"` and carrying at least one declared
-        dataset (FW-3 imperative replay scope). Single-dataset-scope functions
-        are routed through `functions_by_target` by the harvester and never
-        belong in this phase."""
+    def _target_derive_steps(self, config: PipelineConfig) -> List[Any]:
+        """Return the harvest's ``cross_dataset_steps`` whose
+        ``primary`` matches the operator-configured ``target_dataset``.
+
+        Selection is purely deterministic, keyed off two facts the
+        operator already declared in NB00:
+
+        * ``primary=`` on ``@cr.register(datasets=[...], primary=...)``
+          — the function's authoritative dataset, on which it derives
+          (or rebinds) the target column.
+        * ``target_dataset`` on ``PipelineConfig`` — the dataset whose
+          exploration findings carry the configured ``target_column``,
+          set by NB00's ``target_overrides`` cell.
+
+        No reliance on ``expected_stage`` (the previous filter required
+        the operator to also remember to tag the decorator with
+        ``expected_stage="target_derive"``, which they shouldn't have to
+        do — the project_context already knows which dataset is the
+        target). No body inspection. No notebook-number heuristics.
+        """
         harvest = getattr(self, "_harvest_result", None)
         if harvest is None:
             return []
         if getattr(self._parser, "user_extensions_disabled", False):
             return []
+        target_dataset = getattr(config, "target_dataset", None)
+        if not target_dataset:
+            return []
         return [
             rf for rf in (harvest.cross_dataset_steps or [])
-            if (rf.expected_stage or rf.inferred_stage) == "target_derive"
-            and (rf.datasets or [])
+            if (rf.datasets or [])
+            and rf.primary == target_dataset
         ]
 
     def _write_target_derive(self, config: PipelineConfig) -> Optional[Path]:
-        steps = self._target_derive_steps()
+        steps = self._target_derive_steps(config)
         if not steps:
             return None
         if not hasattr(self._renderer, "render_target_derive"):
