@@ -87,9 +87,9 @@ def _generate_interpretation(result: "CategoricalTargetResult") -> str:
         strength_desc = "weakly associated"
     parts = [f"{result.categorical_col} is {strength_desc} with target (V={result.cramers_v:.2f})"]
     if result.high_risk_categories:
-        parts.append(f"High-risk: {', '.join(result.high_risk_categories[:3])}")
+        parts.append(f"High-risk: {', '.join(str(c) for c in result.high_risk_categories[:3])}")
     if result.low_risk_categories:
-        parts.append(f"Low-risk: {', '.join(result.low_risk_categories[:3])}")
+        parts.append(f"Low-risk: {', '.join(str(c) for c in result.low_risk_categories[:3])}")
     return ". ".join(parts)
 
 
@@ -189,8 +189,8 @@ class CategoricalTargetAnalyzer:
         category_stats = self._calculate_category_stats(clean_df, categorical_col, target_col, overall_rate)
         cramers_v, chi2_stat, p_value = self._calculate_cramers_v(clean_df, categorical_col, target_col)
         effect_strength = self._determine_effect_strength(cramers_v)
-        high_risk = head_as_list(category_stats[category_stats['lift'] < self.HIGH_RISK_LIFT_THRESHOLD]['category'], 50)
-        low_risk = head_as_list(category_stats[category_stats['lift'] > self.LOW_RISK_LIFT_THRESHOLD]['category'], 50)
+        high_risk = [str(c) for c in head_as_list(category_stats[category_stats['lift'] < self.HIGH_RISK_LIFT_THRESHOLD]['category'], 50)]
+        low_risk = [str(c) for c in head_as_list(category_stats[category_stats['lift'] > self.LOW_RISK_LIFT_THRESHOLD]['category'], 50)]
 
         return CategoricalTargetResult(
             categorical_col=categorical_col,

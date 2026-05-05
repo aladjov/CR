@@ -124,6 +124,30 @@ class TestHighRiskCategories:
         assert len(result.low_risk_categories) >= 1
         assert 'Premium' in result.low_risk_categories
 
+    def test_decimal_categories_coerced_to_str(self):
+        from decimal import Decimal
+
+        from customer_retention.stages.profiling.categorical_target_analyzer import (
+            analyze_categorical_features,
+        )
+        df = pd.DataFrame({
+            'entity_id': list(range(200)),
+            'tier': [Decimal('1.0')] * 100 + [Decimal('2.0')] * 100,
+            'churned': [1] * 95 + [0] * 5 + [1] * 50 + [0] * 50,
+        })
+        analyzer = CategoricalTargetAnalyzer()
+        result = analyzer.analyze(df, 'tier', 'churned')
+        assert all(isinstance(c, str) for c in result.high_risk_categories), (
+            "high_risk_categories must be List[str] — Coding_Practices.md "
+            "forbids leaking non-string scalars (decimal.Decimal, np.float64, etc.) "
+            "into a typed List[str] field."
+        )
+        assert all(isinstance(c, str) for c in result.low_risk_categories)
+        # _generate_interpretation must NOT raise TypeError when joining.
+        cat_result = analyze_categorical_features(df, 'entity_id', 'churned')
+        for insight in cat_result.feature_insights:
+            assert isinstance(insight.interpretation, str)
+
 
 class TestEffectStrength:
     def test_strong_effect_detected(self):
