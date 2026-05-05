@@ -35,8 +35,9 @@ from typing import Any
 
 def persist_dataset(namespace: Any, dataset_name: str, df: Any, *, purpose: str) -> str:
     """Write ``df`` to ``namespace.landing_table_dir(dataset_name)`` as
-    Delta and return a string handle that points at the persisted
-    artifact.
+    Delta and return a queryable string handle that the rest of the
+    notebook can pass to any ``_load_source`` / ``load_spark_table``
+    reader.
 
     ``purpose`` is a required, non-empty audit string documenting why
     the caller is persisting (e.g. ``"derive_churn_target"``,
@@ -44,11 +45,21 @@ def persist_dataset(namespace: Any, dataset_name: str, df: Any, *, purpose: str)
     sites and ask "is this the right rebind point?". This mirrors the
     audit contract on ``register_temp_view``.
 
-    On local runs the returned handle is the Delta path (string). On
-    Databricks the namespace's ``landing_table_dir`` resolves to a UC
-    Volume path; the handle is still that path string. Either form is a
-    valid input to ``load_active_dataset`` — which is what the next
-    notebook calls.
+    Two-layer return value:
+
+    1. **Delta on disk** — written to ``namespace.landing_table_dir``.
+       Survives kernel restart so NB01's ``landing_table_dir(name).is_dir()``
+       check picks it up automatically.
+    2. **Spark global temp view** — registered against the Delta in the
+       current SparkSession so subsequent NB00 cells reading
+       ``datasets[name]`` (via ``_load_source`` or ``load_spark_table``)
+       see a pyspark.pandas DataFrame, not a stray native-pandas read of
+       the Delta directory. The view name is what we return.
+
+    The temp view is the queryable face; the Delta is the durable
+    backing. ``datasets[name]`` always points at a *currently
+    materializable* artifact: in this kernel's session it is a live temp
+    view; in the next kernel the landing Delta on disk is the truth.
     """
     if not isinstance(purpose, str) or not purpose.strip():
         raise ValueError(
@@ -62,7 +73,26 @@ def persist_dataset(namespace: Any, dataset_name: str, df: Any, *, purpose: str)
         save_active_dataset,
     )
     save_active_dataset(namespace, dataset_name, df)
-    return str(namespace.landing_table_dir(dataset_name))
+    return _register_landing_temp_view(namespace, dataset_name, purpose)
+
+
+def _register_landing_temp_view(namespace: Any, dataset_name: str, purpose: str) -> str:
+    """Read the just-persisted Delta back as a Spark frame and register
+    it as ``global_temp.cr_landing_<dataset_name>``. Returns the view's
+    qualified name. If no Spark session is available (pure-pandas local
+    test environment), fall back to returning the Delta path string —
+    callers running without Spark won't be reading via temp views
+    anyway.
+    """
+    from customer_retention.core.compat.detection import get_spark_session
+    landing_path = namespace.landing_table_dir(dataset_name)
+    spark = get_spark_session()
+    if spark is None:
+        return str(landing_path)
+    spark_df = spark.read.format("delta").load(str(landing_path))
+    view_name = f"cr_landing_{dataset_name}"
+    spark_df.createOrReplaceGlobalTempView(view_name)
+    return f"global_temp.{view_name}"
 
 
 def register_session_view(spark_df: Any, view_name: str, *, purpose: str) -> str:
