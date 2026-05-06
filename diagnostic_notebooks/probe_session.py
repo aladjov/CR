@@ -412,8 +412,11 @@ def publish_probe_config(
         payload["nb00_path"] = nb00_path
     if nb06_path:
         payload["nb06_path"] = nb06_path
-    if session_label:
-        payload["session_label"] = session_label
+    if not session_label:
+        session_label = (
+            time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + f"__{run_id}"
+        )
+    payload["session_label"] = session_label
 
     published_via_task_values = False
     for k, v in payload.items():
