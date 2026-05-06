@@ -256,7 +256,7 @@ class TestLandingDeclarativeRows:
                 f"Composed declaratives must share co-applied verdict; "
                 f"got {r.track}={r.lane2_status}"
             )
-            assert r.emoji == "🔗"
+            assert r.emoji == "✳️"
             assert "composed rebind shared by 2" in r.lane2_detail
         # Composed rows are still successful — `all_ok` and `failing` must
         # treat them as success, not as missing.

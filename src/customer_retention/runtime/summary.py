@@ -90,7 +90,7 @@ class AssimilationRow:
     cell's Lane-2 mutation should affect (a dataset name, a derived
     column pattern, etc.). ``lane2_status`` is one of ``ok``,
     ``co-applied``, ``missing``, ``config-only``, ``pending``.
-    ``co-applied`` (🔗) is a success state used when multiple
+    ``co-applied`` (✳️) is a success state used when multiple
     declarative landing registrations target the same dataset and share
     a single composed ``register_temp_view`` rebind (filter + lifecycle
     enrichment in one cell, etc.).
@@ -109,7 +109,7 @@ class AssimilationRow:
         if self.lane2_status == "ok":
             return "✅"
         if self.lane2_status == "co-applied":
-            return "🔗"
+            return "✳️"
         if self.lane2_status == "missing":
             return "❌"
         if self.lane2_status == "config-only":
