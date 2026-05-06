@@ -12,17 +12,23 @@ registered user_code cell was correctly assimilated by the framework.
   exploration state where mutation was expected. For imperative cells
   this is the ``cr.mark_lane2_executed(name)`` flag. For declarative
   landing cells that rebind ``datasets[...]``, it is detected by
-  comparing the current ``datasets`` dict against a snapshot taken
-  before any user_code ran. For pure config / silver-derived cells, no
+  comparing the current ``datasets`` dict against the canonical
+  pre-user_code baseline (``namespace.original_datasets``, stashed by
+  NB00 cell ``f1eb641c`` immediately after ``dataset_paths``), with
+  fallback to the module-level ``_landing_snapshot`` for callers that
+  build the summary without a namespace. The verdict is computed
+  per-dataset, so multiple Lane-1 declaratives that compose into a
+  single rebind (e.g. filter + lifecycle enrichment in one cell) all
+  share the same status. For pure config / silver-derived cells, no
   Lane-2 mutation is expected during NB00, so the row is reported as
   "config-only" or "pending until silver stage".
 
 The mechanism carries no engagement-specific knowledge: it does not
 hard-code cell IDs, function names, or framework-version labels. Drop
 ``cr.snapshot_landing_state(datasets)`` near the top of the notebook
-that hands user_code its starting state, and call
-``cr.print_user_code_summary(datasets, namespace)`` wherever a one-glance
-audit is useful.
+that hands user_code its starting state (only needed when no namespace
+is available), and call ``cr.print_user_code_summary(datasets, namespace)``
+wherever a one-glance audit is useful.
 """
 from __future__ import annotations
 
@@ -190,11 +196,58 @@ def _declarative_rows(
     decl = _load_recommendation_registry(namespace)
     if decl is None:
         return []
+    # Compute the per-dataset Lane-2 verdict once. Multiple registrations
+    # targeting the same dataset (e.g. filter + lifecycle enrichment in
+    # the same cell) compose into a single `register_temp_view` rebind, so
+    # they share one verdict — emitting `missing` for the secondary rows
+    # would be a phantom failure.
+    baseline = _baseline_originals(namespace)
+    verdicts = _per_dataset_verdicts(baseline, datasets)
     out: List[AssimilationRow] = []
-    out.extend(_landing_filter_rows(decl, datasets))
-    out.extend(_landing_lifecycle_rows(decl, datasets))
+    out.extend(_landing_filter_rows(decl, datasets, verdicts))
+    out.extend(_landing_lifecycle_rows(decl, datasets, verdicts))
     out.extend(_bronze_override_rows(decl))
     out.extend(_silver_derived_rows(decl, df_features))
+    return out
+
+
+def _baseline_originals(namespace: Any) -> Dict[str, str]:
+    """Pre-user_code dataset signatures, preferring the canonical
+    ``namespace.original_datasets`` (stashed by NB00 cell ``f1eb641c``
+    immediately after ``dataset_paths``, before any user_code can mutate
+    ``datasets``) over the module-level ``_landing_snapshot``.
+
+    The fallback exists for callers that build the summary without a
+    namespace (e.g. unit tests, mid-notebook checkpoints in non-NB00
+    notebooks). When both are absent the verdict is ``pending``.
+    """
+    canonical = getattr(namespace, "original_datasets", None) if namespace is not None else None
+    if canonical:
+        return {k: _signature(v) for k, v in canonical.items()}
+    return dict(_landing_snapshot)
+
+
+def _per_dataset_verdicts(
+    baseline: Dict[str, str],
+    datasets: Optional[Dict[str, Any]],
+) -> Dict[str, Dict[str, str]]:
+    """Return ``{dataset_name: {"status": ..., "before": ..., "after": ...}}``.
+
+    Status is one of ``ok`` / ``missing`` / ``pending``. The verdict is
+    keyed on the dataset, not on the individual registration, so that
+    composed Lane-1 declaratives sharing one rebind aren't flagged as
+    partial.
+    """
+    out: Dict[str, Dict[str, str]] = {}
+    if datasets is None or not baseline:
+        return out
+    for name, before in baseline.items():
+        if name not in datasets:
+            out[name] = {"status": "missing", "before": before, "after": "<removed>"}
+            continue
+        after = _signature(datasets[name])
+        status = "ok" if after != before else "missing"
+        out[name] = {"status": status, "before": before, "after": after}
     return out
 
 
@@ -213,43 +266,44 @@ def _load_recommendation_registry(namespace: Any):
     return RecommendationRegistry.load(path)
 
 
-def _landing_filter_rows(decl, datasets):
+def _landing_filter_rows(decl, datasets, verdicts):
     out: List[AssimilationRow] = []
     landing = getattr(decl, "landing", None)
     for rec in (getattr(landing, "filters", None) or []):
         ds = _rec_landing_dataset(rec)
-        out.append(_landing_row(rec, ds, "filter", datasets))
+        out.append(_landing_row(rec, ds, "filter", datasets, verdicts))
     return out
 
 
-def _landing_lifecycle_rows(decl, datasets):
+def _landing_lifecycle_rows(decl, datasets, verdicts):
     out: List[AssimilationRow] = []
     landing = getattr(decl, "landing", None)
     for rec in (getattr(landing, "lifecycle_enrichments", None) or []):
         ds = _rec_landing_dataset(rec)
-        out.append(_landing_row(rec, ds, "lifecycle_enrichment", datasets))
+        out.append(_landing_row(rec, ds, "lifecycle_enrichment", datasets, verdicts))
     return out
 
 
-def _landing_row(rec, dataset_name, kind, datasets):
+def _landing_row(rec, dataset_name, kind, datasets, verdicts):
     name = _rec_name(rec, default=f"{kind}({dataset_name})")
-    if datasets is None or not _landing_snapshot:
-        status, detail = "pending", "snapshot or live datasets not provided"
-    elif dataset_name not in _landing_snapshot:
-        status, detail = "pending", f"dataset {dataset_name!r} not in snapshot"
-    elif dataset_name not in datasets:
-        status, detail = "missing", f"datasets[{dataset_name!r}] removed since snapshot"
+    verdict = verdicts.get(dataset_name) if dataset_name else None
+    if datasets is None or not verdicts:
+        status, detail = "pending", "baseline (namespace.original_datasets / snapshot) or live datasets not provided"
+    elif verdict is None:
+        status, detail = "pending", f"dataset {dataset_name!r} not in baseline"
+    elif verdict["status"] == "ok":
+        status, detail = "ok", (
+            f"datasets[{dataset_name!r}] rebound: "
+            f"{verdict['before']!r} → {verdict['after']!r}"
+        )
+    elif verdict["after"] == "<removed>":
+        status, detail = "missing", f"datasets[{dataset_name!r}] removed since baseline"
     else:
-        before = _landing_snapshot.get(dataset_name)
-        after = _signature(datasets[dataset_name])
-        if before == after:
-            status, detail = "missing", (
-                f"datasets[{dataset_name!r}] still equals the upstream "
-                f"snapshot ({before!r}) — operator's Lane-2 rebind to a "
-                f"temp view / enriched frame is missing"
-            )
-        else:
-            status, detail = "ok", f"datasets[{dataset_name!r}] rebound: {before!r} → {after!r}"
+        status, detail = "missing", (
+            f"datasets[{dataset_name!r}] still equals the upstream "
+            f"baseline ({verdict['before']!r}) — operator's Lane-2 rebind "
+            f"to a temp view / enriched frame is missing"
+        )
     return AssimilationRow(
         cell_id=_rec_cell_id(rec),
         name=name,

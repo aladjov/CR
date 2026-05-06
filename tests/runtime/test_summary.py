@@ -26,6 +26,7 @@ from customer_retention.runtime.summary import (
 class StubNamespace:
     """Minimal duck-typed RunNamespace stand-in for tests."""
     merged_recommendations_path: Path
+    original_datasets: dict | None = None
 
 
 @pytest.fixture(autouse=True)
@@ -145,7 +146,7 @@ class TestLandingDeclarativeRows:
 
         row = next(r for r in report.rows if r.track == "declarative landing.filter")
         assert row.lane2_status == "missing"
-        assert "still equals the upstream snapshot" in row.lane2_detail
+        assert "still equals the upstream baseline" in row.lane2_detail
 
     def test_lifecycle_enrichment_with_rebind_is_ok(self, saved_recommendations):
         def populate(reg):
@@ -193,6 +194,66 @@ class TestLandingDeclarativeRows:
         report = summarize_user_code({"account": "/tmp/account.csv"}, ns)
         row = report.rows[0]
         assert row.lane2_status == "pending"
+
+    def test_namespace_originals_used_as_baseline(self, saved_recommendations, tmp_path):
+        """When ``namespace.original_datasets`` is populated (NB00 cell
+        f1eb641c), the probe must compare against THAT — not against a
+        post-user_code ``snapshot_landing_state(...)`` whose baseline is
+        already the rebound view."""
+        def populate(reg):
+            reg.add_landing_lifecycle_enrichment(
+                dataset="contract",
+                config={"enriched_view_name": "sps_enriched_contract"},
+                rationale="lifecycle enrichment",
+                source_notebook="00_start_here.ipynb",
+            )
+        ns, _ = saved_recommendations(populate)
+        ns.original_datasets = {"contract": "snowflake.salesforce.contract"}
+
+        # Stale module-level snapshot accidentally captured AFTER user_code
+        # ran — the canonical namespace baseline must take precedence.
+        snapshot_landing_state({"contract": "global_temp.sps_enriched_contract"})
+        live = {"contract": "global_temp.sps_enriched_contract"}
+        report = summarize_user_code(live, ns)
+
+        row = next(r for r in report.rows if r.track == "declarative landing.lifecycle_enrichment")
+        assert row.lane2_status == "ok"
+        assert "snowflake.salesforce.contract" in row.lane2_detail
+        assert "global_temp.sps_enriched_contract" in row.lane2_detail
+
+    def test_composed_registrations_share_dataset_verdict(self, saved_recommendations):
+        """Filter + lifecycle enrichment registered in one cell that
+        produces a single ``register_temp_view`` rebind must yield ✅ for
+        BOTH rows, not ✅ for the enrichment and ❌ for the filter."""
+        def populate(reg):
+            reg.add_landing_filter(
+                dataset="subscription",
+                predicate="SUBSCRIPTION_START_DATE IS NOT NULL",
+                rationale="drop nulls",
+                source_notebook="00_start_here.ipynb",
+            )
+            reg.add_landing_lifecycle_enrichment(
+                dataset="subscription",
+                config={"enriched_view_name": "sps_enriched_subscription"},
+                rationale="double START → TERMINATE events",
+                source_notebook="00_start_here.ipynb",
+            )
+        ns, _ = saved_recommendations(populate)
+        ns.original_datasets = {"subscription": "snowflake.salesforce.subscription"}
+
+        live = {"subscription": "global_temp.sps_enriched_subscription"}
+        report = summarize_user_code(live, ns)
+
+        rows = [r for r in report.rows if r.target == "subscription" and "landing" in r.track]
+        assert len(rows) == 2
+        assert {r.track for r in rows} == {
+            "declarative landing.filter",
+            "declarative landing.lifecycle_enrichment",
+        }
+        for r in rows:
+            assert r.lane2_status == "ok", (
+                f"Composed declaratives must share verdict; got {r.track}={r.lane2_status}"
+            )
 
 
 class TestBronzeOverrideRows:
