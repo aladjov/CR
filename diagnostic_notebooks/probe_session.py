@@ -163,6 +163,17 @@ class ProbeSession:
     namespace: Any
     bundle_root: Path
 
+    @property
+    def run_root(self) -> Path:
+        """Per-run artifact root: ``<experiments_root>/runs/<run_id>``.
+
+        Probe cells reference this when looking for generated pipeline output.
+        NB10 actually writes to ``<framework_root>/generated_pipelines/<target>/<name>``,
+        so probes that probe ``run_root / 'pipeline'`` etc. will gracefully
+        degrade to INFO when no NB10 output exists at the run root.
+        """
+        return self.namespace.run_dir
+
     def cycle_dir(self, cycle_id: int) -> Path:
         d = self.bundle_root / f"cycle_{cycle_id:03d}"
         d.mkdir(parents=True, exist_ok=True)
