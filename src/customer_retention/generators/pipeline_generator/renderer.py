@@ -266,6 +266,14 @@ SOURCES = {
 }
 
 
+def get_landing_path(source_name: str) -> Path:
+    # FW-19: shared landing path so bronze (entity + event) reads from the
+    # same Delta the landing stage wrote. Mirrors `landing.py.j2`'s
+    # `get_landing_output_path()` and the Databricks `landing_table()`
+    # helper (UC equivalent).
+    return PRODUCTION_DIR / "data" / "landing" / source_name
+
+
 def get_bronze_path(source_name: str) -> Path:
     return PRODUCTION_DIR / "data" / "bronze" / source_name
 
@@ -319,22 +327,24 @@ from pathlib import Path
 from customer_retention.transforms import {{ ops | sort | join(', ') }}
 {% endif %}
 from customer_retention.core.compat import ensure_timestamp, safe_to_datetime, timedelta_to_days
-from config import SOURCES, get_bronze_path{{ ', RAW_SOURCES' if config.lifecycle else '' }}
+from config import SOURCES, get_bronze_path, get_landing_path{{ ', RAW_SOURCES' if config.lifecycle else '' }}
 
 SOURCE_NAME = "{{ source }}"
 
 
 def load_{{ source }}():
-    source_config = SOURCES[SOURCE_NAME]
-    path = Path(source_config["path"])
-    if not path.exists():
-        raise FileNotFoundError(f"Source file not found: {path}")
-    if source_config["format"] == "csv":
-        return pd.read_csv(str(path))
-    if source_config["format"] == "parquet":
-        return pd.read_parquet(str(path))
+    # FW-19: read from the landing Delta (where datetime derivation,
+    # lifecycle enrichment, and filters were applied), not from the raw
+    # upstream — bronze recs target post-landing column names.
+    landing_path = get_landing_path(SOURCE_NAME)
+    if not landing_path.exists():
+        raise FileNotFoundError(
+            f"Landing output not found at {landing_path}. The landing "
+            f"stage for '{SOURCE_NAME}' must run before bronze. Check that "
+            f"`landing/landing_{SOURCE_NAME}.py` ran successfully."
+        )
     from customer_retention.integrations.adapters.factory import get_delta
-    return get_delta(force_local=True).read(str(path))
+    return get_delta(force_local=True).read(str(landing_path))
 
 
 {% set groups = group_steps(config.transformations) %}

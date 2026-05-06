@@ -474,10 +474,23 @@ class TestDatabricksRenderBronze:
         result = renderer.render_bronze("customers", sample_pipeline_config.bronze["customers"])
         assert "Databricks notebook source" in result
 
-    def test_render_bronze_entity_uses_read_raw_source_helper(self, renderer, sample_pipeline_config):
+    def test_render_bronze_entity_load_source_reads_landing_table(
+        self, renderer, sample_pipeline_config
+    ):
+        """FW-19: entity-level bronze loads from the landing UC table, not
+        from the raw upstream. Pre-FW-19 this asserted ``read_raw_source(``
+        was in the rendered output; that helper now lives only in landing
+        (and in the bronze_event _load_raw_events helper for lifecycle
+        enrichment). See ``docs/sps_nb10_runtime_patches_v3.md`` §FW-19."""
         result = renderer.render_bronze("customers", sample_pipeline_config.bronze["customers"])
-        assert "read_raw_source(" in result
-        assert "spark.read.format(fmt).load(path)" not in result
+        # Scope to the load_source body — read_raw_source may appear
+        # legitimately elsewhere in the rendered notebook (e.g. the
+        # config block for sources that have raw-source helpers).
+        load_idx = result.index("def load_source")
+        next_def = result.index("\ndef ", load_idx + 1)
+        load_body = result[load_idx:next_def]
+        assert "spark.table(landing_table(SOURCE_NAME))" in load_body
+        assert "read_raw_source(" not in load_body
 
 
 class TestDatabricksRenderBronzeEvent:
@@ -1282,7 +1295,13 @@ class TestDatabricksLoadSourceFormat:
         result = renderer.render_bronze_event("orders", config)
         assert "landing_table(SOURCE_NAME)" in result
 
-    def test_bronze_load_source_uses_dynamic_format(self, renderer):
+    def test_bronze_load_source_does_not_dispatch_on_format(self, renderer):
+        """FW-19: entity-level bronze reads from the landing UC table — a
+        Delta table — regardless of the raw upstream's original format.
+        Format-aware dispatch happens in the landing template, not bronze.
+        Pre-FW-19 this test asserted ``read_raw_source(`` in the load body
+        and that ``format(...)`` didn't appear; now both are absent because
+        the load body is a single ``spark.table(landing_table(...))`` call."""
         source = SourceConfig(
             name="customers",
             path="/data/customers.parquet",
@@ -1294,7 +1313,10 @@ class TestDatabricksLoadSourceFormat:
         load_start = result.index("def load_source")
         load_end = result.index("\n\n", load_start)
         load_fn = result[load_start:load_end]
-        assert "read_raw_source(" in load_fn
+        assert "spark.table(landing_table(SOURCE_NAME))" in load_fn
+        assert "read_raw_source(" not in load_fn
+        # Format dispatch belongs to landing.py.j2's read_raw_source helper,
+        # not the bronze load_source body.
         assert 'format("parquet")' not in load_fn
         assert 'format("delta")' not in load_fn
 

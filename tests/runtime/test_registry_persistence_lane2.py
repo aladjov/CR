@@ -250,6 +250,49 @@ class TestAutoHydrateOnFreshKernel:
         assert fresh.get_registered() == []
         assert fresh.is_lane2_executed("anything") is False
 
+    def test_load_from_disk_does_not_clobber_lane2_in_sidecar(
+        self, isolated_persist
+    ):
+        """Regression: `load_from_disk` must preserve the on-disk
+        `lane2_executed` map. The pre-fix order called `register(rf)` for
+        each record BEFORE rehydrating the lane2 flags; each `register()`
+        call triggers `_persist_unlocked` and the in-memory empty
+        `_lane2_executed` overwrote the persisted markers. Cycle 25
+        `lane2_applied` then read the clobbered file and reported every
+        `cr.mark_lane2_executed(...)` call as missing."""
+        # Author the sidecar by hand so we control what's on disk.
+        payload = {
+            "version": 2,
+            "records": [
+                {
+                    "name": "derive_churn_target",
+                    "source": "def f(): pass",
+                    "scope": "datasets",
+                    "datasets": ["account"],
+                    "primary": "account",
+                    "expected_stage": "target_derive",
+                    "replay_at_scoring": False,
+                    "notebook_path": None,
+                    "cell_id": None,
+                },
+            ],
+            "lane2_executed": {"derive_churn_target": True},
+        }
+        isolated_persist.write_text(json.dumps(payload))
+
+        fresh = Registry()
+        loaded = fresh.load_from_disk(isolated_persist)
+        assert loaded == 1
+        # In-memory state hydrated correctly.
+        assert fresh.is_lane2_executed("derive_churn_target") is True
+        # Disk file STILL has the lane2 marker — the inner `register()`
+        # _persist_unlocked must not have overwritten it with an empty dict.
+        on_disk = json.loads(isolated_persist.read_text())
+        assert on_disk["lane2_executed"] == {"derive_churn_target": True}, (
+            f"lane2_executed clobbered on disk by inner register()/persist: "
+            f"got {on_disk.get('lane2_executed')!r}"
+        )
+
     def test_clear_resets_auto_hydrate_marker(self, isolated_persist):
         live_registry.clear()
         live_registry.register(RegisteredFunction(

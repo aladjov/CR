@@ -274,7 +274,12 @@ class TestCodeRendererBronze:
         assert "def apply_transformations" in result
         assert "return df" in result
 
-    def test_render_bronze_parquet_format_uses_read_parquet(self, renderer):
+    def test_render_bronze_does_not_dispatch_on_raw_format(self, renderer):
+        """FW-19: local-Feast bronze reads the landing Delta produced by
+        the landing stage, regardless of the raw upstream's original format.
+        Pre-FW-19 the bronze template called ``pd.read_parquet`` /
+        ``pd.read_csv`` against ``SOURCES[SOURCE_NAME]["path"]``; now those
+        readers belong only to landing.py.j2 (``load_raw_data``)."""
         parquet_source = SourceConfig(
             name="events",
             path="data/events.parquet",
@@ -286,7 +291,14 @@ class TestCodeRendererBronze:
         bronze_config = BronzeLayerConfig(source=parquet_source, transformations=[])
         result = renderer.render_bronze("events", bronze_config)
 
-        assert "pd.read_parquet(str(path))" in result
+        # Locate the load_<src> body — assertions are scoped to it so any
+        # legitimate landing-related helper imports at the top remain clean.
+        load_idx = result.index("def load_events():")
+        next_def = result.index("\n\n\n", load_idx + 1)
+        load_body = result[load_idx:next_def]
+        assert "get_landing_path(SOURCE_NAME)" in load_body
+        assert "pd.read_parquet" not in load_body
+        assert "pd.read_csv" not in load_body
 
 
 class TestCodeRendererSilver:

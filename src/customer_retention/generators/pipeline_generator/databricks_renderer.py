@@ -327,9 +327,14 @@ from pyspark.sql import functions as F
 
 SOURCE_NAME = "{{ source }}"
 
+# FW-19: entity-level bronze reads from the landing UC table, not the raw
+# upstream. Landing applies datetime derivation, lifecycle enrichment, and
+# filters; bronze recs (null-handling, outlier-handling) target the post-
+# landing schema, so reading raw here causes [UNRESOLVED_COLUMN] crashes
+# whenever a bronze step references a derived column. Mirrors the contract
+# `bronze_event` already uses.
 def load_source():
-    source_config = SOURCES[SOURCE_NAME]
-    return read_raw_source(source_config["path"], source_config["format"])
+    return spark.table(landing_table(SOURCE_NAME))
 
 {% set groups = group_steps(config.transformations) %}
 def apply_transformations(df):

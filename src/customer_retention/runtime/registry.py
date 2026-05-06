@@ -244,20 +244,22 @@ class Registry:
                 f"runtime.registry: {target} is missing the 'records' list "
                 f"(got {type(records).__name__})."
             )
-        loaded = 0
-        for d in records:
-            rf = RegisteredFunction.from_dict(d)
-            self.register(rf)
-            loaded += 1
-        # Hydrate the Lane-2 execution flags — version 2 sidecars carry
-        # them. Version 1 files (no key) leave the dict alone, matching
-        # the pre-FW-14-diagnostic behaviour.
+        # Hydrate Lane-2 flags BEFORE register() calls trigger
+        # _persist_unlocked. Each register() call writes the in-memory
+        # state to disk; if we registered first, the first persist would
+        # carry an empty `_lane2_executed` dict and clobber the markers
+        # the caller is trying to load. Order matters here.
         lane2 = payload.get("lane2_executed")
         if isinstance(lane2, dict):
             with self._lock:
                 for name, flag in lane2.items():
                     if flag:
                         self._lane2_executed[str(name)] = True
+        loaded = 0
+        for d in records:
+            rf = RegisteredFunction.from_dict(d)
+            self.register(rf)
+            loaded += 1
         return loaded
 
 
