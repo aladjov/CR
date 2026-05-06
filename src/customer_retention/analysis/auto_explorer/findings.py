@@ -1,6 +1,7 @@
 import decimal
 import json
-from dataclasses import asdict, dataclass, field
+import logging
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -9,6 +10,8 @@ import yaml
 
 from customer_retention.core.config.column_config import ColumnConfig, ColumnType, DatasetGranularity
 from customer_retention.stages.modeling.feature_spec import LeakageExclusion
+
+logger = logging.getLogger(__name__)
 
 _NUMERIC_TYPES = frozenset({ColumnType.NUMERIC_CONTINUOUS, ColumnType.NUMERIC_DISCRETE})
 _CATEGORICAL_TYPES = frozenset({
@@ -374,6 +377,22 @@ class ExplorationFindings:
         data["excluded_leaking_features"] = [
             LeakageExclusion.from_dict(e) for e in data.get("excluded_leaking_features") or []
         ]
+        # Forward-compat: drop fields the deployed dataclass does not declare
+        # so YAMLs written by a newer framework load on an older cluster build.
+        # Local-write / cluster-load skew is structural in this project (NB01..NB09
+        # often run locally; NB10..NB11 on the cluster), and the engagement layer
+        # used to carry `sps_compat_*` shims to handle exactly this. Log dropped
+        # keys so operators can audit version drift.
+        known = {f.name for f in fields(cls)}
+        unknown = sorted(k for k in data.keys() if k not in known)
+        if unknown:
+            logger.warning(
+                "ExplorationFindings.from_dict: dropping %d unknown field(s) "
+                "%s — likely written by a newer framework version. Update the "
+                "deployed customer_retention package to consume them.",
+                len(unknown), unknown,
+            )
+            data = {k: v for k, v in data.items() if k in known}
         return cls(**data)
 
     @classmethod

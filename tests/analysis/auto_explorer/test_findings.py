@@ -221,6 +221,25 @@ class TestExplorationFindings:
         assert restored.row_count == original.row_count
         assert restored.column_types["age"] == ColumnType.NUMERIC_CONTINUOUS
 
+    def test_from_dict_drops_unknown_fields(self, caplog):
+        original = self.create_sample_findings()
+        data = original.to_dict()
+        data["future_framework_field"] = ["a", "b"]
+        data["another_unknown"] = {"x": 1}
+        with caplog.at_level("WARNING"):
+            restored = ExplorationFindings.from_dict(data)
+        assert restored.source_path == original.source_path
+        assert restored.row_count == original.row_count
+        assert any("dropping 2 unknown field" in r.message for r in caplog.records)
+        assert any("future_framework_field" in r.message for r in caplog.records)
+
+    def test_from_dict_no_warning_when_all_fields_known(self, caplog):
+        original = self.create_sample_findings()
+        data = original.to_dict()
+        with caplog.at_level("WARNING"):
+            ExplorationFindings.from_dict(data)
+        assert not any("dropping" in r.message for r in caplog.records)
+
     def test_from_json(self):
         original = self.create_sample_findings()
         json_str = original.to_json()
