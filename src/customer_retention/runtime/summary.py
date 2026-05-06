@@ -89,7 +89,11 @@ class AssimilationRow:
     ``track`` is the registration mechanism. ``target`` is what the
     cell's Lane-2 mutation should affect (a dataset name, a derived
     column pattern, etc.). ``lane2_status`` is one of ``ok``,
-    ``missing``, ``config-only``, ``pending``.
+    ``co-applied``, ``missing``, ``config-only``, ``pending``.
+    ``co-applied`` (🔗) is a success state used when multiple
+    declarative landing registrations target the same dataset and share
+    a single composed ``register_temp_view`` rebind (filter + lifecycle
+    enrichment in one cell, etc.).
     """
     cell_id: Optional[str]
     name: str
@@ -104,6 +108,8 @@ class AssimilationRow:
     def emoji(self) -> str:
         if self.lane2_status == "ok":
             return "✅"
+        if self.lane2_status == "co-applied":
+            return "🔗"
         if self.lane2_status == "missing":
             return "❌"
         if self.lane2_status == "config-only":
@@ -119,7 +125,10 @@ class AssimilationReport:
 
     @property
     def all_ok(self) -> bool:
-        return all(r.lane2_status in ("ok", "config-only", "pending") for r in self.rows)
+        return all(
+            r.lane2_status in ("ok", "co-applied", "config-only", "pending")
+            for r in self.rows
+        )
 
     @property
     def failing(self) -> List[AssimilationRow]:
@@ -200,15 +209,40 @@ def _declarative_rows(
     # targeting the same dataset (e.g. filter + lifecycle enrichment in
     # the same cell) compose into a single `register_temp_view` rebind, so
     # they share one verdict — emitting `missing` for the secondary rows
-    # would be a phantom failure.
+    # would be a phantom failure. ``landing_counts`` lets the row builder
+    # tag composed rows with the ``co-applied`` status so the operator
+    # can see at a glance that the rebind is shared, not duplicated.
     baseline = _baseline_originals(namespace)
     verdicts = _per_dataset_verdicts(baseline, datasets)
+    landing_counts = _landing_registration_counts(decl)
     out: List[AssimilationRow] = []
-    out.extend(_landing_filter_rows(decl, datasets, verdicts))
-    out.extend(_landing_lifecycle_rows(decl, datasets, verdicts))
+    out.extend(_landing_filter_rows(decl, datasets, verdicts, landing_counts))
+    out.extend(_landing_lifecycle_rows(decl, datasets, verdicts, landing_counts))
     out.extend(_bronze_override_rows(decl))
     out.extend(_silver_derived_rows(decl, df_features))
     return out
+
+
+def _landing_registration_counts(decl) -> Dict[str, int]:
+    """Count how many declarative landing recommendations target each
+    dataset (filters + lifecycle enrichments combined). When count > 1,
+    those registrations are co-applied via a single ``register_temp_view``
+    rebind and should be reported as ``co-applied`` rather than as N
+    independent ``ok`` rows.
+    """
+    counts: Dict[str, int] = {}
+    landing = getattr(decl, "landing", None)
+    if landing is None:
+        return counts
+    for rec in (getattr(landing, "filters", None) or []):
+        ds = _rec_landing_dataset(rec)
+        if ds:
+            counts[ds] = counts.get(ds, 0) + 1
+    for rec in (getattr(landing, "lifecycle_enrichments", None) or []):
+        ds = _rec_landing_dataset(rec)
+        if ds:
+            counts[ds] = counts.get(ds, 0) + 1
+    return counts
 
 
 def _baseline_originals(namespace: Any) -> Dict[str, str]:
@@ -266,36 +300,44 @@ def _load_recommendation_registry(namespace: Any):
     return RecommendationRegistry.load(path)
 
 
-def _landing_filter_rows(decl, datasets, verdicts):
+def _landing_filter_rows(decl, datasets, verdicts, landing_counts):
     out: List[AssimilationRow] = []
     landing = getattr(decl, "landing", None)
     for rec in (getattr(landing, "filters", None) or []):
         ds = _rec_landing_dataset(rec)
-        out.append(_landing_row(rec, ds, "filter", datasets, verdicts))
+        out.append(_landing_row(rec, ds, "filter", datasets, verdicts, landing_counts))
     return out
 
 
-def _landing_lifecycle_rows(decl, datasets, verdicts):
+def _landing_lifecycle_rows(decl, datasets, verdicts, landing_counts):
     out: List[AssimilationRow] = []
     landing = getattr(decl, "landing", None)
     for rec in (getattr(landing, "lifecycle_enrichments", None) or []):
         ds = _rec_landing_dataset(rec)
-        out.append(_landing_row(rec, ds, "lifecycle_enrichment", datasets, verdicts))
+        out.append(_landing_row(rec, ds, "lifecycle_enrichment", datasets, verdicts, landing_counts))
     return out
 
 
-def _landing_row(rec, dataset_name, kind, datasets, verdicts):
+def _landing_row(rec, dataset_name, kind, datasets, verdicts, landing_counts):
     name = _rec_name(rec, default=f"{kind}({dataset_name})")
     verdict = verdicts.get(dataset_name) if dataset_name else None
+    composed_count = landing_counts.get(dataset_name, 1) if dataset_name else 1
     if datasets is None or not verdicts:
         status, detail = "pending", "baseline (namespace.original_datasets / snapshot) or live datasets not provided"
     elif verdict is None:
         status, detail = "pending", f"dataset {dataset_name!r} not in baseline"
     elif verdict["status"] == "ok":
-        status, detail = "ok", (
-            f"datasets[{dataset_name!r}] rebound: "
-            f"{verdict['before']!r} → {verdict['after']!r}"
-        )
+        if composed_count > 1:
+            status, detail = "co-applied", (
+                f"datasets[{dataset_name!r}] composed rebind shared by "
+                f"{composed_count} declarative landing rec(s): "
+                f"{verdict['before']!r} → {verdict['after']!r}"
+            )
+        else:
+            status, detail = "ok", (
+                f"datasets[{dataset_name!r}] rebound: "
+                f"{verdict['before']!r} → {verdict['after']!r}"
+            )
     elif verdict["after"] == "<removed>":
         status, detail = "missing", f"datasets[{dataset_name!r}] removed since baseline"
     else:
@@ -449,6 +491,7 @@ def render_markdown(report: AssimilationReport) -> str:
         "",
         f"**Total registered cells:** {len(report.rows)} — "
         f"{sum(1 for r in report.rows if r.lane2_status == 'ok')} applied, "
+        f"{sum(1 for r in report.rows if r.lane2_status == 'co-applied')} co-applied, "
         f"{sum(1 for r in report.rows if r.lane2_status == 'config-only')} config-only, "
         f"{sum(1 for r in report.rows if r.lane2_status == 'pending')} pending, "
         f"**{sum(1 for r in report.rows if r.lane2_status == 'missing')} missing**.",

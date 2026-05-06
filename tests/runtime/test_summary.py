@@ -223,8 +223,9 @@ class TestLandingDeclarativeRows:
 
     def test_composed_registrations_share_dataset_verdict(self, saved_recommendations):
         """Filter + lifecycle enrichment registered in one cell that
-        produces a single ``register_temp_view`` rebind must yield ✅ for
-        BOTH rows, not ✅ for the enrichment and ❌ for the filter."""
+        produces a single ``register_temp_view`` rebind must both report
+        success — and use the ``co-applied`` (⊕) status to make the
+        composition visible, instead of N independent ✅ rows."""
         def populate(reg):
             reg.add_landing_filter(
                 dataset="subscription",
@@ -251,9 +252,38 @@ class TestLandingDeclarativeRows:
             "declarative landing.lifecycle_enrichment",
         }
         for r in rows:
-            assert r.lane2_status == "ok", (
-                f"Composed declaratives must share verdict; got {r.track}={r.lane2_status}"
+            assert r.lane2_status == "co-applied", (
+                f"Composed declaratives must share co-applied verdict; "
+                f"got {r.track}={r.lane2_status}"
             )
+            assert r.emoji == "🔗"
+            assert "composed rebind shared by 2" in r.lane2_detail
+        # Composed rows are still successful — `all_ok` and `failing` must
+        # treat them as success, not as missing.
+        assert report.all_ok is True
+        assert report.failing == []
+
+    def test_single_registration_stays_ok_not_co_applied(self, saved_recommendations):
+        """A dataset with only one declarative landing registration must
+        keep the plain ``ok`` (✅) status — composition tagging only
+        kicks in when N > 1 registrations target the same dataset."""
+        def populate(reg):
+            reg.add_landing_lifecycle_enrichment(
+                dataset="contract",
+                config={"enriched_view_name": "sps_enriched_contract"},
+                rationale="double events",
+                source_notebook="00_start_here.ipynb",
+            )
+        ns, _ = saved_recommendations(populate)
+        ns.original_datasets = {"contract": "snowflake.salesforce.contract"}
+
+        live = {"contract": "global_temp.sps_enriched_contract"}
+        report = summarize_user_code(live, ns)
+
+        row = next(r for r in report.rows if r.track == "declarative landing.lifecycle_enrichment")
+        assert row.lane2_status == "ok"
+        assert row.emoji == "✅"
+        assert "rebound" in row.lane2_detail
 
 
 class TestBronzeOverrideRows:
