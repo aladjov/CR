@@ -392,6 +392,7 @@ class FindingsParser:
             self._apply_recommendations_to_config(config, recommendations_registry, multi_dataset, source_findings)
             self._apply_event_recommendations(config, recommendations_registry)
         self._apply_landing_overrides(config)
+        self._apply_sample_filters(config)
         config.gold.feature_exclusion_prefixes = self._collect_leakage_exclusion_prefixes(source_findings, multi_dataset)
         self._reconcile_discovered_event_transforms(config, discovered_events)
         self._reconcile_event_post_shaping(config)
@@ -1308,6 +1309,114 @@ class FindingsParser:
                 if col not in existing:
                     target.drop_columns.append(col)
                     existing.add(col)
+
+    _SAMPLE_FILTER_SIBLING_RE = __import__("re").compile(
+        r"\b(?:from|join)\s+([A-Za-z_][A-Za-z0-9_]*)",
+        flags=__import__("re").IGNORECASE,
+    )
+
+    def _apply_sample_filters(self, config: PipelineConfig) -> None:
+        """Replay the operator's NB00 cohort-scope predicates as production
+        landing filters.
+
+        ``ProjectContext.sample_filters`` (set in NB00's ``sampling_config``
+        cell as ``SAMPLE_FILTER_COLUMNS``) is a per-dataset map of Spark-SQL
+        predicate strings that NB00 / NB01 apply during exploration via
+        `analysis.auto_explorer.sampling.resolve_segment_entity_ids`. Without
+        replay in production, the generated `landing_<ds>.py` reads the
+        full upstream and the cohort scope drifts between exploration and
+        prod (the spschurn-e34b8ec5 cycle 25 sample_filter gate).
+
+        The predicate is reused verbatim — exploration and prod must match
+        character-for-character. Sibling dataset references in the
+        predicate (e.g. ``... in (select X from contract where ...)``) are
+        detected via the SQL ``FROM <name>`` / ``JOIN <name>`` pattern and
+        recorded as ``sibling_views``; the landing template registers the
+        sibling Delta tables as bare-name temp views before applying the
+        filter, so the operator's bare ``from contract`` resolves at
+        runtime exactly as it did in NB00 (where ``_expose_frames_as_views``
+        registered the same bare names).
+
+        ``config.landing`` is reordered so siblings precede dependents —
+        the runner iterates the dict in order, and a sibling temp view can
+        only point at populated data once that sibling's landing has run.
+        """
+        if self._namespace is None:
+            return
+        ctx_path = self._namespace.project_context_path
+        if not ctx_path.exists():
+            return
+        from customer_retention.analysis.auto_explorer.project_context import ProjectContext
+        ctx = ProjectContext.load(ctx_path)
+        sample_filters = getattr(ctx, "sample_filters", None) or {}
+        if not sample_filters:
+            return
+        deps: Dict[str, List[str]] = {}
+        for dataset, predicate in sample_filters.items():
+            if not predicate:
+                continue
+            target = config.landing.get(dataset)
+            if target is None:
+                logger.warning(
+                    "sample_filters: dataset %r not in pipeline landing config "
+                    "(known: %s); skipping.",
+                    dataset, sorted(config.landing.keys()),
+                )
+                continue
+            siblings = []
+            seen: set = set()
+            for match in self._SAMPLE_FILTER_SIBLING_RE.finditer(predicate):
+                name = match.group(1)
+                if name == dataset or name in seen:
+                    continue
+                if name in config.landing:
+                    siblings.append(name)
+                    seen.add(name)
+            target.filters.append(TransformationStep(
+                type=PipelineTransformationType.LANDING_FILTER,
+                column=dataset,
+                parameters={
+                    "predicate": str(predicate),
+                    "sibling_views": list(siblings),
+                },
+                rationale="NB00 SAMPLE_FILTER_COLUMNS (cohort scope)",
+                source_notebook="NB00",
+            ))
+            deps[dataset] = list(siblings)
+        if deps:
+            self._reorder_landing_for_sibling_deps(config, deps)
+
+    @staticmethod
+    def _reorder_landing_for_sibling_deps(
+        config: PipelineConfig, deps: Dict[str, List[str]]
+    ) -> None:
+        """Topologically reorder ``config.landing`` so every dataset's
+        sibling dependencies appear before it. Stable: datasets without
+        deps keep their original relative order. Cycles fail-fast.
+        """
+        original_order = list(config.landing.keys())
+        ordered: List[str] = []
+        emitted: set = set()
+
+        def emit(name: str, stack: List[str]) -> None:
+            if name in emitted:
+                return
+            if name in stack:
+                cycle = " -> ".join(stack[stack.index(name):] + [name])
+                raise ValueError(
+                    f"sample_filters: cycle in cohort-scope sibling dependencies: {cycle}"
+                )
+            for dep in deps.get(name, []):
+                if dep in config.landing:
+                    emit(dep, stack + [name])
+            emitted.add(name)
+            ordered.append(name)
+
+        for name in original_order:
+            emit(name, [])
+        # Rebuild config.landing in the new order. Preserves the same
+        # LandingLayerConfig values; just changes dict iteration order.
+        config.landing = {name: config.landing[name] for name in ordered}
 
     def _apply_landing_recommendations(
         self, config: PipelineConfig, registry: RecommendationRegistry

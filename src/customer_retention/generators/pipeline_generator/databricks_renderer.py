@@ -3031,6 +3031,21 @@ def run_landing():
     df = df.withColumnRenamed("{{ config.original_target_column }}", TARGET_COLUMN)
 {%- endif %}
 {%- if config.filters %}
+{%- set _all_sibling_views = [] %}
+{%- for step in config.filters %}
+{%- for v in (step.parameters.sibling_views or []) %}
+{%- if v not in _all_sibling_views %}{% set _ = _all_sibling_views.append(v) %}{% endif %}
+{%- endfor %}
+{%- endfor %}
+{%- if _all_sibling_views %}
+    # Cohort-scope sample_filter siblings: the operator's NB00 predicate
+    # references these datasets by their bare names (e.g. "from contract"),
+    # which only resolves in Spark SQL when each name is a registered temp
+    # view. Mirrors `analysis.auto_explorer.sampling._expose_frames_as_views`
+    # so the same predicate string runs unchanged in production.
+    for _v in {{ _all_sibling_views | python_repr }}:
+        spark.read.format("delta").table(landing_table(_v)).createOrReplaceTempView(_v)
+{%- endif %}
 {%- for step in config.filters %}
     df = df.filter({{ step.parameters.predicate | python_repr }})
 {%- endfor %}

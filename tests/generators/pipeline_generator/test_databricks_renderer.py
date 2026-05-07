@@ -2436,6 +2436,83 @@ class TestDatabricksLandingTemplate:
         assert "cancel_date" in result
         ast.parse(result)
 
+    def test_landing_with_sample_filter_no_siblings(self, renderer, landing_config):
+        """Plain predicate with no sibling-table refs: filter applied
+        directly, no temp-view registration block emitted."""
+        landing_config.filters = [TransformationStep(
+            type=PipelineTransformationType.LANDING_FILTER,
+            column="orders",
+            parameters={"predicate": "amount > 0", "sibling_views": []},
+            rationale="cohort scope",
+            source_notebook="NB00",
+        )]
+        result = renderer.render_landing("orders", landing_config)
+        assert "df.filter('amount > 0')" in result
+        # No temp-view registration block when sibling_views is empty
+        assert "createOrReplaceTempView" not in result
+        ast.parse(result)
+
+    def test_landing_with_sample_filter_subquery_registers_sibling_view(
+        self, renderer, landing_config,
+    ):
+        """Predicate referencing a sibling dataset emits a temp-view
+        registration block before the filter, mirroring NB00's
+        ``_expose_frames_as_views`` so the bare ``from contract`` in the
+        operator's predicate resolves at runtime."""
+        landing_config.filters = [TransformationStep(
+            type=PipelineTransformationType.LANDING_FILTER,
+            column="orders",
+            parameters={
+                "predicate": ("ACCOUNT_ID in (select ACCOUNT_ID from contract "
+                              "where event_type = 'start')"),
+                "sibling_views": ["contract"],
+            },
+            rationale="cohort scope",
+            source_notebook="NB00",
+        )]
+        result = renderer.render_landing("orders", landing_config)
+        # Sibling temp view registered via landing_table() helper
+        assert "landing_table(_v)" in result
+        assert "createOrReplaceTempView" in result
+        assert "['contract']" in result or '["contract"]' in result
+        # Filter still applies after the registration
+        filter_idx = result.index("df.filter(")
+        register_idx = result.index("createOrReplaceTempView")
+        assert register_idx < filter_idx, (
+            "sibling temp view must register BEFORE the filter so the "
+            "subquery resolves correctly"
+        )
+        ast.parse(result)
+
+    def test_landing_dedupes_sibling_views_across_filters(
+        self, renderer, landing_config,
+    ):
+        """Multiple filter steps referencing the same sibling should only
+        register the temp view once."""
+        landing_config.filters = [
+            TransformationStep(
+                type=PipelineTransformationType.LANDING_FILTER,
+                column="orders",
+                parameters={
+                    "predicate": "ACCOUNT_ID in (select ACCOUNT_ID from contract)",
+                    "sibling_views": ["contract"],
+                },
+                rationale="cohort", source_notebook="NB00",
+            ),
+            TransformationStep(
+                type=PipelineTransformationType.LANDING_FILTER,
+                column="orders",
+                parameters={
+                    "predicate": "X in (select Y from contract where z = 1)",
+                    "sibling_views": ["contract"],
+                },
+                rationale="extra cohort", source_notebook="NB00",
+            ),
+        ]
+        result = renderer.render_landing("orders", landing_config)
+        # Single registration list, single dedup'd entry.
+        assert result.count("createOrReplaceTempView") == 1
+
 
 class TestFW4LandingBronzeGuards:
     """FW-4: codegen-time landing/bronze guards retiring NB10 §2.1, §2.3, §2.4, §2.6."""
