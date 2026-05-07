@@ -731,6 +731,35 @@ WITH latest_run AS (
     WHERE as_of_date = (SELECT MAX(as_of_date) FROM {catalog}.{schema}.eligibility_snapshot)
     LIMIT 1
 ),
+scored_entities AS (
+    -- DISTINCT entity_id from the latest scoring run. eligibility_snapshot
+    -- has one row per (entity, archetype, eligibility_policy, as_of_date)
+    -- — typically ~100 rows per entity. Without DISTINCT, JOINing on
+    -- ``s.entity_id = g.entity_id`` multiplies every gold feature row
+    -- ~100×, and ``v_account_feature_deviation_topn``'s ROW_NUMBER OVER
+    -- (PARTITION BY entity_id) ranks the duplicates — yielding 12 copies
+    -- of whichever single feature has the largest |z|, instead of the
+    -- top 12 distinct features.
+    SELECT DISTINCT s.entity_id, s.scoring_run_id
+    FROM {catalog}.{schema}.eligibility_snapshot s
+    JOIN latest_run lr ON s.scoring_run_id = lr.scoring_run_id
+    WHERE COALESCE(s.is_dashboard_visible, TRUE) = TRUE
+),
+gold_latest AS (
+    -- One row per entity at its latest as_of_date. ``gold_features_<CN>``
+    -- carries one row per (entity_id, as_of_date) — many rows per entity
+    -- across the snapshot history. Without this dedupe, the explode below
+    -- emits the same (entity, feature) pair once per as_of_date and the
+    -- top-N ranking returns duplicates instead of distinct features.
+    SELECT * FROM (
+        SELECT *,
+               ROW_NUMBER() OVER (
+                   PARTITION BY entity_id
+                   ORDER BY COALESCE(as_of_date, CAST('1970-01-01' AS DATE)) DESC
+               ) AS _gold_rn
+        FROM {catalog}.{schema}.gold_features_{composite_name}
+    ) WHERE _gold_rn = 1
+),
 gold_long AS (
     -- Unpivot gold features (one numeric column per feature) into long
     -- form. STRUCT(*) was a trap: any non-double column (entity_id,
@@ -750,7 +779,7 @@ gold_long AS (
         SELECT
             entity_id,
             FROM_JSON(TO_JSON(STRUCT({gold_struct_cols})), 'MAP<STRING,DOUBLE>') AS feature_map
-        FROM {catalog}.{schema}.gold_features_{composite_name}
+        FROM gold_latest
     ) g
     LATERAL VIEW EXPLODE(g.feature_map) tbl AS kv_key, kv_value
 ),
@@ -767,8 +796,8 @@ latest_pop AS (
     WHERE dtype = 'numeric'
 )
 SELECT
-    s.scoring_run_id,
-    s.entity_id,
+    se.scoring_run_id,
+    se.entity_id,
     g.feature_name,
     g.feature_value,
     p.mean,
@@ -782,11 +811,8 @@ FROM gold_long g
 JOIN latest_pop p
        ON p.feature_name = g.feature_name
       AND p.rn = 1
-JOIN {catalog}.{schema}.eligibility_snapshot s
-       ON s.entity_id = g.entity_id
-JOIN latest_run lr ON s.scoring_run_id = lr.scoring_run_id
-WHERE g.feature_value IS NOT NULL
-  AND COALESCE(s.is_dashboard_visible, TRUE) = TRUE;
+JOIN scored_entities se ON se.entity_id = g.entity_id
+WHERE g.feature_value IS NOT NULL;
 
 -- ============================================================================
 -- 13. v_account_feature_deviation_topn (top-12 features by |z| for the panel)
