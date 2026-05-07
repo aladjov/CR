@@ -159,6 +159,9 @@ def map_archetypes_to_playbooks(
     mappings: List[ArchetypeMapping] = []
     for archetype in archetypes:
         candidates = _all_playbooks_as_candidates(playbooks)
+        for cand in candidates:
+            score, _ = prose_overlap_score(cand, archetype)
+            cand["overlap_score"] = float(score)
         context = _build_context(archetype, candidates)
         enriched = _safely_enrich(enrichment_builder, archetype, context)
         naming = namer.name_archetype(context, enriched=enriched) if enriched is not None \

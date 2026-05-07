@@ -441,27 +441,73 @@ class DatabricksFoundationModelNamer:
             f"mean value {d.get('mean_value', 0.0):.2f}"
             for d in context.top_negative_drivers
         ) or "  (none)"
+        # Inject FULL description + when_applicable (no truncation) and the
+        # populated overlap_score so the LLM can use it as a sanity floor.
+        # The candidate-assembly path in playbook_mapper.map_archetypes_to_playbooks
+        # writes overlap_score onto each candidate before this prompt is built.
         candidate_block = "\n".join(
-            f"  - {c['playbook_id']} v{c.get('playbook_version', '1.0.0')}: "
-            f"{c.get('description', '')[:200]} (overlap {c.get('overlap_score', 0.0):.2f})"
+            f"  - {c['playbook_id']} v{c.get('playbook_version', '1.0.0')}: {c.get('name', '')}\n"
+            f"      description: {c.get('description', '')}\n"
+            f"      when_applicable: {c.get('when_applicable', '')}\n"
+            f"      deterministic_overlap_with_archetype: {float(c.get('overlap_score', 0.0)):.2f}"
             for c in context.candidate_playbooks
-        ) or "  (none — return at least one suggestion)"
+        ) or "  (none)"
+        n_playbooks = len(context.candidate_playbooks)
         return (
-            "You are mapping a customer churn archetype to applicable retention playbooks.\n\n"
-            f"Archetype #{context.cluster_index}:\n"
-            f"- Cluster size: {context.cluster_size}\n"
-            f"- Cluster mean churn probability: {context.cluster_mean_churn_probability:.3f}\n"
-            f"- Top positive drivers (raise risk):\n{positive_block}\n"
-            f"- Top negative drivers (lower risk):\n{negative_block}\n\n"
-            f"Candidate playbooks (deterministic feature-overlap pre-filter):\n{candidate_block}\n\n"
-            "Your task:\n"
-            "1. Refine the candidate set: keep, drop, or add playbooks based on semantic fit.\n"
-            "2. For each kept/added playbook, give a fit_score 0.0-1.0 and a one-sentence rationale.\n"
-            "3. Propose a 2-4 word archetype_name and a 2-sentence archetype_description.\n"
-            "4. Return JSON only:\n"
-            '{"archetype_name": "...", "archetype_description": "...", '
-            '"playbooks": [{"playbook_id": "...", "fit_score": 0.0, "rationale": "..."}], '
-            '"confidence": 0.0}'
+            "You are mapping a customer churn archetype onto a fixed catalog of retention "
+            "playbooks. Your job is RANKING — score every playbook's fit to this archetype's "
+            "risk pattern. Do not drop, omit, or filter playbooks; downstream policy generation "
+            "requires every candidate to receive a score.\n\n"
+
+            "═══ ARCHETYPE PROFILE ═══\n"
+            f"archetype_index: {context.cluster_index}\n"
+            f"cluster_size: {context.cluster_size}\n"
+            f"cluster_mean_churn_probability: {context.cluster_mean_churn_probability:.3f}  "
+            "(INFORMATIONAL ONLY — do not let this drive fit_score; even healthy clusters need "
+            "a best-fit retention play recommendation in case their risk profile shifts)\n"
+            f"top positive drivers (raise risk):\n{positive_block}\n"
+            f"top negative drivers (lower risk):\n{negative_block}\n\n"
+
+            "═══ CANDIDATE PLAYBOOKS (score every one) ═══\n"
+            f"{candidate_block}\n\n"
+
+            "═══ SCORING RUBRIC ═══\n"
+            "fit_score is a 0.0-1.0 measure of how well THIS PLAYBOOK ADDRESSES THIS ARCHETYPE'S "
+            "RISK PATTERN. It is NOT a probability of churn, NOT a predicted uplift, NOT a "
+            "recommendation strength. Use these brackets:\n\n"
+            "  0.85-1.00  Perfect fit: the playbook is explicitly designed for this exact risk\n"
+            "             pattern (e.g., archetype dominated by 'low recent engagement' + a\n"
+            "             playbook named 'Re-Engagement Win-Back').\n"
+            "  0.50-0.84  Strong fit: playbook addresses 2+ of the archetype's top drivers, even\n"
+            "             if its primary use-case is a slightly different segment.\n"
+            "  0.20-0.49  Partial fit: playbook addresses one of the archetype's drivers, or a\n"
+            "             closely related concept.\n"
+            "  0.05-0.19  Weak fit: playbook is in the retention space but addresses a different\n"
+            "             pattern. Always preferred over dropping a playbook.\n"
+            "  0.00-0.04  No fit: playbook is unrelated even at the vocabulary level.\n\n"
+
+            "═══ ANCHORING RULES ═══\n"
+            "1. The 'deterministic_overlap_with_archetype' value is a token-level vocabulary\n"
+            "   match between the playbook's prose and the archetype's driver feature names.\n"
+            "   Use it as a FLOOR signal: if it is 0.40+, your fit_score should rarely be below\n"
+            "   0.20. Disagreement is allowed but must be justified in the rationale.\n"
+            f"2. Always return ALL {n_playbooks} input playbooks in the 'playbooks' array, sorted\n"
+            "   by fit_score descending. Omitting a playbook is a hard error.\n"
+            "3. cluster_mean_churn_probability is provided for context but is NOT a scoring input.\n"
+            "   A cluster with low predicted churn still gets fit_score reflecting which playbook\n"
+            "   would apply IF its members showed risk.\n"
+            "4. Return JSON only — no commentary, no markdown fences.\n\n"
+
+            "═══ OUTPUT SCHEMA (strict) ═══\n"
+            '{\n'
+            '  "archetype_name": "<2-4 words capturing the dominant risk pattern>",\n'
+            '  "archetype_description": "<exactly 2 sentences>",\n'
+            '  "playbooks": [\n'
+            '    {"playbook_id": "...", "fit_score": 0.0, "rationale": "<one sentence per the rubric>"}\n'
+            f'    /* exactly {n_playbooks} entries, sorted by fit_score desc */\n'
+            '  ],\n'
+            '  "confidence": 0.0\n'
+            '}'
         )
 
     @staticmethod

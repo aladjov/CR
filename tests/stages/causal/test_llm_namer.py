@@ -322,6 +322,56 @@ class TestDatabricksFoundationModelNamer:
         assert "low_nps" in prompt
         assert "0.420" in prompt or "0.42" in prompt
 
+    def test_prompt_injects_when_applicable_and_overlap_score(self):
+        long_description = (
+            "This is a deliberately long playbook description that exceeds the legacy "
+            "200-character truncation boundary so we can assert the full text reaches the "
+            "LLM rather than a truncated prefix. " * 3
+        )
+        when_applicable_text = "Apply when subscriber has missed 3 consecutive sends and lifecycle quadrant is steady_loyal"
+        client = _FakeDeployClient(
+            content=json.dumps(
+                {"archetype_name": "X", "archetype_description": "x", "playbooks": []}
+            )
+        )
+        namer = DatabricksFoundationModelNamer(
+            endpoint_name="databricks-claude-sonnet-4-6",
+            workspace_url="https://example.com",
+            workspace_token="token",
+        )
+        namer._client = client
+        ctx = _make_context(
+            candidate_playbooks=[
+                {
+                    "playbook_id": "frequency_adjustment",
+                    "playbook_version": "1.0.0",
+                    "name": "Frequency Adjustment",
+                    "description": long_description,
+                    "when_applicable": when_applicable_text,
+                    "overlap_score": 0.71,
+                },
+            ],
+        )
+        namer.name_archetype(ctx)
+        prompt = client.last_kwargs["messages"][0]["content"]
+        assert when_applicable_text in prompt, (
+            "when_applicable must be injected into the prompt so the LLM sees the "
+            "playbook's applicability rules"
+        )
+        assert long_description.strip() in prompt, (
+            "description must be injected in full (no [:200] truncation)"
+        )
+        assert "0.71" in prompt, (
+            "overlap_score from the candidate dict must render in the prompt as a "
+            "deterministic floor signal"
+        )
+        assert "INFORMATIONAL ONLY" in prompt, (
+            "the rubric should explicitly decouple cluster_mean_churn_probability from fit_score"
+        )
+        assert "Omitting a playbook is a hard error" in prompt, (
+            "the prompt must instruct the LLM to score every candidate"
+        )
+
     def test_enriched_context_routes_through_phase4_builder(self):
         from customer_retention.stages.causal.interpretation.archetype_context import (
             EnrichedArchetypeContext,

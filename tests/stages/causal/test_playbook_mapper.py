@@ -223,6 +223,32 @@ class TestMapArchetypesToPlaybooksCustomNamer:
         assert ctx.top_positive_drivers
         assert ctx.top_negative_drivers
 
+    def test_namer_receives_overlap_score_per_candidate(self):
+        # The candidate-assembly path must compute prose_overlap_score per
+        # archetype and attach it as ``overlap_score`` so the LLM prompt
+        # can render the deterministic floor signal. Without this, the
+        # prompt's overlap hint always renders 0.00 and the LLM has no
+        # vocabulary anchor.
+        namer = _StubNamer()
+        archetypes = [_make_archetype(1, ["nps_score"], ["tenure_days"])]
+        playbooks = [
+            _make_playbook("low_nps",
+                           "Recover accounts with low nps_score; outreach for declining tenure_days customers"),
+            _make_playbook("unrelated",
+                           "Schedule executive briefings for enterprise renewals"),
+        ]
+        map_archetypes_to_playbooks(
+            archetypes, playbooks, GOLD_FEATURES, llm_namer=namer
+        )
+        ctx = namer.contexts[0]
+        scores = {c["playbook_id"]: c.get("overlap_score") for c in ctx.candidate_playbooks}
+        assert "low_nps" in scores and scores["low_nps"] is not None
+        assert "unrelated" in scores and scores["unrelated"] is not None
+        # The matching playbook must score strictly higher than the unrelated one
+        assert scores["low_nps"] > scores["unrelated"]
+        assert 0.0 <= scores["unrelated"] <= 1.0
+        assert 0.0 <= scores["low_nps"] <= 1.0
+
 
 class _EnrichedStubNamer:
     """Stub namer that records whether enrichment was passed through."""
