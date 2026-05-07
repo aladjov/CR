@@ -214,17 +214,50 @@ def build_feature_meta_rows(
     return rows
 
 
+_PLACEHOLDER_BUSINESS_NAMES: dict[str, str] = {
+    # ``parse_aggregation_feature_name`` emits these synthetic source-column
+    # tokens for features that aggregate over event rows rather than over a
+    # specific raw column (event_count_*, inter_event_gap_*, days_since_*).
+    # Mapping them to human prose here means business_phrase reads
+    # "count of engagement event over last 365 days" instead of
+    # "count of event_count_365d over last 365 days".
+    "event": "engagement event",
+    "event_gap": "gap between events",
+}
+
+
+def _humanize_column_name(column_name: str) -> str:
+    """Best-effort humanization for column names without curated prose.
+
+    Used as the last-resort fallback when ``column_descriptions`` lacks a
+    ``business_name`` for the feature's source column. ``event_count_180d``
+    is a feature name (the LHS), never a column name (the RHS), so it
+    never reaches this function — only real column tokens like
+    ``email_id`` or placeholder tokens like ``event`` do.
+    """
+    if column_name in _PLACEHOLDER_BUSINESS_NAMES:
+        return _PLACEHOLDER_BUSINESS_NAMES[column_name]
+    return column_name.replace("_", " ").strip()
+
+
 def _resolve_business_name(
     lineage: FeatureLineage,
     column_descriptions: Optional[Mapping[str, "ColumnDescriptionRow"]],
 ) -> Optional[str]:
-    if not column_descriptions or not lineage.source_columns:
+    if not lineage.source_columns:
         return None
-    for candidate in lineage.source_columns:
-        entry = column_descriptions.get(candidate)
-        if entry and entry.business_name:
-            return entry.business_name
-    return None
+    # First pass: prefer curated ``business_name`` from column_descriptions.
+    if column_descriptions:
+        for candidate in lineage.source_columns:
+            entry = column_descriptions.get(candidate)
+            if entry and entry.business_name:
+                return entry.business_name
+    # Fallback: humanize the first source column. Without this, every
+    # feature whose source column lacks a curated business_name would
+    # render its business_phrase from the feature_name itself
+    # (``feature_meta_writer.py:61``), producing recursive prose like
+    # "count of event_count_365d over last 365 days".
+    return _humanize_column_name(str(lineage.source_columns[0]))
 
 
 def _resolve_polarity(

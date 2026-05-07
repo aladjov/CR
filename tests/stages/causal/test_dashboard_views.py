@@ -7,11 +7,39 @@ from unittest.mock import MagicMock
 from customer_retention.stages.causal.dashboard_views import (
     DASHBOARD_PROVENANCE_VIEW_NAMES,
     DASHBOARD_VIEW_NAMES,
+    _synthetic_placeholder_column_descriptions,
     load_dashboard_view_sql,
     publish_dashboard_views,
     render_dashboard_view_sql,
     split_view_statements,
 )
+
+
+class TestSyntheticPlaceholderColumnDescriptions:
+    def test_includes_event_placeholder(self):
+        rows = _synthetic_placeholder_column_descriptions()
+        names = {r.column_name for r in rows}
+        assert "event" in names, (
+            "event_count_* features need a column_descriptions row "
+            "for the synthetic 'event' source-column placeholder so "
+            "v_feature_provenance can render a business_definition under "
+            "each event-derived SHAP driver in the dashboard"
+        )
+
+    def test_includes_event_gap_placeholder(self):
+        rows = _synthetic_placeholder_column_descriptions()
+        names = {r.column_name for r in rows}
+        assert "event_gap" in names, (
+            "inter_event_gap_* features use the 'event_gap' synthetic "
+            "source-column placeholder; without a row for it, the "
+            "dashboard panel shows null business_definition for those features"
+        )
+
+    def test_placeholder_rows_have_business_definition(self):
+        for row in _synthetic_placeholder_column_descriptions():
+            assert row.business_name, f"placeholder {row.column_name} missing business_name"
+            assert row.business_definition, f"placeholder {row.column_name} missing business_definition"
+            assert row.source == "framework_synthetic"
 
 
 class TestLoadDashboardViewSql:
@@ -226,8 +254,11 @@ class TestPublishDashboardViews:
         assert len(statements) == expected
         # publish_dashboard_views also issues a CREATE TABLE IF NOT EXISTS for
         # run_context (the v_run_context view references it and Spark validates
-        # the view body at DDL time), so spark.sql is called once extra.
-        assert spark.sql.call_count == expected + 1
+        # the view body at DDL time), and one extra CREATE TABLE IF NOT EXISTS
+        # for ``column_descriptions`` issued by the synthetic-placeholder seed
+        # (the merge it executes after fails on MagicMock and is swallowed,
+        # but the CREATE TABLE call count is still recorded).
+        assert spark.sql.call_count == expected + 2
         view_calls = [
             call for call in spark.sql.call_args_list
             if "CREATE OR REPLACE VIEW" in call.args[0]

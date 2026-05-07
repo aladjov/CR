@@ -199,7 +199,14 @@ class TestBuildFeatureMetaRows:
         assert rows[0].source_columns == ["revenue"]
         assert rows[0].aggregation_kind == "sum"
 
-    def test_ignores_description_without_business_name(self):
+    def test_humanizes_column_name_when_business_name_missing(self):
+        # Curated row exists but ``business_name`` is null — the resolver
+        # falls back to a humanized version of the source column name
+        # rather than recursing into the feature name itself. Without this,
+        # the rendered phrase would read "sum of x_sum_30d over last 30 days"
+        # (the feature name in its own description), which is what the
+        # dashboard's feature dictionary used to surface for every feature
+        # whose source column lacked a curated business_name.
         lineage = FeatureLineage(
             feature_name="x_sum_30d",
             source_columns=["x"],
@@ -210,7 +217,40 @@ class TestBuildFeatureMetaRows:
         rows = build_feature_meta_rows(
             composite_name="cn1", lineages=[lineage], column_descriptions=descriptions,
         )
-        assert rows[0].business_phrase == "sum of x_sum_30d over last 30 days"
+        assert rows[0].business_phrase == "sum of x over last 30 days"
+
+    def test_humanizes_underscored_column_name(self):
+        lineage = FeatureLineage(
+            feature_name="open_count_180d",
+            source_columns=["email_id"],
+            aggregation_kind="count",
+            window_days=180,
+        )
+        rows = build_feature_meta_rows(composite_name="cn1", lineages=[lineage])
+        assert rows[0].business_phrase == "count of email id over last 180 days"
+
+    def test_event_placeholder_renders_as_engagement_event(self):
+        # ``parse_aggregation_feature_name`` emits source_columns=["event"]
+        # for event_count_* features. There is no "event" column in
+        # column_descriptions to look up, so the resolver maps the
+        # placeholder to the human phrase "engagement event".
+        lineage = FeatureLineage(
+            feature_name="event_count_365d",
+            source_columns=["event"],
+            aggregation_kind="count",
+            window_days=365,
+        )
+        rows = build_feature_meta_rows(composite_name="cn1", lineages=[lineage])
+        assert rows[0].business_phrase == "count of engagement event over last 365 days"
+
+    def test_event_gap_placeholder_renders_as_gap_between_events(self):
+        lineage = FeatureLineage(
+            feature_name="inter_event_gap_max",
+            source_columns=["event_gap"],
+            aggregation_kind="max",
+        )
+        rows = build_feature_meta_rows(composite_name="cn1", lineages=[lineage])
+        assert rows[0].business_phrase == "maximum gap between events over lifetime"
 
     def test_preserves_all_lineage_fields(self):
         lineage = FeatureLineage(
