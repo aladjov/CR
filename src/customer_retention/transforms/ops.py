@@ -193,6 +193,18 @@ def _to_datetime_safe(series):
     return safe_to_datetime(series, errors="coerce")
 
 
+def _diff_days(anchor_series, source_series):
+    """Days between two datetime series via the compat dispatcher.
+
+    Native pandas timestamp subtraction returns a timedelta (where
+    `.dt.days` works); pyspark.pandas returns integer seconds. Routing
+    through `timedelta_to_days` keeps this helper backend-agnostic per
+    the Coding_Practices.md compat-layer contract.
+    """
+    from customer_retention.core.compat import timedelta_to_days
+    return timedelta_to_days(anchor_series - source_series)
+
+
 def apply_derived_recency(
     df: DataFrame, column: str, *, source: str, anchor_column: str = "as_of_date"
 ) -> DataFrame:
@@ -203,9 +215,8 @@ def apply_derived_recency(
     """
     if source not in df.columns or anchor_column not in df.columns:
         return df
-    src_dt = _to_datetime_safe(df[source])
-    anchor_dt = _to_datetime_safe(df[anchor_column])
-    df[column] = (anchor_dt - src_dt).dt.days
+    df[column] = _diff_days(_to_datetime_safe(df[anchor_column]),
+                            _to_datetime_safe(df[source]))
     return df
 
 
@@ -216,9 +227,8 @@ def apply_derived_duration(
     precedes ``col_a``)."""
     if col_a not in df.columns or col_b not in df.columns:
         return df
-    a_dt = _to_datetime_safe(df[col_a])
-    b_dt = _to_datetime_safe(df[col_b])
-    df[column] = (b_dt - a_dt).dt.days
+    df[column] = _diff_days(_to_datetime_safe(df[col_b]),
+                            _to_datetime_safe(df[col_a]))
     return df
 
 
@@ -243,9 +253,8 @@ def apply_derived_tenure(
     """Years from ``source`` to ``anchor_column`` (datediff / 365.25)."""
     if source not in df.columns or anchor_column not in df.columns:
         return df
-    src_dt = _to_datetime_safe(df[source])
-    anchor_dt = _to_datetime_safe(df[anchor_column])
-    df[column] = (anchor_dt - src_dt).dt.days / 365.25
+    df[column] = _diff_days(_to_datetime_safe(df[anchor_column]),
+                            _to_datetime_safe(df[source])) / 365.25
     return df
 
 
