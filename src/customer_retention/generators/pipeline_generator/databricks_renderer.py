@@ -2113,11 +2113,16 @@ if _NAMESPACE is not None:
             parse_aggregation_feature_name as _parse_aggregation_feature_name,
             write_feature_meta_sidecar as _write_feature_meta_sidecar,
         )
+        # Source table for feature_meta. The pipeline's primary source is
+        # the first entry of config.sources; fall back to composite_name
+        # for purely derived pipelines. Without this, source_table lands
+        # NULL in feature_meta and cascades NULL into v_feature_provenance.
+        _PRIMARY_BRONZE_TABLE = bronze_table("{{ config.sources[0].name if config.sources else (config.composite_name or config.name) }}")
         _fm_lineages = []
         for _col in result.columns:
             if _col in _meta_cols:
                 continue
-            _lineage = _parse_aggregation_feature_name(_col)
+            _lineage = _parse_aggregation_feature_name(_col, source_table=_PRIMARY_BRONZE_TABLE)
             if _lineage is None:
                 # Defensive fallback — always emit a non-empty source_columns
                 # so compile_predicate_prose has a column to look up in
@@ -2125,6 +2130,7 @@ if _NAMESPACE is not None:
                 _lineage = _FeatureLineage(
                     feature_name=_col,
                     source_columns=[_col],
+                    source_table=_PRIMARY_BRONZE_TABLE,
                     aggregation_kind="passthrough",
                 )
             _fm_lineages.append(_lineage)

@@ -1080,11 +1080,15 @@ def run_gold_features():
                 parse_aggregation_feature_name as _parse_aggregation_feature_name,
                 write_feature_meta_sidecar as _write_feature_meta_sidecar,
             )
+            # Source table for feature_meta — kept symmetric with the
+            # Databricks renderer so v_feature_provenance.source_table is
+            # populated regardless of the run environment.
+            _PRIMARY_BRONZE_TABLE = "bronze_entity_{{ config.sources[0].name if config.sources else (config.composite_name or config.name) }}"
             _fm_lineages = []
             for _col in gold.columns:
                 if _col in _meta_cols:
                     continue
-                _lineage = _parse_aggregation_feature_name(_col)
+                _lineage = _parse_aggregation_feature_name(_col, source_table=_PRIMARY_BRONZE_TABLE)
                 if _lineage is None:
                     # Defensive fallback — always emit a non-empty source_columns
                     # so compile_predicate_prose has a column to look up in
@@ -1092,6 +1096,7 @@ def run_gold_features():
                     _lineage = _FeatureLineage(
                         feature_name=_col,
                         source_columns=[_col],
+                        source_table=_PRIMARY_BRONZE_TABLE,
                         aggregation_kind="passthrough",
                     )
                 _fm_lineages.append(_lineage)
