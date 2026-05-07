@@ -183,6 +183,88 @@ def apply_derived_composite(
     return df
 
 
+def _to_datetime_safe(series):
+    """Coerce mixed-type / mixed-tz datetime series to tz-naive datetime64.
+
+    Mirrors landing's `safe_to_datetime`: strips tz, falls back to NaT on
+    parse errors so the difference math below produces NaN (not a crash).
+    """
+    from customer_retention.core.compat import safe_to_datetime
+    return safe_to_datetime(series, errors="coerce")
+
+
+def apply_derived_recency(
+    df: DataFrame, column: str, *, source: str, anchor_column: str = "as_of_date"
+) -> DataFrame:
+    """Days from ``source`` (a datetime column) to ``anchor_column``.
+
+    Emits NaN when either side is NaT. Mirrors NB04's
+    ``temporal_analyzer.recommend_features`` recency rec.
+    """
+    if source not in df.columns or anchor_column not in df.columns:
+        return df
+    src_dt = _to_datetime_safe(df[source])
+    anchor_dt = _to_datetime_safe(df[anchor_column])
+    df[column] = (anchor_dt - src_dt).dt.days
+    return df
+
+
+def apply_derived_duration(
+    df: DataFrame, column: str, *, col_a: str, col_b: str
+) -> DataFrame:
+    """Days from ``col_a`` to ``col_b`` (signed: negative when ``col_b``
+    precedes ``col_a``)."""
+    if col_a not in df.columns or col_b not in df.columns:
+        return df
+    a_dt = _to_datetime_safe(df[col_a])
+    b_dt = _to_datetime_safe(df[col_b])
+    df[column] = (b_dt - a_dt).dt.days
+    return df
+
+
+def apply_derived_cyclical(
+    df: DataFrame, column: str, *, source: str
+) -> DataFrame:
+    """Emit ``<source>_month_sin`` and ``<source>_month_cos`` from the
+    month component of ``source``. ``column`` is the umbrella
+    ``<source>_month_sin_cos`` name carried by the recommendation; the
+    actual persisted columns are the sin/cos pair."""
+    if source not in df.columns:
+        return df
+    src_dt = _to_datetime_safe(df[source])
+    df[f"{source}_month_sin"] = np.sin(2 * np.pi * src_dt.dt.month / 12)
+    df[f"{source}_month_cos"] = np.cos(2 * np.pi * src_dt.dt.month / 12)
+    return df
+
+
+def apply_derived_tenure(
+    df: DataFrame, column: str, *, source: str, anchor_column: str = "as_of_date"
+) -> DataFrame:
+    """Years from ``source`` to ``anchor_column`` (datediff / 365.25)."""
+    if source not in df.columns or anchor_column not in df.columns:
+        return df
+    src_dt = _to_datetime_safe(df[source])
+    anchor_dt = _to_datetime_safe(df[anchor_column])
+    df[column] = (anchor_dt - src_dt).dt.days / 365.25
+    return df
+
+
+def apply_derived_extraction_is_weekend(
+    df: DataFrame, column: str, *, source: str
+) -> DataFrame:
+    """Emit ``column`` (the ``<src>_is_weekend`` umbrella name) as a 0/1
+    flag from the day-of-week of ``source``. Passthrough when ``column``
+    is already in df (landing's ``derive_datetime_features`` produces it
+    upstream for every ``datetime_derivation_sources`` entry)."""
+    if column in df.columns:
+        return df
+    if source not in df.columns:
+        return df
+    src_dt = _to_datetime_safe(df[source])
+    df[column] = (src_dt.dt.dayofweek >= 5).astype("float64")
+    return df
+
+
 # ── Batch ops (multi-column vectorized) ───────────────────────────
 
 

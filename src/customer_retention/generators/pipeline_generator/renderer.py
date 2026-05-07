@@ -3389,6 +3389,36 @@ def action_description(step: TransformationStep) -> str:
     return f"transform {col}"
 
 
+def _resolve_local_derived_source(p, col, *, prefix=None, suffix=None):
+    """Single-source resolution mirroring the Spark side
+    (`databricks_renderer._resolve_derived_sources`). Prefers explicit
+    ``source_columns``; falls back to the deterministic column-name
+    pattern from `stages/profiling/temporal_analyzer.py`.
+    """
+    explicit = p.get("source_columns") or []
+    if explicit:
+        return explicit[0]
+    if prefix and col.startswith(prefix):
+        return col[len(prefix):]
+    if suffix and col.endswith(suffix):
+        return col[:-len(suffix)]
+    return ""
+
+
+def _resolve_local_derived_sources(p, col, *, infix, base_prefix):
+    """Two-source resolution for ``duration`` recs
+    (`days_between_<a>_and_<b>`).
+    """
+    explicit = p.get("source_columns") or []
+    if len(explicit) >= 2:
+        return list(explicit[:2])
+    if infix in col:
+        rest = col[len(base_prefix):] if col.startswith(base_prefix) else col
+        a, b = rest.split(infix, 1)
+        return [a, b]
+    return []
+
+
 def render_step_call(step: TransformationStep, fit_mode: bool = True) -> str:
     t, col, p = step.type, step.column, step.parameters
     meta = _STATELESS_REGISTRY.get(t)
@@ -3421,6 +3451,31 @@ def render_step_call(step: TransformationStep, fit_mode: bool = True) -> str:
             if not columns:
                 raise ValueError(f"Composite derived column '{col}' requires non-empty 'columns' parameter")
             return f"apply_derived_composite(df, '{col}', columns={columns})"
+        if action == "recency":
+            src = _resolve_local_derived_source(p, col, prefix="days_since_")
+            if not src:
+                return f"df  # silver_derived recency {col!r}: source unresolvable"
+            return f"apply_derived_recency(df, '{col}', source='{src}')"
+        if action == "duration":
+            sources = _resolve_local_derived_sources(p, col, infix="_and_", base_prefix="days_between_")
+            if len(sources) < 2:
+                return f"df  # silver_derived duration {col!r}: source unresolvable"
+            return f"apply_derived_duration(df, '{col}', col_a='{sources[0]}', col_b='{sources[1]}')"
+        if action == "cyclical":
+            src = _resolve_local_derived_source(p, col, suffix="_month_sin_cos")
+            if not src:
+                return f"df  # silver_derived cyclical {col!r}: source unresolvable"
+            return f"apply_derived_cyclical(df, '{col}', source='{src}')"
+        if action == "tenure":
+            src = _resolve_local_derived_source(p, col, prefix="tenure_from_")
+            if not src:
+                return f"df  # silver_derived tenure {col!r}: source unresolvable"
+            return f"apply_derived_tenure(df, '{col}', source='{src}')"
+        if action == "extraction":
+            src = _resolve_local_derived_source(p, col, suffix="_is_weekend")
+            if not src:
+                return f"df  # silver_derived extraction {col!r}: source unresolvable"
+            return f"apply_derived_extraction_is_weekend(df, '{col}', source='{src}')"
     if t == PipelineTransformationType.FILTER:
         condition = p.get("condition", "non_negative")
         if condition == "non_negative":
@@ -3464,6 +3519,16 @@ def collect_imports(steps, include_fitted):
                 ops.add("apply_derived_interaction")
             elif action == "composite":
                 ops.add("apply_derived_composite")
+            elif action == "recency":
+                ops.add("apply_derived_recency")
+            elif action == "duration":
+                ops.add("apply_derived_duration")
+            elif action == "cyclical":
+                ops.add("apply_derived_cyclical")
+            elif action == "tenure":
+                ops.add("apply_derived_tenure")
+            elif action == "extraction":
+                ops.add("apply_derived_extraction_is_weekend")
     return ops, fitted
 
 

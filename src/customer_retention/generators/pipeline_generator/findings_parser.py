@@ -1568,7 +1568,18 @@ class FindingsParser:
     def _map_silver_derived(self, rec) -> Optional[TransformationStep]:
         action = rec.action
         params = dict(rec.parameters)
-        if action in ("ratio", "interaction", "composite"):
+        # Datetime-derived feature_types (`recency`, `duration`, `cyclical`,
+        # `tenure`, `extraction`) are produced by NB04's
+        # `temporal_analyzer.recommend_features` via `add_silver_derived(
+        # feature_type=rec.category)`. Source columns are resolvable from
+        # the column-name pattern alone (e.g. `days_since_<src>`) so the
+        # renderer dispatcher does not require explicit `source_columns`
+        # in the rec — see `databricks_renderer._resolve_derived_sources` /
+        # `renderer._resolve_local_derived_source`. Pre-Phase-3, these
+        # were silently dropped here, leaving 24-43 declared features
+        # absent from the generated silver script.
+        if action in ("ratio", "interaction", "composite",
+                      "recency", "duration", "cyclical", "tenure", "extraction"):
             return TransformationStep(
                 type=PipelineTransformationType.DERIVED_COLUMN,
                 column=rec.target_column,

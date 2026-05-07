@@ -5258,6 +5258,112 @@ class TestSilverDerivedColumnValidation:
         assert "momentum_7d_30d" in cols
 
 
+class TestSilverDerivedDatetimeFeatureTypePassThrough:
+    """Phase 3 — `_map_silver_derived` must pass through the datetime
+    feature_types (`recency`, `duration`, `cyclical`, `tenure`,
+    `extraction`) as `DERIVED_COLUMN` steps so the silver template's
+    dispatcher can render them. Pre-Phase-3 these were silently dropped,
+    leaving 24-43 declared features absent from production silver.
+    """
+
+    def _parser_with_silver_recs(self, recs):
+        from customer_retention.analysis.auto_explorer.layered_recommendations import (
+            RecommendationRegistry,
+            SilverRecommendations,
+        )
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeLayerConfig,
+            GoldLayerConfig,
+            PipelineConfig,
+            SilverLayerConfig,
+            SourceConfig,
+        )
+
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._raw_source_columns = {
+            "accounts": {"customer_id", "CREATED_DATE", "LAST_MODIFIED_DATE", "as_of_date"},
+        }
+        parser._source_findings_paths = {}
+        parser._ext_disabled = False
+        parser._value_counts_by_source = {}
+        parser._landing_filter_overrides = {}
+        parser._landing_lifecycle_overrides = {}
+        parser._landing_drop_columns_overrides = {}
+
+        source = SourceConfig(
+            name="accounts", path="accounts.csv", format="csv",
+            entity_key="customer_id", raw_source_path="/data/accounts.csv",
+            is_event_level=False, time_column="CREATED_DATE",
+        )
+        config = PipelineConfig(
+            name="p", target_column="churn", sources=[source],
+            bronze={"accounts": BronzeLayerConfig(source=source, transformations=[])},
+            silver=SilverLayerConfig(entity_key="customer_id"),
+            gold=GoldLayerConfig(),
+            output_dir="/tmp/p",
+        )
+
+        registry = RecommendationRegistry()
+        registry.silver = SilverRecommendations(entity_column="customer_id", derived_columns=recs)
+        return parser, config, registry
+
+    def _rec(self, action, target_column, parameters=None):
+        from customer_retention.analysis.auto_explorer.layered_recommendations import LayeredRecommendation
+        return LayeredRecommendation(
+            id=f"d_{action}_{target_column}", layer="silver", category="derived",
+            action=action, target_column=target_column,
+            parameters=parameters or {"feature_type": action},
+            rationale=f"{action} from temporal_analyzer", source_notebook="04",
+        )
+
+    def test_recency_pass_through(self):
+        rec = self._rec("recency", "days_since_CREATED_DATE")
+        parser, config, registry = self._parser_with_silver_recs([rec])
+        parser._apply_silver_recommendations(config, registry)
+        assert any(s.column == "days_since_CREATED_DATE"
+                   for s in config.silver.derived_columns)
+
+    def test_duration_pass_through(self):
+        rec = self._rec("duration", "days_between_CREATED_DATE_and_LAST_MODIFIED_DATE")
+        parser, config, registry = self._parser_with_silver_recs([rec])
+        parser._apply_silver_recommendations(config, registry)
+        assert any(s.column == "days_between_CREATED_DATE_and_LAST_MODIFIED_DATE"
+                   for s in config.silver.derived_columns)
+
+    def test_cyclical_pass_through(self):
+        rec = self._rec("cyclical", "CREATED_DATE_month_sin_cos")
+        parser, config, registry = self._parser_with_silver_recs([rec])
+        parser._apply_silver_recommendations(config, registry)
+        assert any(s.column == "CREATED_DATE_month_sin_cos"
+                   for s in config.silver.derived_columns)
+
+    def test_tenure_pass_through(self):
+        rec = self._rec("tenure", "tenure_from_CREATED_DATE")
+        parser, config, registry = self._parser_with_silver_recs([rec])
+        parser._apply_silver_recommendations(config, registry)
+        assert any(s.column == "tenure_from_CREATED_DATE"
+                   for s in config.silver.derived_columns)
+
+    def test_extraction_pass_through(self):
+        rec = self._rec("extraction", "CREATED_DATE_is_weekend")
+        parser, config, registry = self._parser_with_silver_recs([rec])
+        parser._apply_silver_recommendations(config, registry)
+        assert any(s.column == "CREATED_DATE_is_weekend"
+                   for s in config.silver.derived_columns)
+
+    def test_step_carries_action_param(self):
+        """Renderer dispatcher reads `action` from the step's parameters
+        to pick the right handler — verify the mapping populates it."""
+        rec = self._rec("recency", "days_since_CREATED_DATE")
+        parser, config, registry = self._parser_with_silver_recs([rec])
+        parser._apply_silver_recommendations(config, registry)
+        steps = [s for s in config.silver.derived_columns
+                 if s.column == "days_since_CREATED_DATE"]
+        assert len(steps) == 1
+        assert steps[0].parameters.get("action") == "recency"
+
+
 class TestCollectPipelineColumnsLagFeatures:
     def test_pipeline_columns_include_lag_features(self):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser

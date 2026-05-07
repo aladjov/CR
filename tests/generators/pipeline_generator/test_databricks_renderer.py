@@ -284,6 +284,93 @@ class TestRenderSparkStepCall:
         with pytest.raises(ValueError, match="columns"):
             render_spark_step_call(step)
 
+    def test_derived_recency_resolves_source_from_column_name(self):
+        step = TransformationStep(
+            type=PipelineTransformationType.DERIVED_COLUMN,
+            column="days_since_CREATED_DATE",
+            parameters={"action": "recency"},
+            rationale="",
+        )
+        result = render_spark_step_call(step)
+        assert "days_since_CREATED_DATE" in result
+        assert "CREATED_DATE" in result
+        assert "F.datediff" in result
+        assert "as_of_date" in result
+
+    def test_derived_recency_uses_explicit_source_columns(self):
+        step = TransformationStep(
+            type=PipelineTransformationType.DERIVED_COLUMN,
+            column="days_since_last_activity",
+            parameters={"action": "recency", "source_columns": ["LAST_ACTIVITY_AT"]},
+            rationale="",
+        )
+        result = render_spark_step_call(step)
+        assert "LAST_ACTIVITY_AT" in result
+        assert "F.datediff" in result
+
+    def test_derived_duration_resolves_two_sources_from_pattern(self):
+        step = TransformationStep(
+            type=PipelineTransformationType.DERIVED_COLUMN,
+            column="days_between_CREATED_DATE_and_LAST_MODIFIED_DATE",
+            parameters={"action": "duration"},
+            rationale="",
+        )
+        result = render_spark_step_call(step)
+        assert "CREATED_DATE" in result
+        assert "LAST_MODIFIED_DATE" in result
+        assert "F.datediff" in result
+
+    def test_derived_cyclical_emits_sin_and_cos(self):
+        step = TransformationStep(
+            type=PipelineTransformationType.DERIVED_COLUMN,
+            column="CREATED_DATE_month_sin_cos",
+            parameters={"action": "cyclical"},
+            rationale="",
+        )
+        result = render_spark_step_call(step)
+        assert 'CREATED_DATE_month_sin' in result
+        assert 'CREATED_DATE_month_cos' in result
+        assert "F.sin" in result
+        assert "F.cos" in result
+        assert "F.month" in result
+
+    def test_derived_tenure_resolves_source_from_pattern(self):
+        step = TransformationStep(
+            type=PipelineTransformationType.DERIVED_COLUMN,
+            column="tenure_from_CREATED_DATE",
+            parameters={"action": "tenure"},
+            rationale="",
+        )
+        result = render_spark_step_call(step)
+        assert "CREATED_DATE" in result
+        assert "365.25" in result
+        assert "F.datediff" in result
+
+    def test_derived_extraction_passthrough_when_already_present(self):
+        step = TransformationStep(
+            type=PipelineTransformationType.DERIVED_COLUMN,
+            column="CREATED_DATE_is_weekend",
+            parameters={"action": "extraction"},
+            rationale="",
+        )
+        result = render_spark_step_call(step)
+        # Runtime check: passthrough when landing already produced the column
+        assert 'in df.columns' in result
+        assert "F.dayofweek" in result
+        assert "CREATED_DATE" in result
+
+    def test_derived_unresolvable_source_emits_safe_noop(self):
+        # Column name doesn't match any pattern AND no source_columns given.
+        step = TransformationStep(
+            type=PipelineTransformationType.DERIVED_COLUMN,
+            column="weird_unknown_col",
+            parameters={"action": "recency"},
+            rationale="",
+        )
+        result = render_spark_step_call(step)
+        assert "df  #" in result  # safe no-op comment
+        assert "weird_unknown_col" in result
+
     def test_segment_aware_cap(self):
         step = TransformationStep(
             type=PipelineTransformationType.SEGMENT_AWARE_CAP,

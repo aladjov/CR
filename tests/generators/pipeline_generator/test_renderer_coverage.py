@@ -1125,6 +1125,62 @@ class TestRenderStepCall:
                 _step(PipelineTransformationType.DERIVED_COLUMN, "avg", {"action": "composite"})
             )
 
+    def test_derived_recency_resolves_source_from_pattern(self):
+        result = render_step_call(
+            _step(PipelineTransformationType.DERIVED_COLUMN,
+                  "days_since_CREATED_DATE", {"action": "recency"})
+        )
+        assert "apply_derived_recency" in result
+        assert "source='CREATED_DATE'" in result
+
+    def test_derived_recency_uses_explicit_source(self):
+        result = render_step_call(
+            _step(PipelineTransformationType.DERIVED_COLUMN,
+                  "days_since_x", {"action": "recency", "source_columns": ["LAST_AT"]})
+        )
+        assert "source='LAST_AT'" in result
+
+    def test_derived_duration_resolves_two_sources(self):
+        result = render_step_call(
+            _step(PipelineTransformationType.DERIVED_COLUMN,
+                  "days_between_A_and_B", {"action": "duration"})
+        )
+        assert "apply_derived_duration" in result
+        assert "col_a='A'" in result
+        assert "col_b='B'" in result
+
+    def test_derived_cyclical_emits_helper(self):
+        result = render_step_call(
+            _step(PipelineTransformationType.DERIVED_COLUMN,
+                  "CREATED_DATE_month_sin_cos", {"action": "cyclical"})
+        )
+        assert "apply_derived_cyclical" in result
+        assert "source='CREATED_DATE'" in result
+
+    def test_derived_tenure_resolves_source(self):
+        result = render_step_call(
+            _step(PipelineTransformationType.DERIVED_COLUMN,
+                  "tenure_from_CREATED_DATE", {"action": "tenure"})
+        )
+        assert "apply_derived_tenure" in result
+        assert "source='CREATED_DATE'" in result
+
+    def test_derived_extraction_emits_helper(self):
+        result = render_step_call(
+            _step(PipelineTransformationType.DERIVED_COLUMN,
+                  "CREATED_DATE_is_weekend", {"action": "extraction"})
+        )
+        assert "apply_derived_extraction_is_weekend" in result
+        assert "source='CREATED_DATE'" in result
+
+    def test_derived_unresolvable_source_emits_safe_noop(self):
+        result = render_step_call(
+            _step(PipelineTransformationType.DERIVED_COLUMN,
+                  "weird_unknown_col", {"action": "recency"})
+        )
+        assert "df  #" in result
+        assert "weird_unknown_col" in result
+
     def test_unknown_type_raises_value_error(self):
         step = _step(PipelineTransformationType.AGGREGATE, "x")
         with pytest.raises(ValueError, match="Unknown transformation type"):
