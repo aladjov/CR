@@ -746,16 +746,19 @@ scored_entities AS (
     WHERE COALESCE(s.is_dashboard_visible, TRUE) = TRUE
 ),
 gold_latest AS (
-    -- One row per entity at its latest as_of_date. ``gold_features_<CN>``
-    -- carries one row per (entity_id, as_of_date) — many rows per entity
-    -- across the snapshot history. Without this dedupe, the explode below
-    -- emits the same (entity, feature) pair once per as_of_date and the
+    -- One row per entity. ``gold_features_<CN>`` may carry many rows per
+    -- entity across the snapshot history; without this dedupe the explode
+    -- below emits the same (entity, feature) pair multiple times and the
     -- top-N ranking returns duplicates instead of distinct features.
+    -- ``{gold_dedup_order_by}`` is substituted at publish time by
+    -- ``dashboard_views.py`` based on which timestamp column gold actually
+    -- has (``as_of_date``, ``inference_point_in_time``, or ``1`` as a
+    -- deterministic fallback when no timestamp column exists).
     SELECT * FROM (
         SELECT *,
                ROW_NUMBER() OVER (
                    PARTITION BY entity_id
-                   ORDER BY COALESCE(as_of_date, CAST('1970-01-01' AS DATE)) DESC
+                   ORDER BY {gold_dedup_order_by}
                ) AS _gold_rn
         FROM {catalog}.{schema}.gold_features_{composite_name}
     ) WHERE _gold_rn = 1

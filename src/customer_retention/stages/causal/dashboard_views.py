@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import re
 from importlib.resources import files
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, List, Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +115,39 @@ def _strip_provenance_markers(sql_text: str) -> str:
     )
 
 
+_GOLD_DEDUP_ORDER_PREFERENCE: tuple[str, ...] = (
+    "as_of_date",
+    "inference_point_in_time",
+    "scoring_run_id",
+)
+
+
+def _resolve_gold_dedup_order_by(gold_columns: Optional[Sequence[str]]) -> str:
+    """Choose the ORDER BY expression for the deviation view's gold dedupe.
+
+    The deviation view's ``gold_latest`` CTE uses ``ROW_NUMBER() OVER
+    (PARTITION BY entity_id ORDER BY <expr>)`` to pick one row per entity.
+    Different gold schemas have different timestamp columns:
+
+      • ``as_of_date`` — most pipelines after the temporal merge
+      • ``inference_point_in_time`` — scoring-time stamp on some flavors
+      • ``scoring_run_id`` — last-resort lexicographic ordering
+
+    When none of these are present, fall back to ``1`` — ``ORDER BY 1``
+    sorts by the first selected column, which is deterministic per
+    schema and keeps Spark from rejecting the DDL. The pick may be
+    arbitrary in this fallback path, but every entity still ends up
+    with exactly one row, which is what the topN ranking needs.
+    """
+    if not gold_columns:
+        return "1"
+    available = set(gold_columns)
+    for col in _GOLD_DEDUP_ORDER_PREFERENCE:
+        if col in available:
+            return f"`{col}` DESC"
+    return "1"
+
+
 def render_dashboard_view_sql(
     catalog: str,
     schema: str,
@@ -122,6 +155,7 @@ def render_dashboard_view_sql(
     composite_name: Optional[str] = None,
     include_provenance: bool = True,
     gold_struct_cols: Optional[List[str]] = None,
+    gold_columns: Optional[Sequence[str]] = None,
 ) -> str:
     """Substitute ``{catalog}`` / ``{schema}`` (and optionally ``{composite_name}``)
     into the raw SQL template.
@@ -141,12 +175,23 @@ def render_dashboard_view_sql(
     list. Without this, ``STRUCT(*)`` would include non-double columns
     (entity_id, as_of_date, scoring_run_id) and ``FROM_JSON`` would return
     NULL for the entire map — silently zeroing the deviation view.
+
+    ``gold_columns`` is the FULL column list of ``gold_features_{composite_name}``
+    (not just the numeric ones). Used to pick the dedup ORDER BY in the
+    ``gold_latest`` CTE — different pipelines have different timestamp
+    columns (``as_of_date`` vs. ``inference_point_in_time`` vs. neither).
+    Without this, the SQL hardcodes ``as_of_date`` and fails to publish
+    on schemas that don't carry it.
     """
     text = load_dashboard_view_sql()
     if composite_name:
         text = _strip_deviation_markers(text).replace("{composite_name}", composite_name)
         struct_args = ", ".join(f"`{c}`" for c in (gold_struct_cols or [])) or "1"
         text = text.replace("{gold_struct_cols}", struct_args)
+        text = text.replace(
+            "{gold_dedup_order_by}",
+            _resolve_gold_dedup_order_by(gold_columns),
+        )
     else:
         text = _strip_deviation_block(text)
     if include_provenance:
@@ -192,6 +237,23 @@ def _gold_numeric_columns(spark: "SparkSession", gold_fqn: str) -> List[str]:
         if type_name in _GOLD_NUMERIC_SPARK_TYPES:
             out.append(name)
     return out
+
+
+def _gold_all_columns(spark: "SparkSession", gold_fqn: str) -> List[str]:
+    """Return ``gold_features_<CN>``'s full column list.
+
+    Used by ``render_dashboard_view_sql`` to choose the ORDER BY for the
+    deviation view's ``gold_latest`` CTE. Different pipelines emit gold
+    with different timestamp columns (``as_of_date`` vs.
+    ``inference_point_in_time``) — or none — so the SQL must be
+    parameterized rather than hardcoded.
+    """
+    try:
+        struct_type = spark.table(gold_fqn).schema
+    except Exception as exc:  # noqa: BLE001 — best-effort introspection
+        logger.warning("could not introspect %s schema for all cols: %s", gold_fqn, exc)
+        return []
+    return [field.name for field in struct_type]
 
 
 def split_view_statements(sql_text: str) -> List[str]:
@@ -567,6 +629,7 @@ def publish_dashboard_views(
 
     effective_composite = composite_name
     gold_numeric_cols: List[str] = []
+    gold_all_cols: List[str] = []
     if composite_name:
         ok, missing = _deviation_prerequisites_present(spark, catalog, schema, composite_name)
         if not ok:
@@ -580,6 +643,7 @@ def publish_dashboard_views(
         else:
             gold_fqn = f"{catalog}.{schema}.gold_features_{composite_name}"
             gold_numeric_cols = _gold_numeric_columns(spark, gold_fqn)
+            gold_all_cols = _gold_all_columns(spark, gold_fqn)
             if not gold_numeric_cols:
                 logger.warning(
                     "deviation views skipped: %s has zero numeric columns "
@@ -611,6 +675,7 @@ def publish_dashboard_views(
         composite_name=effective_composite,
         include_provenance=include_provenance,
         gold_struct_cols=gold_numeric_cols,
+        gold_columns=gold_all_cols,
     )
     statements = split_view_statements(rendered)
     submitted: List[str] = []

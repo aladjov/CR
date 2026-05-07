@@ -7,12 +7,43 @@ from unittest.mock import MagicMock
 from customer_retention.stages.causal.dashboard_views import (
     DASHBOARD_PROVENANCE_VIEW_NAMES,
     DASHBOARD_VIEW_NAMES,
+    _resolve_gold_dedup_order_by,
     _synthetic_placeholder_column_descriptions,
     load_dashboard_view_sql,
     publish_dashboard_views,
     render_dashboard_view_sql,
     split_view_statements,
 )
+
+
+class TestResolveGoldDedupOrderBy:
+    def test_prefers_as_of_date(self):
+        assert _resolve_gold_dedup_order_by(
+            ["entity_id", "as_of_date", "inference_point_in_time", "feature_x"]
+        ) == "`as_of_date` DESC"
+
+    def test_falls_back_to_inference_point_in_time(self):
+        assert _resolve_gold_dedup_order_by(
+            ["entity_id", "inference_point_in_time", "feature_x"]
+        ) == "`inference_point_in_time` DESC"
+
+    def test_falls_back_to_scoring_run_id(self):
+        assert _resolve_gold_dedup_order_by(
+            ["entity_id", "scoring_run_id", "feature_x"]
+        ) == "`scoring_run_id` DESC"
+
+    def test_returns_literal_one_when_no_timestamp_column(self):
+        # User's email-aggregated gold has only entity_id + feature columns,
+        # no timestamp. Must not break view publication — degrades to
+        # ``ORDER BY 1`` which sorts by the first selected column
+        # (deterministic, even if arbitrary).
+        assert _resolve_gold_dedup_order_by(
+            ["entity_id", "dow_cos", "active_span_days", "event_count_365d"]
+        ) == "1"
+
+    def test_returns_literal_one_for_empty_or_none(self):
+        assert _resolve_gold_dedup_order_by(None) == "1"
+        assert _resolve_gold_dedup_order_by([]) == "1"
 
 
 class TestSyntheticPlaceholderColumnDescriptions:
