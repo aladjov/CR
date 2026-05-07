@@ -530,9 +530,14 @@ class TestDatabricksE2E:
         assert "my_schema" in config_content
 
     def test_all_notebooks_have_sys_path_when_persisted(self, sample_findings_dir, tmp_path, monkeypatch):
+        from customer_retention.runtime.registry import registry as _live_registry
+        _live_registry.clear()
         monkeypatch.setattr(
             "customer_retention.generators.pipeline_generator.databricks_generator.get_framework_repo_path",
             lambda: "/Workspace/Repos/team/churnkit",
+        )
+        monkeypatch.setenv(
+            "CR_RUNTIME_REGISTRY_PATH", str(tmp_path / "no_registry.json")
         )
         generator = DatabricksPipelineGenerator(
             str(sample_findings_dir), str(tmp_path), "repo_test",
@@ -572,7 +577,12 @@ class TestDatabricksE2E:
         assert 'bronze_table("orders_events")' in content
         assert "orders_aggregated_events" not in content
 
-    def test_all_notebooks_use_parent_config_path(self, sample_findings_dir, tmp_path):
+    def test_all_notebooks_use_parent_config_path(self, sample_findings_dir, tmp_path, monkeypatch):
+        from customer_retention.runtime.registry import registry as _live_registry
+        _live_registry.clear()
+        monkeypatch.setenv(
+            "CR_RUNTIME_REGISTRY_PATH", str(tmp_path / "no_registry.json")
+        )
         generator = DatabricksPipelineGenerator(
             str(sample_findings_dir), str(tmp_path), "config_path_test",
         )

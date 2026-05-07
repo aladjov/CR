@@ -105,7 +105,15 @@ class TestGeneratorIntegration:
         shutil.copytree(sps, dst)
         return dst
 
-    def test_no_harvest_emits_no_user_extensions_file(self, findings_dir, tmp_path):
+    def test_no_harvest_emits_no_user_extensions_file(
+        self, findings_dir, tmp_path, monkeypatch
+    ):
+        # Isolate the runtime-registry resolver from any local development
+        # run pointer / sentinel that would otherwise let `_auto_harvest()`
+        # discover an unrelated on-disk registry.
+        monkeypatch.setenv(
+            "CR_RUNTIME_REGISTRY_PATH", str(tmp_path / "no_registry.json")
+        )
         out = tmp_path / "generated"
         PipelineGenerator(
             findings_dir=str(findings_dir),

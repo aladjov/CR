@@ -178,6 +178,97 @@ class TestAutoHarvestFallback:
         live_registry.clear()
 
 
+class TestPersistencePathResolutionAcrossTasks:
+    """Regression: in Databricks multi-task jobs, env vars do not propagate
+    between tasks. NB00 (writer) sets `CR_RUN_ID` in its kernel and writes
+    the registry; NB10 (codegen) runs in a fresh kernel with no env var.
+
+    The pre-fix `_resolve_persistence_path` called `RunNamespace.from_env()`
+    which only honored `CR_RUN_ID`, so NB10 could not find the on-disk
+    registry — `_auto_harvest()` returned None and the generator silently
+    produced a pipeline without `target_derive/run_target_derive.py` (the
+    spschurn-e34b8ec5 failure mode). The fix uses `from_env_or_latest`,
+    which falls back to the project pointer that `initialize_run()` writes
+    — a file-tracked signal that survives task boundaries.
+    """
+
+    def test_resolves_via_project_pointer_when_env_var_unset(
+        self, tmp_path, monkeypatch
+    ):
+        from customer_retention.analysis.auto_explorer.run_namespace import (
+            RunNamespace,
+        )
+        from customer_retention.runtime.registry import (
+            _resolve_persistence_path_for_load,
+        )
+
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
+        monkeypatch.delenv("CR_RUNTIME_REGISTRY_PATH", raising=False)
+        pointer_file = tmp_path / ".cr_active_run.json"
+        monkeypatch.setattr(
+            RunNamespace,
+            "_project_pointer_path",
+            classmethod(lambda cls: pointer_file),
+        )
+        ns = RunNamespace.create(root=tmp_path, project_name="proj")
+        ns.write_run_pointer()
+
+        resolved = _resolve_persistence_path_for_load()
+        assert resolved is not None
+        assert resolved == ns.registered_functions_path
+
+    def test_auto_harvest_finds_disk_records_without_env_var(
+        self, tmp_path, monkeypatch
+    ):
+        """End-to-end: NB10's `_auto_harvest()` must hydrate the disk
+        registry and return a non-empty harvest, even when `CR_RUN_ID`
+        is unset (the multi-task task-boundary case)."""
+        import json as _json
+
+        from customer_retention.analysis.auto_explorer.run_namespace import (
+            RunNamespace,
+        )
+        from customer_retention.generators.pipeline_generator.databricks_generator import (
+            _auto_harvest,
+        )
+
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
+        monkeypatch.delenv("CR_RUNTIME_REGISTRY_PATH", raising=False)
+        pointer_file = tmp_path / ".cr_active_run.json"
+        monkeypatch.setattr(
+            RunNamespace,
+            "_project_pointer_path",
+            classmethod(lambda cls: pointer_file),
+        )
+        ns = RunNamespace.create(root=tmp_path, project_name="proj")
+        ns.write_run_pointer()
+        ns.merged_dir.mkdir(parents=True, exist_ok=True)
+        ns.registered_functions_path.write_text(
+            _json.dumps({
+                "version": 2,
+                "records": [{
+                    "name": "derive_churn_target",
+                    "source": "def f(): pass",
+                    "scope": "datasets",
+                    "datasets": ["account", "case"],
+                    "primary": "account",
+                    "expected_stage": "target_derive",
+                    "replay_at_scoring": False,
+                    "notebook_path": None,
+                    "cell_id": None,
+                }],
+                "lane2_executed": {},
+            })
+        )
+
+        live_registry.clear()
+        result = _auto_harvest()
+        assert result is not None
+        names = [rf.name for rf in result.all_functions()]
+        assert "derive_churn_target" in names
+        live_registry.clear()
+
+
 class TestAutoHydrateOnFreshKernel:
     """A fresh NB01 kernel must see what NB00 wrote to the sidecar.
     These tests simulate the cross-kernel boundary by using a separate

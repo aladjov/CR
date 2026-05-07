@@ -92,6 +92,39 @@ def _resolve_persistence_path() -> Optional[Path]:
     return ns.registered_functions_path
 
 
+def _resolve_persistence_path_for_load() -> Optional[Path]:
+    """Resolve the on-disk registry path for an EXPLICIT load attempt.
+
+    Used by `load_from_disk()` when no explicit path is passed — i.e. by
+    NB10 codegen's `_auto_harvest()` in a fresh kernel. Falls back to the
+    file-tracked discovery chain (sentinel → project pointer → latest)
+    that survives Databricks task boundaries: NB00 sets `CR_RUN_ID` in its
+    own kernel and writes the registry; NB10 runs in a separate task with
+    no env var, so the env-only resolver would return None and silently
+    produce a pipeline without `target_derive/run_target_derive.py`
+    (engagement spschurn-e34b8ec5 failure mode).
+
+    Kept distinct from `_resolve_persistence_path()` (used by writes and
+    auto-hydration) because the latter intentionally returns None when
+    no run is explicitly bound — auto-hydrating from a stray local
+    sentinel/pointer would break tests and surprise callers in
+    development environments where multiple unrelated runs may exist.
+    """
+    explicit = os.environ.get(_PERSISTENCE_ENV)
+    if explicit:
+        return Path(explicit)
+    try:
+        from customer_retention.analysis.auto_explorer.run_namespace import (  # noqa: PLC0415
+            RunNamespace,
+        )
+    except ImportError:
+        return None
+    ns = RunNamespace.from_env_or_latest()
+    if ns is None:
+        return None
+    return ns.registered_functions_path
+
+
 class Registry:
     def __init__(self) -> None:
         self._records: List[RegisteredFunction] = []
@@ -221,7 +254,7 @@ class Registry:
         zero-rehydrating — a parse failure here would otherwise produce a
         codegen run with no user_extensions.py and silently break parity.
         """
-        target = path or _resolve_persistence_path()
+        target = path or _resolve_persistence_path_for_load()
         if target is None or not target.exists():
             return 0
         try:
