@@ -28,7 +28,35 @@ _SYSTEM_MESSAGE = (
     "You are naming customer-churn archetypes and rating retention-playbook fit. "
     "Every numeric fact in the user payload is already narrated — you MUST NOT "
     "invent thresholds, percentages, or counts. Reference provided business "
-    "phrases verbatim. Output JSON only, no prose commentary."
+    "phrases verbatim. Output JSON only, no prose commentary.\n\n"
+
+    "═══ SCORING RUBRIC ═══\n"
+    "fit_score is a 0.0-1.0 measure of how well THIS PLAYBOOK ADDRESSES THIS "
+    "ARCHETYPE'S RISK PATTERN. It is NOT a probability of churn, NOT a predicted "
+    "uplift, NOT a recommendation strength. Use these brackets:\n"
+    "  0.85-1.00  Perfect fit: playbook is explicitly designed for this exact "
+    "risk pattern.\n"
+    "  0.50-0.84  Strong fit: addresses 2+ of the archetype's top drivers.\n"
+    "  0.20-0.49  Partial fit: addresses one driver or a closely related concept.\n"
+    "  0.05-0.19  Weak fit: in the retention space but a different pattern. "
+    "Always preferred over dropping a playbook.\n"
+    "  0.00-0.04  No fit: unrelated even at the vocabulary level.\n\n"
+
+    "═══ ANCHORING RULES ═══\n"
+    "1. Each playbook arrives with a ``fit_score_prefilter`` — a deterministic "
+    "vocabulary-overlap score between the playbook's prose and the archetype's "
+    "driver feature names. Use it as a FLOOR signal: when it is 0.40 or higher, "
+    "your fit_score should rarely fall below 0.20. Disagreement is allowed but "
+    "must be justified in the rationale.\n"
+    "2. Score EVERY candidate playbook in the response array, sorted by "
+    "fit_score descending. Omitting a playbook is a hard error — downstream "
+    "policy generation requires every candidate to receive a score.\n"
+    "3. ``cluster_mean_churn_probability``, ``lift_vs_population``, "
+    "``arr_exposure``, and ``share_of_book`` are INFORMATIONAL ONLY — do not "
+    "let predicted churn volume drive fit_score. A cluster with low predicted "
+    "churn still gets a fit_score reflecting which playbook would apply IF its "
+    "members showed risk.\n"
+    "4. Return JSON only — no markdown fences, no commentary."
 )
 
 _RESPONSE_SCHEMA = {
@@ -44,14 +72,19 @@ _RESPONSE_SCHEMA = {
     "playbooks": [
         {
             "playbook_id": "string (one of the provided candidate ids)",
-            "fit_score": "0.0 to 1.0",
+            "fit_score": "0.0 to 1.0 per the rubric in the system message",
             "rationale": (
                 "1 sentence citing at least one top_positive_driver or "
-                "top_negative_driver business_phrase verbatim."
+                "top_negative_driver business_phrase verbatim, and explaining "
+                "the score relative to fit_score_prefilter when they diverge."
             ),
         }
     ],
     "confidence": "0.0 to 1.0, your overall confidence in this mapping",
+    "_response_rules": (
+        "MUST contain exactly one entry per candidate_playbook. Sort by "
+        "fit_score descending. Omitting a candidate is a hard error."
+    ),
 }
 
 

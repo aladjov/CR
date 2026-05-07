@@ -197,6 +197,13 @@ def _build_contrast(
 
 
 def _build_playbook(raw: Mapping[str, Any]) -> EnrichedPlaybook:
+    # ``overlap_score`` is written by playbook_mapper.map_archetypes_to_playbooks
+    # as the deterministic prose-overlap floor. Treat it as the prefilter
+    # fit_score when no explicit ``fit_score`` is supplied — otherwise the
+    # LLM never sees a vocabulary-overlap signal in the enriched prompt.
+    prefilter = raw.get("fit_score")
+    if prefilter is None:
+        prefilter = raw.get("overlap_score")
     return EnrichedPlaybook(
         playbook_id=str(raw.get("playbook_id") or raw.get("id") or ""),
         name=str(raw.get("name") or raw.get("playbook_id") or ""),
@@ -204,7 +211,7 @@ def _build_playbook(raw: Mapping[str, Any]) -> EnrichedPlaybook:
         description=raw.get("description"),
         policy_summary=raw.get("policy_summary"),
         expected_effect=raw.get("expected_effect"),
-        fit_score=_as_float(raw.get("fit_score")),
+        fit_score=_as_float(prefilter),
     )
 
 
