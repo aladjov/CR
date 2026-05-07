@@ -1,5 +1,5 @@
 version: 1
-source_fingerprint: sha256:39cbd38fa9635b3867b762063b5b5cdd0e56138c9d88504339a4543fb0f24437
+source_fingerprint: sha256:ddcbc583b16acb6cac5a35929573cd3dbcdfb3c7d1900c4a9b1ee4b9e8911f04
 generated_from:
 - exploration_notebooks/00_start_here.ipynb
 - exploration_notebooks/01_data_discovery.ipynb
@@ -962,6 +962,10 @@ sections:
     notebook: 10_spec_generation
     source: unmappable
   10_spec_generation#10_2_load_findings_and_recommendations:
+    stage: null
+    notebook: 10_spec_generation
+    source: unmappable
+  10_spec_generation#10_2b_production_cohort_scope:
     stage: null
     notebook: 10_spec_generation
     source: unmappable
