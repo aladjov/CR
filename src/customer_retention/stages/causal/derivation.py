@@ -316,12 +316,13 @@ def derive_archetypes_and_policies(config: DerivationConfig) -> DerivationResult
     )
 
     namer = config.llm_namer or build_llm_namer(config.llm_endpoint_name)
+    enrichment_builder = config.enrichment_builder or _default_enrichment_builder(config)
     mappings = map_archetypes_to_playbooks(
         archetypes=summaries,
         playbooks=config.playbooks,
         gold_feature_names=config.gold_feature_names,
         llm_namer=namer,
-        enrichment_builder=config.enrichment_builder,
+        enrichment_builder=enrichment_builder,
     )
 
     timestamp = datetime.now(timezone.utc)
@@ -523,6 +524,115 @@ def _compute_feature_scales(
             v = row[f"__scale_{i}"]
             scales[feature_idx] = float(v) if (v is not None and float(v) > 0.0) else 1.0
     return scales
+
+
+def _default_enrichment_builder(config: "DerivationConfig"):
+    """Build a default enrichment_builder that resolves feature business
+    phrases from ``feature_meta`` + ``column_descriptions`` UC tables.
+
+    Returns ``None`` when:
+        • ``config.spark`` is unavailable (off-cluster / unit tests),
+        • ``archetype_catalog_fqn`` doesn't yield a parseable catalog.schema, or
+        • neither feature_meta nor column_descriptions is present in UC.
+
+    When this returns ``None``, ``map_archetypes_to_playbooks`` falls back
+    to the legacy ``_build_prompt`` path which sends raw feature column
+    names to the LLM. With this wired, the LLM sees curated business
+    phrases like "regularity score" or "180-day event count" instead of
+    cryptic identifiers like ``regularity_score`` or ``event_count_180d``,
+    which dramatically improves prose-overlap scoring.
+    """
+    spark = getattr(config, "spark", None)
+    if spark is None:
+        return None
+    parts = (config.archetype_catalog_fqn or "").split(".")
+    if len(parts) < 2:
+        return None
+    catalog, schema = parts[0], parts[1]
+
+    feature_meta = _load_feature_meta_from_uc(spark, catalog, schema)
+    column_descriptions = _load_column_descriptions_from_uc(spark, catalog, schema)
+    if not feature_meta and not column_descriptions:
+        logger.info(
+            "default enrichment_builder skipped: neither feature_meta nor "
+            "column_descriptions found in %s.%s — falling back to legacy "
+            "prompt with raw feature names", catalog, schema,
+        )
+        return None
+    logger.info(
+        "default enrichment_builder wired: %d feature_meta rows, %d column_descriptions",
+        len(feature_meta), len(column_descriptions),
+    )
+
+    from .interpretation.archetype_context import build_enriched_context
+
+    def _builder(archetype, context):
+        candidates = list(getattr(context, "candidate_playbooks", []) or [])
+        return build_enriched_context(
+            context,
+            feature_meta=feature_meta,
+            population_stats={},
+            column_descriptions=column_descriptions,
+            raw_candidate_playbooks=candidates,
+        )
+
+    return _builder
+
+
+def _load_feature_meta_from_uc(spark, catalog: str, schema: str):
+    """Read ``{catalog}.{schema}.feature_meta`` into ``{feature_name: FeatureMetaRow}``."""
+    fqn = f"{catalog}.{schema}.feature_meta"
+    try:
+        if not spark.catalog.tableExists(fqn):
+            return {}
+        from dataclasses import fields as dc_fields
+
+        from .feature_meta_writer import FeatureMetaRow
+        accepted = {f.name for f in dc_fields(FeatureMetaRow)}
+        rows = spark.sql(f"SELECT * FROM {fqn}").collect()
+        out: Dict[str, Any] = {}
+        for r in rows:
+            d = r.asDict(recursive=True)
+            name = d.get("feature_name")
+            if not name:
+                continue
+            kwargs = {k: v for k, v in d.items() if k in accepted}
+            try:
+                out[str(name)] = FeatureMetaRow(**kwargs)
+            except Exception as exc:  # noqa: BLE001 — best-effort
+                logger.debug("feature_meta row %s skipped: %s", name, exc)
+        return out
+    except Exception as exc:  # noqa: BLE001 — best-effort load; fall back to no enrichment
+        logger.warning("could not load feature_meta from %s: %s", fqn, exc)
+        return {}
+
+
+def _load_column_descriptions_from_uc(spark, catalog: str, schema: str):
+    """Read ``{catalog}.{schema}.column_descriptions`` into ``{column_name: ColumnDescriptionRow}``."""
+    fqn = f"{catalog}.{schema}.column_descriptions"
+    try:
+        if not spark.catalog.tableExists(fqn):
+            return {}
+        from dataclasses import fields as dc_fields
+
+        from .column_descriptions_writer import ColumnDescriptionRow
+        accepted = {f.name for f in dc_fields(ColumnDescriptionRow)}
+        rows = spark.sql(f"SELECT * FROM {fqn}").collect()
+        out: Dict[str, Any] = {}
+        for r in rows:
+            d = r.asDict(recursive=True)
+            name = d.get("column_name")
+            if not name:
+                continue
+            kwargs = {k: v for k, v in d.items() if k in accepted}
+            try:
+                out[str(name)] = ColumnDescriptionRow(**kwargs)
+            except Exception as exc:  # noqa: BLE001 — best-effort
+                logger.debug("column_descriptions row %s skipped: %s", name, exc)
+        return out
+    except Exception as exc:  # noqa: BLE001 — best-effort load; fall back to no enrichment
+        logger.warning("could not load column_descriptions from %s: %s", fqn, exc)
+        return {}
 
 
 def _build_archetype_summaries(
