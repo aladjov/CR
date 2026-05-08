@@ -131,3 +131,23 @@ class TestAssignmentForLookup:
     def test_returns_none_for_missing_entity(self):
         body = _function_body("assignment_for")
         assert "return None" in body
+
+
+class TestAccountIsHoldout:
+    def test_reads_through_cached_account_explanation(self):
+        # Piggy-backing on ``account_explanation`` (already cached + called
+        # by customer_profile.render) means the button check fires zero
+        # extra SQL while the L4 panel is open.
+        body = _function_body("account_is_holdout")
+        assert "account_explanation(" in body
+
+    def test_returns_false_for_empty_or_missing_field(self):
+        body = _function_body("account_is_holdout")
+        assert "is_holdout" in body
+        assert "return False" in body
+
+    def test_handles_nan_safely(self):
+        # The view can return NULL is_holdout for legacy snapshots; we must
+        # not let pd.isna raise on non-NA-aware values.
+        body = _function_body("account_is_holdout")
+        assert "pd.isna" in body

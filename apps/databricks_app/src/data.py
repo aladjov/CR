@@ -486,3 +486,28 @@ def assignment_for(entity_id: str) -> str | None:
     if hit.empty:
         return None
     return str(hit.iloc[0]["assigned_to"])
+
+
+def account_is_holdout(entity_id: str) -> bool:
+    """Return ``True`` when ``entity_id`` is a holdout row.
+
+    Reads the ``is_holdout`` field from the same cached ``account_explanation``
+    call that ``customer_profile.render()`` already issues for the L4 panel,
+    so this lookup adds zero extra SQL when the profile is open. Holdout
+    accounts are deliberately excluded from CSM intervention to measure
+    model lift; the L4 button uses this to refuse self-assignment.
+    """
+    if not entity_id:
+        return False
+    df = account_explanation(entity_id)
+    if df is None or df.empty or "is_holdout" not in df.columns:
+        return False
+    val = df.iloc[0]["is_holdout"]
+    if val is None:
+        return False
+    try:
+        if pd.isna(val):
+            return False
+    except (TypeError, ValueError):
+        pass
+    return bool(val)

@@ -373,15 +373,20 @@ if _selected_playbook:
 
 
 # --- Level 4 · Customer profile --------------------------------------------
-def _render_assign_button(entity_id: str) -> None:
-    """Render the self-assign / unassign control next to the L4 header.
+def _render_assign_button(entity_id: str, *, holdout: bool = False) -> None:
+    """Render the self-assign / unassign control inline with the L4 header.
 
     The button reads the cached ``assignments()`` frame so its label
     reflects current ownership without firing extra SQL on every rerun.
-    Three states:
-      - unassigned         -> "Assign to me"        (enabled)
-      - assigned to me     -> "Unassign"            (enabled)
-      - assigned to other  -> "Claimed · <handle>"  (disabled)
+    Four states:
+      - holdout            -> "Holdout · no action"   (disabled, regardless of owner)
+      - unassigned         -> "Assign to me"          (enabled)
+      - assigned to me     -> "Unassign"              (enabled)
+      - assigned to other  -> "Claimed · <handle>"    (disabled)
+
+    Holdout accounts are deliberately excluded from CSM intervention so
+    we can measure model lift; the disabled label makes that policy
+    visible at the point where someone might try to override it.
     """
     me = auth.current_user_email()
     try:
@@ -392,29 +397,32 @@ def _render_assign_button(entity_id: str) -> None:
     mine = bool(me and owner and owner.strip().lower() == me.lower())
     other = bool(owner and not mine)
 
-    if mine:
+    if holdout:
+        label = "Holdout · no action"
+        help_text = "Holdout accounts are excluded from CSM intervention by policy."
+    elif mine:
         label = "Unassign"
+        help_text = "Release this account."
     elif other:
         handle = owner.split("@", 1)[0] if "@" in (owner or "") else (owner or "")
         label = f"Claimed · {handle}"
+        help_text = "Already claimed by another CSM."
+    elif not me:
+        label = "Assign to me"
+        help_text = "Sign in to self-assign."
     else:
         label = "Assign to me"
+        help_text = "Claim this account for yourself."
 
-    _, right = st.columns([6, 1])
-    with right:
-        clicked = st.button(
-            label,
-            key=f"assign_btn::{entity_id}",
-            disabled=other or not me,
-            help=(
-                "Sign in to self-assign." if not me
-                else "Release this account." if mine
-                else "Already claimed by another CSM." if other
-                else "Claim this account for yourself."
-            ),
-            use_container_width=True,
-        )
-    if clicked and me:
+    disabled = holdout or other or not me
+    clicked = st.button(
+        label,
+        key=f"assign_btn::{entity_id}",
+        disabled=disabled,
+        help=help_text,
+        use_container_width=True,
+    )
+    if clicked and me and not holdout:
         try:
             result = data.toggle_assignment(entity_id, me)
         except Exception as exc:
@@ -428,13 +436,24 @@ def _render_assign_button(entity_id: str) -> None:
 
 _selected_entity = state.get("selected_entity")
 if _selected_entity:
-    _level_header(
-        level=4,
-        eyebrow="Level 04 · Profile",
-        title_html=escape(str(_selected_entity)),
-        lead="Everything we know about this customer and why the model flagged them.",
-    )
-    _render_assign_button(str(_selected_entity))
+    # Header + button live in a single columns row so the assign control
+    # sits inline with the profile title rather than consuming a separate
+    # full-width band underneath. ``vertical_alignment="center"`` keeps the
+    # button visually anchored to the title.
+    try:
+        _is_holdout = data.account_is_holdout(str(_selected_entity))
+    except Exception:
+        _is_holdout = False
+    _hdr_col, _btn_col = st.columns([6, 1], vertical_alignment="center")
+    with _hdr_col:
+        _level_header(
+            level=4,
+            eyebrow="Level 04 · Profile",
+            title_html=escape(str(_selected_entity)),
+            lead="Everything we know about this customer and why the model flagged them.",
+        )
+    with _btn_col:
+        _render_assign_button(str(_selected_entity), holdout=_is_holdout)
     try:
         customer_profile.render()
     except Exception as exc:
