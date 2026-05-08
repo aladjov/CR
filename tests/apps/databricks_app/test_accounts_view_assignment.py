@@ -23,8 +23,8 @@ _ACCOUNTS_VIEW_PY = (
 )
 
 
-def _load_assignment_label():
-    """Load ``_assignment_label`` without dragging in streamlit."""
+def _load_module():
+    """Load ``accounts_view`` helpers without dragging in streamlit."""
     src = _ACCOUNTS_VIEW_PY.read_text(encoding="utf-8")
     for name in ("streamlit",):
         sys.modules.setdefault(name, types.ModuleType(name))
@@ -40,10 +40,14 @@ def _load_assignment_label():
     mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
     mod.__dict__["pd"] = pd
     exec(compile(code, str(_ACCOUNTS_VIEW_PY), "exec"), mod.__dict__)
-    return mod._assignment_label
+    return mod
 
 
-_assignment_label = _load_assignment_label()
+_mod = _load_module()
+_assignment_label = _mod._assignment_label
+_row_style = _mod._row_style
+_ME_LABEL = _mod._ME_LABEL
+_MINE_ROW_STYLE = _mod._MINE_ROW_STYLE
 
 
 class TestAssignmentLabel:
@@ -57,11 +61,12 @@ class TestAssignmentLabel:
         assert _assignment_label("", "jane@churnkit.com") == ""
         assert _assignment_label("   ", "jane@churnkit.com") == ""
 
-    def test_self_renders_as_mine(self):
-        assert _assignment_label("jane@churnkit.com", "jane@churnkit.com") == "Mine"
+    def test_self_renders_as_me(self):
+        assert _assignment_label("jane@churnkit.com", "jane@churnkit.com") == "Me"
+        assert _ME_LABEL == "Me"
 
     def test_self_match_is_case_insensitive(self):
-        assert _assignment_label("JANE@CHURNKIT.com", "jane@churnkit.com") == "Mine"
+        assert _assignment_label("JANE@CHURNKIT.com", "jane@churnkit.com") == "Me"
 
     def test_other_renders_as_handle(self):
         assert _assignment_label("alex@churnkit.com", "jane@churnkit.com") == "alex"
@@ -101,3 +106,39 @@ class TestSourceShape:
     def test_handles_empty_assignments_gracefully(self, src):
         # An empty assignments frame must not break the merge.
         assert "assigns is None or assigns.empty" in src
+
+    def test_styler_is_applied_to_dataframe(self, src):
+        # The row tint only renders when we pass the Styler -- a plain
+        # ``st.dataframe(display, ...)`` call would silently lose it.
+        assert "display.style.apply(_row_style, axis=1)" in src
+        assert "st.dataframe(\n        styled," in src
+
+    def test_dataframe_call_keeps_selection_mode(self, src):
+        # Switching to a Styler must not drop the row-click handler.
+        assert 'on_select="rerun"' in src
+        assert 'selection_mode="single-row"' in src
+
+
+class TestRowStyle:
+    def test_mine_row_gets_tint_in_every_cell(self):
+        row = pd.Series({"Entity": "x", "Assigned to": "Me", "Tier": "● High"})
+        styles = _row_style(row)
+        assert len(styles) == len(row)
+        for s in styles:
+            assert s == _MINE_ROW_STYLE
+
+    def test_other_row_returns_blanks(self):
+        row = pd.Series({"Entity": "x", "Assigned to": "alex", "Tier": "● High"})
+        styles = _row_style(row)
+        assert styles == [""] * len(row)
+
+    def test_unassigned_row_returns_blanks(self):
+        row = pd.Series({"Entity": "x", "Assigned to": "", "Tier": "● High"})
+        styles = _row_style(row)
+        assert styles == [""] * len(row)
+
+    def test_style_string_carries_background_and_weight(self):
+        # Row tint + bold cell weight together make the row pop without
+        # screaming. Both signals must be present.
+        assert "background-color" in _MINE_ROW_STYLE
+        assert "font-weight" in _MINE_ROW_STYLE

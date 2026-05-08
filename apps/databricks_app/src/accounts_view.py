@@ -21,10 +21,18 @@ def _tier_label(tier) -> str:
     return f"{glyph}  {tier}"
 
 
+_ME_LABEL = "Me"
+# Very low-saturation green wash so a CSM can spot their own rows at a
+# glance without the row screaming louder than the High-tier risk dots.
+# Tuned to read against both the table's default white background and the
+# selected-row pink wash without becoming muddy.
+_MINE_ROW_STYLE = "background-color: rgba(34, 139, 34, 0.08); font-weight: 600"
+
+
 def _assignment_label(assigned_to, me: str | None) -> str:
     """Render the ``assigned_to`` cell.
 
-    ``Mine`` is reserved for the current user so a CSM can scan their own
+    ``Me`` is reserved for the current user so a CSM can scan their own
     column at a glance; everyone else surfaces the local-part of their
     email (``jane.doe`` from ``jane.doe@churnkit.com``) for compactness.
     Returns an empty string for unassigned rows so the column visually
@@ -36,8 +44,20 @@ def _assignment_label(assigned_to, me: str | None) -> str:
     if not text:
         return ""
     if me and text.lower() == me.lower():
-        return "Mine"
+        return _ME_LABEL
     return text.split("@", 1)[0] if "@" in text else text
+
+
+def _row_style(row) -> list[str]:
+    """Per-row CSS for ``Styler.apply(axis=1)``.
+
+    Highlights rows owned by the current user so the at-a-glance scan
+    answers "which of these is mine" before any reading. Other rows return
+    empty strings so the default table styling applies.
+    """
+    if row.get("Assigned to") == _ME_LABEL:
+        return [_MINE_ROW_STYLE] * len(row)
+    return [""] * len(row)
 
 
 def render() -> None:
@@ -109,8 +129,12 @@ def render() -> None:
         ),
     }
 
+    # Styler-applied row tint for entries owned by the current user.
+    # ``st.dataframe`` accepts a Styler and still respects column_config and
+    # selection events (the events index back into the underlying frame).
+    styled = display.style.apply(_row_style, axis=1)
     event = st.dataframe(
-        display,
+        styled,
         use_container_width=True,
         hide_index=True,
         column_config=col_config,
