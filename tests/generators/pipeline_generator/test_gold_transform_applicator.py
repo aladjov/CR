@@ -202,6 +202,86 @@ class TestBuildGoldStepsIncludesEncoding:
         assert steps[0].source_notebook == "nb04"
 
 
+class TestBuildGoldStepsEncodingDedup:
+    """PA-2: parity-of-encoding between NB08 and NB10 codegen.
+
+    NB10's `FindingsParser._apply_gold_recommendations` seeds
+    `seen_encoding_columns` with the baseline `one_hot` step from
+    `_build_gold_config` (always one_hot for every categorical) and
+    skips registry recs whose target column is already in the seen set.
+    `build_gold_steps` (called by NB08's `apply_gold_transforms`) must
+    follow the same de-dup-with-one_hot-preference rule, otherwise NB08
+    runs both `binary` and `one_hot` recs back-to-back: the first
+    label-encodes the column to integer codes, the second one-hots
+    those codes into positional `_0`/`_1` suffixes. Production codegen
+    only runs one_hot, so it emits value-based `_Emerging`/`_Enterprise`
+    suffixes, leaving NB08-selected `*_0`/`*_1` features absent from
+    gold (engagement spschurn-fa23ccd0 `REVENUE_MARKET_SEGMENT_1`
+    parity gap).
+    """
+
+    def test_two_encoding_recs_same_column_emit_one_step(self):
+        reg = RecommendationRegistry()
+        reg.init_gold("churn")
+        reg.add_gold_encoding(
+            "REVENUE_MARKET_SEGMENT", "binary",
+            "Binary categorical - simple 0/1 encoding", "04",
+        )
+        reg.add_gold_encoding(
+            "REVENUE_MARKET_SEGMENT", "one_hot",
+            "Low cardinality (4 unique values)", "06",
+        )
+        steps = build_gold_steps(reg, {"REVENUE_MARKET_SEGMENT"})
+        assert len(steps) == 1
+        assert steps[0].column == "REVENUE_MARKET_SEGMENT"
+
+    def test_one_hot_wins_when_competing_with_binary(self):
+        reg = RecommendationRegistry()
+        reg.init_gold("churn")
+        reg.add_gold_encoding("MARKET", "binary", "binary", "04")
+        reg.add_gold_encoding("MARKET", "one_hot", "low cardinality", "06")
+        steps = build_gold_steps(reg, {"MARKET"})
+        assert steps[0].parameters == {"method": "one_hot"}
+        assert steps[0].source_notebook == "06"
+
+    def test_one_hot_wins_regardless_of_order(self):
+        reg = RecommendationRegistry()
+        reg.init_gold("churn")
+        reg.add_gold_encoding("REGION", "one_hot", "low cardinality", "06")
+        reg.add_gold_encoding("REGION", "binary", "binary", "04")
+        steps = build_gold_steps(reg, {"REGION"})
+        assert steps[0].parameters == {"method": "one_hot"}
+        assert steps[0].source_notebook == "06"
+
+    def test_first_rec_wins_when_no_one_hot(self):
+        reg = RecommendationRegistry()
+        reg.init_gold("churn")
+        reg.add_gold_encoding("ZIP", "target", "high cardinality", "04")
+        reg.add_gold_encoding("ZIP", "frequency", "high cardinality", "06")
+        steps = build_gold_steps(reg, {"ZIP"})
+        assert len(steps) == 1
+        assert steps[0].parameters == {"method": "target"}
+        assert steps[0].source_notebook == "04"
+
+    def test_dedup_preserves_first_seen_order_across_columns(self):
+        reg = RecommendationRegistry()
+        reg.init_gold("churn")
+        reg.add_gold_encoding("CITY", "one_hot", "first", "04")
+        reg.add_gold_encoding("STATE", "binary", "second", "04")
+        reg.add_gold_encoding("STATE", "one_hot", "second-onehot", "06")
+        reg.add_gold_encoding("ZIP", "target", "third", "04")
+        steps = build_gold_steps(reg, {"CITY", "STATE", "ZIP"})
+        assert [s.column for s in steps] == ["CITY", "STATE", "ZIP"]
+
+    def test_onehot_alias_treated_as_one_hot_for_dedup(self):
+        reg = RecommendationRegistry()
+        reg.init_gold("churn")
+        reg.add_gold_encoding("BRAND", "binary", "binary", "04")
+        reg.add_gold_encoding("BRAND", "onehot", "low cardinality", "06")
+        steps = build_gold_steps(reg, {"BRAND"})
+        assert steps[0].parameters == {"method": "one_hot"}
+
+
 class TestBuildGoldStepsIncludesScaling:
     """Parity: exploration must apply scalings so numeric features match Databricks gold."""
 

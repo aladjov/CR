@@ -270,3 +270,167 @@ def test_regression_churned_lift_at_90d_exceeds_1_5x():
     assert mean_0 > 0
     lift = mean_1 / mean_0
     assert lift > 1.5, f"expected lift > 1.5x, got {lift:.3f}"
+
+
+# ---------------------------------------------------------------------------
+# PA-6: Lane-1 registration helpers
+# ---------------------------------------------------------------------------
+
+class TestRegisterEventRatioFeatures:
+    """`register_event_ratio_features(registry, dataset, windows, ...)`
+    emits one ``add_silver_derived`` rec per window using the dataset-
+    PREFIXED column names so production silver-derived codegen sees
+    the same column ids the math helper would produce when
+    ``TemporalMerger`` prefixes on collision.
+    """
+
+    def _registry(self):
+        from customer_retention.analysis.auto_explorer.layered_recommendations import (
+            RecommendationRegistry,
+        )
+        reg = RecommendationRegistry()
+        reg.init_silver("ACCOUNT_ID")
+        return reg
+
+    def test_emits_one_rec_per_window(self):
+        from customer_retention.analysis.business import register_event_ratio_features
+
+        reg = self._registry()
+        emitted = register_event_ratio_features(
+            reg, dataset="contract", windows=("7d", "90d"),
+        )
+        assert emitted == [
+            "contract_terminate_to_start_ratio_7d",
+            "contract_terminate_to_start_ratio_90d",
+        ]
+        assert len(reg.silver.derived_columns) == 2
+
+    def test_recs_use_prefixed_column_names_for_codegen_parity(self):
+        from customer_retention.analysis.business import register_event_ratio_features
+
+        reg = self._registry()
+        register_event_ratio_features(
+            reg, dataset="contract", windows=("90d",),
+        )
+        rec = reg.silver.derived_columns[0]
+        params = rec.parameters or {}
+        assert params["source_columns"] == [
+            "contract__event_type_terminate_count_90d",
+            "contract__event_type_start_count_90d",
+        ]
+        assert params["feature_type"] == "ratio"
+        assert "contract__event_type_terminate_count_90d" in params["expression"]
+        assert "contract__event_type_start_count_90d" in params["expression"]
+
+    def test_default_windows_match_panel_grid(self):
+        from customer_retention.analysis.business import (
+            DEFAULT_RATIO_WINDOWS,
+            register_event_ratio_features,
+        )
+
+        reg = self._registry()
+        emitted = register_event_ratio_features(reg, dataset="contract")
+        assert len(emitted) == len(DEFAULT_RATIO_WINDOWS)
+        for w in DEFAULT_RATIO_WINDOWS:
+            assert f"contract_terminate_to_start_ratio_{w}" in emitted
+
+    def test_subscription_helper_emits_subscription_prefixed_columns(self):
+        from customer_retention.analysis.business import register_subscription_ratio_features
+
+        reg = self._registry()
+        emitted = register_subscription_ratio_features(reg, windows=("180d",))
+        rec = reg.silver.derived_columns[0]
+        assert emitted == ["subscription_terminate_to_start_ratio_180d"]
+        assert rec.target_column == "subscription_terminate_to_start_ratio_180d"
+        assert rec.parameters["source_columns"] == [
+            "subscription__event_type_terminate_count_180d",
+            "subscription__event_type_start_count_180d",
+        ]
+
+    def test_contract_helper_emits_contract_prefixed_columns(self):
+        from customer_retention.analysis.business import register_contract_ratio_features
+
+        reg = self._registry()
+        emitted = register_contract_ratio_features(reg, windows=("30d",))
+        rec = reg.silver.derived_columns[0]
+        assert emitted == ["contract_terminate_to_start_ratio_30d"]
+        assert rec.parameters["source_columns"] == [
+            "contract__event_type_terminate_count_30d",
+            "contract__event_type_start_count_30d",
+        ]
+
+    def test_explicit_rationale_propagates(self):
+        from customer_retention.analysis.business import register_event_ratio_features
+
+        reg = self._registry()
+        register_event_ratio_features(
+            reg, dataset="contract", windows=("7d",),
+            rationale="custom rationale for this engagement",
+        )
+        assert reg.silver.derived_columns[0].rationale == "custom rationale for this engagement"
+
+    def test_default_rationale_mentions_dataset_and_window(self):
+        from customer_retention.analysis.business import register_event_ratio_features
+
+        reg = self._registry()
+        register_event_ratio_features(
+            reg, dataset="contract", windows=("7d",),
+        )
+        text = reg.silver.derived_columns[0].rationale.lower()
+        assert "contract" in text
+        assert "7d" in text
+
+    def test_source_notebook_default_is_nb06(self):
+        from customer_retention.analysis.business import register_event_ratio_features
+
+        reg = self._registry()
+        register_event_ratio_features(
+            reg, dataset="contract", windows=("7d",),
+        )
+        assert reg.silver.derived_columns[0].source_notebook == "06_feature_opportunities"
+
+    def test_explicit_source_notebook_propagates(self):
+        from customer_retention.analysis.business import register_event_ratio_features
+
+        reg = self._registry()
+        register_event_ratio_features(
+            reg, dataset="contract", windows=("7d",),
+            source_notebook="my_nb.ipynb",
+        )
+        assert reg.silver.derived_columns[0].source_notebook == "my_nb.ipynb"
+
+    def test_empty_dataset_raises(self):
+        from customer_retention.analysis.business import register_event_ratio_features
+
+        reg = self._registry()
+        with pytest.raises(ValueError, match="non-empty dataset"):
+            register_event_ratio_features(reg, dataset="", windows=("7d",))
+
+    def test_empty_windows_raises(self):
+        from customer_retention.analysis.business import register_event_ratio_features
+
+        reg = self._registry()
+        with pytest.raises(ValueError, match="non-empty windows"):
+            register_event_ratio_features(reg, dataset="contract", windows=())
+
+    def test_register_then_derive_produces_matching_columns(self):
+        """End-to-end: registering with prefixed names, then calling the
+        math helper with a panel containing those same prefixed names,
+        produces the column the registration committed to."""
+        from customer_retention.analysis.business import (
+            derive_contract_ratio_features,
+            register_contract_ratio_features,
+        )
+
+        reg = self._registry()
+        emitted_recs = register_contract_ratio_features(reg, windows=("30d",))
+
+        panel = pd.DataFrame([
+            {"contract__event_type_terminate_count_30d": 2,
+             "contract__event_type_start_count_30d": 4},
+            {"contract__event_type_terminate_count_30d": 0,
+             "contract__event_type_start_count_30d": 1},
+        ])
+        out, emitted_cols = derive_contract_ratio_features(panel, windows=("30d",))
+        assert emitted_recs == emitted_cols
+        assert "contract_terminate_to_start_ratio_30d" in out.columns

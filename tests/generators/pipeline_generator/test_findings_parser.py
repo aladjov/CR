@@ -8314,6 +8314,213 @@ class TestReconcileDatetimeDerivationWithSpec:
         parser._reconcile_datetime_derivation_with_spec(config)
 
 
+class TestDiagnosticSummary:
+    """PA-5: `FindingsParser.diagnostic_summary(config)` produces the
+    structured pre-codegen audit operators previously needed the
+    `probe_codegen_diagnostics` user_code cell to compute. Threaded
+    into `generation_manifest.json#diagnostic_summary`.
+    """
+
+    def test_default_shape_on_minimal_setup(self, aggregated_event_setup):
+        from customer_retention.generators.pipeline_generator.findings_parser import (
+            FindingsParser,
+        )
+        parser = FindingsParser(str(aggregated_event_setup))
+        summary = parser.diagnostic_summary()
+        for key in (
+            "target_column", "target_dataset", "landing", "bronze_event",
+            "silver", "gold", "feature_spec", "parity",
+        ):
+            assert key in summary, f"missing key {key!r}"
+        assert isinstance(summary["landing"], dict)
+        assert isinstance(summary["bronze_event"], dict)
+        assert summary["silver"]["by_action"] == {}
+        assert summary["gold"]["encodings_total"] >= 0
+
+    def test_diagnostic_accepts_pre_parsed_config(self, aggregated_event_setup):
+        from customer_retention.generators.pipeline_generator.findings_parser import (
+            FindingsParser,
+        )
+        parser = FindingsParser(str(aggregated_event_setup))
+        config = parser.parse()
+        summary = parser.diagnostic_summary(config)
+        assert summary["target_column"] == config.target_column
+
+    def test_landing_summary_includes_filters_and_drop_columns(
+        self, aggregated_event_setup,
+    ):
+        import yaml
+
+        from customer_retention.generators.pipeline_generator.findings_parser import (
+            FindingsParser,
+        )
+        (aggregated_event_setup / "recommendations.yaml").write_text(yaml.dump({
+            "landing": {
+                "filters": [{
+                    "id": "landing_landing_filtering_orders_agg",
+                    "layer": "landing", "category": "landing_filtering",
+                    "action": "filter", "target_column": "orders_agg",
+                    "parameters": {
+                        "dataset": "orders_agg",
+                        "predicate": "customer_id IS NOT NULL",
+                    },
+                    "rationale": "r", "source_notebook": "nb",
+                    "priority": 1, "dependencies": [],
+                }],
+                "lifecycle_enrichments": [],
+                "drop_columns": [{
+                    "id": "landing_drop_columns_orders_agg",
+                    "layer": "landing", "category": "drop_columns",
+                    "action": "drop", "target_column": "orders_agg",
+                    "parameters": {
+                        "dataset": "orders_agg", "columns": ["audit_col"],
+                    },
+                    "rationale": "case-fold collision",
+                    "source_notebook": "02",
+                    "priority": 1, "dependencies": [],
+                }],
+            },
+        }))
+        parser = FindingsParser(str(aggregated_event_setup))
+        summary = parser.diagnostic_summary()
+        assert summary["landing"]["orders_agg"]["filters"] == 1
+        assert summary["landing"]["orders_agg"]["drop_columns"] == ["audit_col"]
+
+    def test_silver_summary_counts_by_action(self, aggregated_event_setup):
+        import yaml
+
+        from customer_retention.generators.pipeline_generator.findings_parser import (
+            FindingsParser,
+        )
+        (aggregated_event_setup / "recommendations.yaml").write_text(yaml.dump({
+            "silver": {
+                "entity_column": "customer_id",
+                "time_column": None,
+                "joins": [],
+                "aggregations": [],
+                "derived_columns": [
+                    {
+                        "id": "silver_derived_ratio_a",
+                        "layer": "silver", "category": "derived_columns",
+                        "action": "ratio", "target_column": "a_ratio",
+                        "parameters": {
+                            "action": "ratio",
+                            "numerator": "x", "denominator": "y",
+                        },
+                        "rationale": "r", "source_notebook": "06",
+                        "priority": 1, "dependencies": [],
+                    },
+                    {
+                        "id": "silver_derived_ratio_b",
+                        "layer": "silver", "category": "derived_columns",
+                        "action": "ratio", "target_column": "b_ratio",
+                        "parameters": {
+                            "action": "ratio",
+                            "numerator": "p", "denominator": "q",
+                        },
+                        "rationale": "r", "source_notebook": "06",
+                        "priority": 1, "dependencies": [],
+                    },
+                ],
+            },
+        }))
+        parser = FindingsParser(str(aggregated_event_setup))
+        summary = parser.diagnostic_summary()
+        assert summary["silver"]["by_action"].get("ratio", 0) >= 0
+        assert summary["parity"]["silver_declared"] == 2
+
+    def test_parity_strict_flag_propagated(self, aggregated_event_setup):
+        from customer_retention.generators.pipeline_generator.findings_parser import (
+            FindingsParser,
+        )
+        parser_lenient = FindingsParser(str(aggregated_event_setup))
+        parser_strict = FindingsParser(
+            str(aggregated_event_setup), strict_datetime_parity=True,
+        )
+        assert parser_lenient.diagnostic_summary()["parity"][
+            "strict_datetime_parity"
+        ] is False
+        assert parser_strict.diagnostic_summary()["parity"][
+            "strict_datetime_parity"
+        ] is True
+
+    def test_parity_ignored_features_propagated(self, aggregated_event_setup):
+        from customer_retention.generators.pipeline_generator.findings_parser import (
+            FindingsParser,
+        )
+        parser = FindingsParser(
+            str(aggregated_event_setup),
+            parity_ignored_features=["FOO_1", "BAR"],
+        )
+        summary = parser.diagnostic_summary()
+        assert sorted(summary["parity"]["parity_ignored_features"]) == ["BAR", "FOO_1"]
+
+    def test_summary_is_json_serialisable(self, aggregated_event_setup):
+        import json
+
+        from customer_retention.generators.pipeline_generator.findings_parser import (
+            FindingsParser,
+        )
+        parser = FindingsParser(str(aggregated_event_setup))
+        summary = parser.diagnostic_summary()
+        # Round-trip through JSON to confirm no datatypes that would
+        # break manifest serialisation (e.g., Path objects, datetime).
+        encoded = json.dumps(summary)
+        decoded = json.loads(encoded)
+        assert decoded["target_column"] == summary["target_column"]
+
+
+class TestStrictDatetimeParityDefault:
+    """PA-4: the constructor default for `strict_datetime_parity` is
+    ``False`` (lenient). NB10 ships with the same default. Strict mode
+    is opt-in by passing ``strict_datetime_parity=True``.
+    """
+
+    def test_findings_parser_default_is_lenient(self, aggregated_event_setup):
+        from customer_retention.generators.pipeline_generator.findings_parser import (
+            FindingsParser,
+        )
+        parser = FindingsParser(str(aggregated_event_setup))
+        assert parser._strict_datetime_parity is False
+
+    def test_findings_parser_explicit_strict_overrides_default(
+        self, aggregated_event_setup,
+    ):
+        from customer_retention.generators.pipeline_generator.findings_parser import (
+            FindingsParser,
+        )
+        parser = FindingsParser(
+            str(aggregated_event_setup), strict_datetime_parity=True,
+        )
+        assert parser._strict_datetime_parity is True
+
+    def test_pipeline_generator_default_threads_lenient_to_parser(
+        self, aggregated_event_setup, tmp_path,
+    ):
+        from customer_retention.generators.pipeline_generator.generator import (
+            PipelineGenerator,
+        )
+        gen = PipelineGenerator(
+            findings_dir=str(aggregated_event_setup),
+            output_dir=str(tmp_path),
+            pipeline_name="t",
+        )
+        assert gen._parser._strict_datetime_parity is False
+
+    def test_databricks_pipeline_generator_default_threads_lenient_to_parser(
+        self, aggregated_event_setup, tmp_path,
+    ):
+        from customer_retention.generators.pipeline_generator.databricks_generator import (
+            DatabricksPipelineGenerator,
+        )
+        gen = DatabricksPipelineGenerator(
+            findings_dir=str(aggregated_event_setup),
+            output_dir=str(tmp_path),
+            pipeline_name="t",
+        )
+        assert gen._parser._strict_datetime_parity is False
+
+
 class TestGoldPostSelectionStepTargets:
     """Gold's `apply_feature_selection` runs BEFORE `apply_encodings` and
     `apply_scalings`. Any column that is still needed by a post-selection step
@@ -8722,6 +8929,190 @@ class TestLandingRecommendationsApplication:
         landing = config.landing["orders_agg"]
         assert landing.filters == []
         assert landing.lifecycle_enrichments == []
+
+
+class TestLandingDropColumnsFromRegistry:
+    """PA-3: registry-declared landing.drop_columns merge into
+    LandingLayerConfig.drop_columns. Idempotent against operator-side
+    landing_drop_columns_overrides which `_apply_landing_overrides`
+    applies to the same list later in `parse()`.
+    """
+
+    def _write_landing_recs(self, findings_dir, landing_block):
+        rec_data = {"landing": landing_block}
+        (findings_dir / "recommendations.yaml").write_text(yaml.dump(rec_data))
+
+    def test_drop_columns_rec_populates_landing_config(self, aggregated_event_setup):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        self._write_landing_recs(aggregated_event_setup, {
+            "filters": [],
+            "lifecycle_enrichments": [],
+            "drop_columns": [
+                {
+                    "id": "landing_drop_columns_orders_agg",
+                    "layer": "landing",
+                    "category": "drop_columns",
+                    "action": "drop",
+                    "target_column": "orders_agg",
+                    "parameters": {
+                        "dataset": "orders_agg",
+                        "columns": ["order_id"],
+                    },
+                    "rationale": "case-fold collision on 'order_id'",
+                    "source_notebook": "02_source_integrity",
+                    "priority": 1,
+                    "dependencies": [],
+                }
+            ],
+        })
+
+        parser = FindingsParser(str(aggregated_event_setup))
+        config = parser.parse()
+
+        assert "order_id" in config.landing["orders_agg"].drop_columns
+
+    def test_drop_columns_rec_idempotent_with_operator_override(self, aggregated_event_setup):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        self._write_landing_recs(aggregated_event_setup, {
+            "filters": [],
+            "lifecycle_enrichments": [],
+            "drop_columns": [
+                {
+                    "id": "landing_drop_columns_orders_agg",
+                    "layer": "landing",
+                    "category": "drop_columns",
+                    "action": "drop",
+                    "target_column": "orders_agg",
+                    "parameters": {
+                        "dataset": "orders_agg",
+                        "columns": ["order_id"],
+                    },
+                    "rationale": "case-fold collision",
+                    "source_notebook": "02",
+                    "priority": 1,
+                    "dependencies": [],
+                }
+            ],
+        })
+
+        parser = FindingsParser(
+            str(aggregated_event_setup),
+            landing_drop_columns_overrides={"orders_agg": ["order_id"]},
+        )
+        config = parser.parse()
+
+        # Both registry and override target the same column — final list
+        # contains it exactly once.
+        assert config.landing["orders_agg"].drop_columns.count("order_id") == 1
+
+    def test_drop_columns_rec_merges_with_distinct_operator_override(
+        self, aggregated_event_setup
+    ):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        self._write_landing_recs(aggregated_event_setup, {
+            "filters": [],
+            "lifecycle_enrichments": [],
+            "drop_columns": [
+                {
+                    "id": "landing_drop_columns_orders_agg",
+                    "layer": "landing",
+                    "category": "drop_columns",
+                    "action": "drop",
+                    "target_column": "orders_agg",
+                    "parameters": {
+                        "dataset": "orders_agg",
+                        "columns": ["registry_drop"],
+                    },
+                    "rationale": "auto",
+                    "source_notebook": "02",
+                    "priority": 1,
+                    "dependencies": [],
+                }
+            ],
+        })
+
+        parser = FindingsParser(
+            str(aggregated_event_setup),
+            landing_drop_columns_overrides={"orders_agg": ["operator_drop"]},
+        )
+        config = parser.parse()
+
+        drops = config.landing["orders_agg"].drop_columns
+        assert set(drops) >= {"registry_drop", "operator_drop"}
+
+    def test_multiple_drop_columns_recs_same_dataset_merge(self, aggregated_event_setup):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        self._write_landing_recs(aggregated_event_setup, {
+            "filters": [],
+            "lifecycle_enrichments": [],
+            "drop_columns": [
+                {
+                    "id": "landing_drop_columns_orders_agg_a",
+                    "layer": "landing",
+                    "category": "drop_columns",
+                    "action": "drop",
+                    "target_column": "orders_agg",
+                    "parameters": {
+                        "dataset": "orders_agg",
+                        "columns": ["a"],
+                    },
+                    "rationale": "case-fold collision a",
+                    "source_notebook": "02",
+                    "priority": 1,
+                    "dependencies": [],
+                },
+                {
+                    "id": "landing_drop_columns_orders_agg_b",
+                    "layer": "landing",
+                    "category": "drop_columns",
+                    "action": "drop",
+                    "target_column": "orders_agg",
+                    "parameters": {
+                        "dataset": "orders_agg",
+                        "columns": ["b"],
+                    },
+                    "rationale": "case-fold collision b",
+                    "source_notebook": "02",
+                    "priority": 1,
+                    "dependencies": [],
+                },
+            ],
+        })
+
+        parser = FindingsParser(str(aggregated_event_setup))
+        config = parser.parse()
+
+        assert set(config.landing["orders_agg"].drop_columns) >= {"a", "b"}
+
+    def test_drop_columns_unknown_dataset_raises(self, aggregated_event_setup):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        self._write_landing_recs(aggregated_event_setup, {
+            "filters": [],
+            "lifecycle_enrichments": [],
+            "drop_columns": [
+                {
+                    "id": "landing_drop_columns_ghost",
+                    "layer": "landing",
+                    "category": "drop_columns",
+                    "action": "drop",
+                    "target_column": "ghost",
+                    "parameters": {"dataset": "ghost", "columns": ["x"]},
+                    "rationale": "bogus",
+                    "source_notebook": "02",
+                    "priority": 1,
+                    "dependencies": [],
+                }
+            ],
+        })
+
+        parser = FindingsParser(str(aggregated_event_setup))
+        with pytest.raises(ValueError, match="unknown dataset 'ghost'"):
+            parser.parse()
 
 
 class TestLandingKillSwitch:

@@ -1,5 +1,5 @@
 version: 1
-source_fingerprint: sha256:24e9ec988b72a41fe28dd867353241223c5ccf3bdf9e469a82c91f31750c7bf0
+source_fingerprint: sha256:9cfedd1a59099988ac1556164f188120e99e517789c607e5b2072628f100dc77
 generated_from:
 - exploration_notebooks/00_start_here.ipynb
 - exploration_notebooks/01_data_discovery.ipynb

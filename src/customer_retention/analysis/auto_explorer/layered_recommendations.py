@@ -115,10 +115,11 @@ class GoldRecommendations:
 class LandingRecommendations:
     filters: List[LayeredRecommendation] = field(default_factory=list)
     lifecycle_enrichments: List[LayeredRecommendation] = field(default_factory=list)
+    drop_columns: List[LayeredRecommendation] = field(default_factory=list)
 
     @property
     def all_recommendations(self) -> List[LayeredRecommendation]:
-        return self.filters + self.lifecycle_enrichments
+        return self.filters + self.lifecycle_enrichments + self.drop_columns
 
 
 _BRONZE_AGG_OVERRIDE_KEYS = frozenset(
@@ -275,6 +276,68 @@ class RecommendationRegistry:
         if self.landing is None:
             self.init_landing()
         self.landing.lifecycle_enrichments.append(rec)
+
+    def add_landing_drop_columns(
+        self,
+        dataset: str,
+        columns,
+        rationale: str,
+        source_notebook: str,
+    ) -> None:
+        """Register case-EXACT column drops at landing time (PA-3).
+
+        Mirrors ``add_landing_filter`` / ``add_landing_lifecycle_enrichment``
+        — emits a ``LandingRecommendations.drop_columns`` entry that
+        ``FindingsParser._apply_landing_recommendations`` merges into
+        ``config.landing[<dataset>].drop_columns``. The generator's
+        landing template already supports per-column case-EXACT drops
+        (``df.select(*[c for c in df.columns if c not in _drop_set])``);
+        this API lets NB02's case-collision detector emit a declarative
+        recommendation instead of forcing the operator to paste
+        ``LANDING_DROP_COLUMNS_OVERRIDES`` into NB10 user_code.
+
+        Idempotent on duplicate calls — only the first add for
+        ``(dataset, column)`` is kept; later calls are a no-op so a
+        re-running detector cell does not multiply the registry.
+        """
+        cols = list(dict.fromkeys(str(c) for c in columns if c))
+        if not cols:
+            raise ValueError("add_landing_drop_columns requires at least one column")
+        if self._ext_disabled:
+            params = {"dataset": dataset, "columns": cols}
+            rec = self._create_recommendation(
+                "landing", "drop_columns", "drop", dataset, params,
+                rationale, source_notebook,
+            )
+            self._discarded_landing.append(rec)
+            _logger.info(
+                "user-extensions disabled; landing drop_columns for dataset=%s dropped",
+                dataset,
+            )
+            return
+        if self.landing is None:
+            self.init_landing()
+        existing = self._existing_landing_drop_columns(dataset)
+        new_cols = [c for c in cols if c not in existing]
+        if not new_cols:
+            return
+        params = {"dataset": dataset, "columns": new_cols}
+        rec = self._create_recommendation(
+            "landing", "drop_columns", "drop", dataset, params,
+            rationale, source_notebook,
+        )
+        self.landing.drop_columns.append(rec)
+
+    def _existing_landing_drop_columns(self, dataset: str) -> set:
+        if self.landing is None:
+            return set()
+        out: set = set()
+        for rec in self.landing.drop_columns:
+            if rec.parameters.get("dataset") != dataset:
+                continue
+            for c in rec.parameters.get("columns") or ():
+                out.add(c)
+        return out
 
     def add_bronze_value_counts(
         self,
@@ -845,6 +908,7 @@ class RecommendationRegistry:
         return LandingRecommendations(
             filters=[cls._rec_from_dict(r) for r in data.get("filters", [])],
             lifecycle_enrichments=[cls._rec_from_dict(r) for r in data.get("lifecycle_enrichments", [])],
+            drop_columns=[cls._rec_from_dict(r) for r in data.get("drop_columns", [])],
         )
 
     @classmethod

@@ -52,13 +52,40 @@ def _build_transformation_steps(gold, pipeline_columns: Set[str]) -> List[Transf
 
 
 def _build_encoding_steps(gold, pipeline_columns: Set[str]) -> List[TransformationStep]:
-    steps: List[TransformationStep] = []
+    """Emit one ENCODE step per column with one_hot preference (PA-2).
+
+    Mirrors ``FindingsParser._apply_gold_recommendations`` (findings_parser.py
+    seeds ``seen_encoding_columns`` with the baseline ``one_hot`` step from
+    ``_build_gold_config`` — always one_hot for every categorical column —
+    and skips registry recs whose target_column is already in the seen
+    set). Without de-dup here, NB08's ``apply_gold_transforms`` runs both
+    a stale ``binary`` rec (label-encodes the string column to integer
+    codes) AND a ``one_hot`` rec (which then one-hots those codes into
+    positional ``_0``/``_1`` suffixes). Production codegen only ever
+    runs one_hot — value-based ``_Emerging``/``_Enterprise`` suffixes —
+    so positionally-named features NB08 selects (e.g.
+    ``REVENUE_MARKET_SEGMENT_1``) never round-trip through gold.
+    """
+    chosen_by_column: dict = {}
+    order: List[str] = []
     for rec in getattr(gold, "encoding", []):
         if rec.target_column not in pipeline_columns:
             continue
+        col = rec.target_column
+        method = _normalise_encoding_method(rec)
+        existing = chosen_by_column.get(col)
+        if existing is None:
+            chosen_by_column[col] = rec
+            order.append(col)
+            continue
+        if _normalise_encoding_method(existing) != "one_hot" and method == "one_hot":
+            chosen_by_column[col] = rec
+    steps: List[TransformationStep] = []
+    for col in order:
+        rec = chosen_by_column[col]
         steps.append(TransformationStep(
             type=PipelineTransformationType.ENCODE,
-            column=rec.target_column,
+            column=col,
             parameters={"method": _normalise_encoding_method(rec)},
             rationale=rec.rationale,
             source_notebook=rec.source_notebook,

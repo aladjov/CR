@@ -7,6 +7,9 @@ from .ratio_features import (
     derive_contract_ratio_features,
     derive_event_ratio_features,
     derive_subscription_ratio_features,
+    register_contract_ratio_features,
+    register_event_ratio_features,
+    register_subscription_ratio_features,
 )
 from .report_generator import (
     CampaignList,
@@ -31,4 +34,6 @@ __all__ = [
     "MatcherRiskSegment", "RiskIntervention",  # Aliases for disambiguation
     "derive_contract_ratio_features", "derive_subscription_ratio_features",
     "derive_event_ratio_features", "DEFAULT_RATIO_WINDOWS",
+    "register_event_ratio_features", "register_contract_ratio_features",
+    "register_subscription_ratio_features",
 ]

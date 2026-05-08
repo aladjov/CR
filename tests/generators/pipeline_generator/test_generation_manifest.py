@@ -181,6 +181,49 @@ class TestBuildGenerationManifest:
         )
         assert manifest["file_checksums"] == {}
 
+    def test_landing_drop_columns_captured_per_dataset(self, tmp_path):
+        landing = _landing_with_filter()
+        landing.filters = []
+        landing.drop_columns = ["opportunity_id", "stale_audit_col"]
+        config = _pipeline_config(landing={"opportunity_product": landing})
+        manifest = build_generation_manifest(
+            config, [], tmp_path,
+            template_versions={}, kill_switch_active=False,
+        )
+        assert manifest["landing_drop_columns"] == [
+            {
+                "dataset": "opportunity_product",
+                "columns": ["opportunity_id", "stale_audit_col"],
+            }
+        ]
+
+    def test_landing_drop_columns_empty_when_none_present(self, tmp_path):
+        manifest = build_generation_manifest(
+            _pipeline_config(), [], tmp_path,
+            template_versions={}, kill_switch_active=False,
+        )
+        assert manifest["landing_drop_columns"] == []
+
+    def test_diagnostic_summary_passthrough(self, tmp_path):
+        manifest = build_generation_manifest(
+            _pipeline_config(), [], tmp_path,
+            template_versions={}, kill_switch_active=False,
+            diagnostic_summary={
+                "target_column": "churn",
+                "silver": {"derived_columns_total": 12},
+                "parity": {"silver_lost": 0},
+            },
+        )
+        assert manifest["diagnostic_summary"]["target_column"] == "churn"
+        assert manifest["diagnostic_summary"]["silver"]["derived_columns_total"] == 12
+
+    def test_diagnostic_summary_omitted_when_not_provided(self, tmp_path):
+        manifest = build_generation_manifest(
+            _pipeline_config(), [], tmp_path,
+            template_versions={}, kill_switch_active=False,
+        )
+        assert "diagnostic_summary" not in manifest
+
 
 class TestWriteGenerationManifest:
     def test_writes_readable_json_at_expected_path(self, tmp_path):

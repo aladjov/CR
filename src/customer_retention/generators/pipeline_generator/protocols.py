@@ -288,6 +288,16 @@ class PipelineGeneratorBase(ABC):
             self._parser, "user_extensions_disabled", False
         )
         harvested_names = self._harvested_function_names(kill_switch_active)
+        # PA-5: bake the parser's diagnostic_summary into the manifest so
+        # the post-generation audit (operator-readable JSON) carries
+        # per-dataset landing/bronze_event datetime sources, the silver
+        # declared-vs-emitted A4 check, and gold encoding methods.
+        diag_summary = None
+        try:
+            diag_summary = self._parser.diagnostic_summary(config)
+        except Exception:  # noqa: BLE001
+            # Diagnostic summary is decorative; never block manifest write.
+            diag_summary = None
         manifest = build_generation_manifest(
             config,
             generated_files,
@@ -295,6 +305,7 @@ class PipelineGeneratorBase(ABC):
             template_versions=template_versions,
             kill_switch_active=kill_switch_active,
             harvested_functions=harvested_names,
+            diagnostic_summary=diag_summary,
         )
         return write_generation_manifest(manifest, self._output_dir)
 

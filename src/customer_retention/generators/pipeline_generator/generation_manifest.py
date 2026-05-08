@@ -41,10 +41,12 @@ def build_generation_manifest(
     template_versions: Dict[str, str],
     kill_switch_active: bool,
     harvested_functions: Optional[List[str]] = None,
+    diagnostic_summary: Optional[Dict[str, Any]] = None,
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     landing_filters: List[Dict[str, Any]] = []
     lifecycle_enrichments: List[Dict[str, Any]] = []
+    landing_drop_columns: List[Dict[str, Any]] = []
     for dataset_name, lcfg in (config.landing or {}).items():
         for step in lcfg.filters:
             landing_filters.append({
@@ -55,6 +57,14 @@ def build_generation_manifest(
             lifecycle_enrichments.append({
                 "dataset": dataset_name,
                 "config": step.parameters.get("config", {}),
+            })
+        # PA-3: register case-EXACT drops in the audit trail. The
+        # generated landing template applies these via
+        # `df.select(*[c for c in df.columns if c not in <set>])`.
+        if lcfg.drop_columns:
+            landing_drop_columns.append({
+                "dataset": dataset_name,
+                "columns": list(lcfg.drop_columns),
             })
 
     checksums: Dict[str, str] = {}
@@ -68,7 +78,7 @@ def build_generation_manifest(
         checksums[key] = _sha256_file(p)
 
     ts = (now or datetime.now(timezone.utc)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    return {
+    manifest: Dict[str, Any] = {
         "generated_at": ts,
         "baseline_tag": BASELINE_TAG,
         "release": RELEASE,
@@ -76,9 +86,17 @@ def build_generation_manifest(
         "harvested_functions": list(harvested_functions or []),
         "landing_filters": landing_filters,
         "lifecycle_enrichments": lifecycle_enrichments,
+        "landing_drop_columns": landing_drop_columns,
         "kill_switch_active": bool(kill_switch_active),
         "file_checksums": checksums,
     }
+    # PA-5: optionally embed `FindingsParser.diagnostic_summary()` so the
+    # post-generation manifest is the single source of truth for "what
+    # the parser actually emitted vs declared". Threaded by callers that
+    # construct the parser themselves (the two `PipelineGenerator`s).
+    if diagnostic_summary is not None:
+        manifest["diagnostic_summary"] = diagnostic_summary
+    return manifest
 
 
 def write_generation_manifest(manifest: Dict[str, Any], output_dir: Path) -> Path:

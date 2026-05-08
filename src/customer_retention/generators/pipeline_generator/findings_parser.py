@@ -241,7 +241,7 @@ class FindingsParser:
         landing_lifecycle_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
         landing_filter_overrides: Optional[Dict[str, str]] = None,
         landing_drop_columns_overrides: Optional[Dict[str, Iterable[str]]] = None,
-        strict_datetime_parity: bool = True,
+        strict_datetime_parity: bool = False,
     ):
         self._findings_dir = Path(findings_dir)
         self._namespace = namespace
@@ -407,6 +407,140 @@ class FindingsParser:
         if self._feature_spec is not None:
             self._enforce_spec_schema_parity(config)
         return config
+
+    def diagnostic_summary(
+        self, config: Optional["PipelineConfig"] = None
+    ) -> Dict[str, Any]:
+        """Structured pre-codegen audit of the parser's output (PA-5).
+
+        Replaces the operator-side `probe_codegen_diagnostics` user_code
+        cell that the SPS engagement carried in NB10. Returns a JSON-
+        serialisable dict with:
+
+        * ``target_column`` / ``target_dataset``
+        * ``landing[<ds>]`` — filters / lifecycle_enrichments /
+          drop_columns counts; ``datetime_derivation.source_columns``
+        * ``bronze_event[<ds>]`` — same shape as landing for event
+          datasets
+        * ``silver`` — derived_columns count by action; total
+        * ``gold`` — encodings count by method; scalings count;
+          feature_selections count
+        * ``feature_spec`` — selection count, exploration_run_id (if a
+          spec was loaded)
+        * ``parity`` — declared-vs-emitted silver_derived counts
+          (the A4 check the operator probe surfaced) plus any
+          ``parity_ignored_features`` carried by the parser
+
+        Pass a pre-parsed ``PipelineConfig`` to avoid re-running
+        ``parse()``; otherwise the method calls ``parse()`` itself.
+        Caller is expected to print or persist the dict — this method
+        does no I/O.
+        """
+        if config is None:
+            config = self.parse()
+        landing_summary: Dict[str, Dict[str, Any]] = {}
+        for ds, lcfg in (config.landing or {}).items():
+            dt = getattr(lcfg, "datetime_derivation", None)
+            landing_summary[ds] = {
+                "filters": len(lcfg.filters),
+                "lifecycle_enrichments": len(lcfg.lifecycle_enrichments),
+                "drop_columns": list(lcfg.drop_columns),
+                "datetime_derivation_sources": (
+                    list(dt.source_columns) if dt else []
+                ),
+            }
+        bronze_event_summary: Dict[str, Dict[str, Any]] = {}
+        for ds, ecfg in (config.bronze_event or {}).items():
+            dt = getattr(ecfg, "datetime_derivation", None)
+            agg = getattr(ecfg, "aggregation", None)
+            bronze_event_summary[ds] = {
+                "datetime_derivation_sources": (
+                    list(dt.source_columns) if dt else []
+                ),
+                "aggregation_windows": (
+                    list(agg.windows) if agg and agg.windows else []
+                ),
+                "aggregation_funcs": (
+                    list(agg.agg_funcs) if agg and agg.agg_funcs else []
+                ),
+            }
+        silver_action_counts: Dict[str, int] = {}
+        for step in (config.silver.derived_columns if config.silver else []):
+            params = step.parameters or {}
+            action = params.get("action") or params.get("feature_type") or "unknown"
+            silver_action_counts[action] = silver_action_counts.get(action, 0) + 1
+        encoding_methods: Dict[str, int] = {}
+        for step in (config.gold.encodings if config.gold else []):
+            method = (step.parameters or {}).get("method", "one_hot")
+            encoding_methods[method] = encoding_methods.get(method, 0) + 1
+        feature_spec_size = (
+            len(self._feature_spec.selected_features)
+            if self._feature_spec is not None else None
+        )
+        # A4 parity check: declared silver_derived recs (pre-_apply
+        # filter) vs emitted derived_columns. Only meaningful when a
+        # registry was loaded.
+        declared_silver = self._declared_silver_derived_count()
+        emitted_silver = (
+            len(config.silver.derived_columns) if config.silver else 0
+        )
+        return {
+            "target_column": getattr(config, "target_column", None),
+            "target_dataset": getattr(config, "target_dataset", None),
+            "landing": landing_summary,
+            "bronze_event": bronze_event_summary,
+            "silver": {
+                "derived_columns_total": emitted_silver,
+                "by_action": silver_action_counts,
+            },
+            "gold": {
+                "encodings_total": (
+                    len(config.gold.encodings) if config.gold else 0
+                ),
+                "encodings_by_method": encoding_methods,
+                "scalings_total": (
+                    len(config.gold.scalings) if config.gold else 0
+                ),
+                "feature_selections_total": (
+                    len(config.gold.feature_selections) if config.gold else 0
+                ),
+            },
+            "feature_spec": {
+                "selected_features_count": feature_spec_size,
+                "exploration_run_id": (
+                    self._feature_spec.exploration_run_id
+                    if self._feature_spec is not None else None
+                ),
+            },
+            "parity": {
+                "silver_declared": declared_silver,
+                "silver_emitted": emitted_silver,
+                "silver_lost": (
+                    max(0, declared_silver - emitted_silver)
+                    if declared_silver is not None else None
+                ),
+                "parity_ignored_features": list(
+                    getattr(self, "_parity_ignored_features", []) or []
+                ),
+                "strict_datetime_parity": getattr(
+                    self, "_strict_datetime_parity", False
+                ),
+            },
+        }
+
+    def _declared_silver_derived_count(self) -> Optional[int]:
+        """Count of `silver.derived_columns` recs in the on-disk
+        recommendations registry, before any pipeline filtering. Used
+        by `diagnostic_summary` to surface the A4 declared-vs-emitted
+        gap. Returns ``None`` when no recommendations file is present.
+        """
+        try:
+            registry = self._load_recommendations()
+        except Exception:
+            return None
+        if registry is None or registry.silver is None:
+            return None
+        return len(registry.silver.derived_columns or [])
 
     def _enforce_target_dtype_parity(
         self,
@@ -1619,6 +1753,17 @@ class FindingsParser:
                 rationale=rec.rationale,
                 source_notebook=rec.source_notebook,
             ))
+        # PA-3: registry-declared per-column landing drops — case-EXACT,
+        # idempotent against operator-side ``landing_drop_columns_overrides``
+        # which `_apply_landing_overrides` later appends to the same list.
+        for rec in getattr(landing, "drop_columns", []):
+            dataset = rec.parameters.get("dataset")
+            target = self._resolve_landing_target(config, dataset, kind="drop_columns")
+            existing = set(target.drop_columns)
+            for col in rec.parameters.get("columns", []) or []:
+                if col not in existing:
+                    target.drop_columns.append(col)
+                    existing.add(col)
 
     @staticmethod
     def _resolve_landing_target(
@@ -2426,10 +2571,10 @@ class FindingsParser:
                         break
                 if not attached:
                     unresolved.append((feature, base))
-        # `getattr` default keeps tests that build a parser via
-        # `FindingsParser.__new__(...)` (skipping __init__) on the
-        # strict-by-default behavior the production constructor enforces.
-        strict = getattr(self, "_strict_datetime_parity", True)
+        # `getattr` default mirrors the constructor default (PA-4: lenient).
+        # Tests that explicitly want strict mode set `_strict_datetime_parity
+        # = True` after `FindingsParser.__new__(...)` (skipping __init__).
+        strict = getattr(self, "_strict_datetime_parity", False)
         if strict and (unresolved or proposed_landing or proposed_event):
             # Strict mode: any spec feature whose source isn't declared raises,
             # whether or not the parser could guess a target layer to attach it

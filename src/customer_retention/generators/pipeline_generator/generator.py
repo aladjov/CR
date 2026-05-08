@@ -47,7 +47,7 @@ class PipelineGenerator(PipelineGeneratorBase):
         landing_lifecycle_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
         landing_filter_overrides: Optional[Dict[str, str]] = None,
         landing_drop_columns_overrides: Optional[Dict[str, Iterable[str]]] = None,
-        strict_datetime_parity: bool = True,
+        strict_datetime_parity: bool = False,
     ):
         self._findings_dir = Path(findings_dir)
         self._output_dir = Path(output_dir)
