@@ -221,10 +221,13 @@ def _derived_recency(col, p):
     if not sources:
         return f'df  # silver_derived recency {col!r}: source unresolvable'
     src = sources[0]
+    # `try_to_date` returns NULL on non-date inputs (e.g. a `cohort_quarter`
+    # int cast to STRING). With strict `to_date`, such recs would crash the
+    # stage with CAST_INVALID_INPUT at write time.
     return (
         f'(df.withColumn("{col}", '
         f'F.when(F.col("{src}").isNotNull() & F.col("as_of_date").isNotNull(), '
-        f'F.datediff(F.col("as_of_date"), F.to_date(F.col("{src}"))).cast("double"))'
+        f'F.datediff(F.col("as_of_date"), F.try_to_date(F.col("{src}"))).cast("double"))'
         f'.otherwise(F.lit(None))) '
         f'if "{src}" in df.columns else df)'
     )
@@ -235,10 +238,11 @@ def _derived_duration(col, p):
     if len(sources) < 2:
         return f'df  # silver_derived duration {col!r}: source unresolvable'
     a, b = sources[0], sources[1]
+    # `try_to_date` for both endpoints — see `_derived_recency`.
     return (
         f'(df.withColumn("{col}", '
         f'F.when(F.col("{a}").isNotNull() & F.col("{b}").isNotNull(), '
-        f'F.datediff(F.to_date(F.col("{b}")), F.to_date(F.col("{a}"))).cast("double"))'
+        f'F.datediff(F.try_to_date(F.col("{b}")), F.try_to_date(F.col("{a}"))).cast("double"))'
         f'.otherwise(F.lit(None))) '
         f'if all(c in df.columns for c in ["{a}", "{b}"]) else df)'
     )
@@ -258,13 +262,15 @@ def _derived_cyclical(col, p):
     if not sources:
         return f'df  # silver_derived cyclical {col!r}: source unresolvable'
     src = sources[0]
+    # `try_to_date` so a non-date STRING (e.g. cohort_quarter cast to "1")
+    # yields NULL month -> NULL cyclical, instead of crashing the stage.
     return (
         f'(df.withColumn("{src}_month_sin", '
         f'F.when(F.col("{src}").isNotNull(), '
-        f'F.sin(2 * 3.141592653589793 * F.month(F.col("{src}")) / 12)).otherwise(F.lit(None)))'
+        f'F.sin(2 * 3.141592653589793 * F.month(F.try_to_date(F.col("{src}"))) / 12)).otherwise(F.lit(None)))'
         f'.withColumn("{src}_month_cos", '
         f'F.when(F.col("{src}").isNotNull(), '
-        f'F.cos(2 * 3.141592653589793 * F.month(F.col("{src}")) / 12)).otherwise(F.lit(None))) '
+        f'F.cos(2 * 3.141592653589793 * F.month(F.try_to_date(F.col("{src}"))) / 12)).otherwise(F.lit(None))) '
         f'if "{src}" in df.columns else df)'
     )
 
@@ -274,10 +280,11 @@ def _derived_tenure(col, p):
     if not sources:
         return f'df  # silver_derived tenure {col!r}: source unresolvable'
     src = sources[0]
+    # `try_to_date` — see `_derived_recency`.
     return (
         f'(df.withColumn("{col}", '
         f'F.when(F.col("{src}").isNotNull() & F.col("as_of_date").isNotNull(), '
-        f'(F.datediff(F.col("as_of_date"), F.to_date(F.col("{src}"))) / 365.25).cast("double"))'
+        f'(F.datediff(F.col("as_of_date"), F.try_to_date(F.col("{src}"))) / 365.25).cast("double"))'
         f'.otherwise(F.lit(None))) '
         f'if "{src}" in df.columns else df)'
     )
@@ -301,7 +308,7 @@ def _derived_extraction(col, p):
         f'(df if "{col}" in df.columns else '
         f'(df.withColumn("{col}", '
         f'F.when(F.col("{src}").isNotNull(), '
-        f'F.when(F.dayofweek(F.to_date(F.col("{src}"))).isin(1, 7), 1.0).otherwise(0.0))'
+        f'F.when(F.dayofweek(F.try_to_date(F.col("{src}"))).isin(1, 7), 1.0).otherwise(0.0))'
         f'.otherwise(F.lit(None))) '
         f'if "{src}" in df.columns else df))'
     )
