@@ -1266,9 +1266,31 @@ class FindingsParser:
         replay the same logic at runtime via the existing template branches
         (`databricks_landing.py.j2` `config.lifecycle_enrichments` /
         `config.filters`).
+
+        Idempotency: when a dataset already carries a step of the same kind
+        from the recommendations registry (post-NB00-migration), the override
+        is skipped instead of double-appended. Without this, the generated
+        landing notebook runs `enrich_lifecycle_dataset(...)` twice and the
+        second call crashes with UNRESOLVED_COLUMN because the first already
+        renamed the lifecycle's `valid_from_column`.
         """
+        already_filter = {
+            ds for ds, lc in (config.landing or {}).items()
+            if getattr(lc, "filters", None)
+        }
+        already_lifecycle = {
+            ds for ds, lc in (config.landing or {}).items()
+            if getattr(lc, "lifecycle_enrichments", None)
+        }
         for dataset, predicate in self._landing_filter_overrides.items():
             if not predicate:
+                continue
+            if dataset in already_filter:
+                logger.warning(
+                    "landing_filter_overrides: dataset %r already has registry-driven "
+                    "filter step(s); skipping operator override to avoid double-apply.",
+                    dataset,
+                )
                 continue
             target = config.landing.get(dataset)
             if target is None:
@@ -1286,6 +1308,13 @@ class FindingsParser:
             ))
         for dataset, lifecycle_cfg in self._landing_lifecycle_overrides.items():
             if not lifecycle_cfg:
+                continue
+            if dataset in already_lifecycle:
+                logger.warning(
+                    "landing_lifecycle_overrides: dataset %r already has registry-driven "
+                    "lifecycle step(s); skipping operator override to avoid double-apply.",
+                    dataset,
+                )
                 continue
             target = config.landing.get(dataset)
             if target is None:

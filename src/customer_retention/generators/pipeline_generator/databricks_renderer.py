@@ -39,11 +39,17 @@ def _impute_null(col, p):
 def _cap_outlier(col, p):
     lower = p.get("lower", 0)
     upper = p.get("upper", 1000000)
+    # Recommendations registered against exploration's silver-merged frame can
+    # target columns that don't exist in this stage's input (e.g. silver-derived
+    # `days_since_*`/`days_until_*` recency features mistakenly attributed to
+    # bronze). Guard the withColumn so the rec degrades to a no-op at runtime
+    # instead of failing the stage with UNRESOLVED_COLUMN.
     return (
-        f'df.withColumn("{col}", '
+        f'(df.withColumn("{col}", '
         f'F.when(F.col("{col}") < {lower}, {lower})'
         f'.when(F.col("{col}") > {upper}, {upper})'
-        f'.otherwise(F.col("{col}")))'
+        f'.otherwise(F.col("{col}"))) '
+        f'if "{col}" in df.columns else df)'
     )
 
 
@@ -54,20 +60,28 @@ def _drop_column(col, _p):
 def _winsorize(col, p):
     lower = p.get("lower_bound", 0)
     upper = p.get("upper_bound", 1000000)
+    # See `_cap_outlier` — same column-existence guard.
     return (
-        f'df.withColumn("{col}", '
+        f'(df.withColumn("{col}", '
         f'F.when(F.col("{col}") < {lower}, {lower})'
         f'.when(F.col("{col}") > {upper}, {upper})'
-        f'.otherwise(F.col("{col}")))'
+        f'.otherwise(F.col("{col}"))) '
+        f'if "{col}" in df.columns else df)'
     )
 
 
 def _log_transform(col, _p):
-    return f'df.withColumn("{col}", F.log1p(F.col("{col}")))'
+    return (
+        f'(df.withColumn("{col}", F.log1p(F.col("{col}"))) '
+        f'if "{col}" in df.columns else df)'
+    )
 
 
 def _sqrt_transform(col, _p):
-    return f'df.withColumn("{col}", F.sqrt(F.abs(F.col("{col}"))))'
+    return (
+        f'(df.withColumn("{col}", F.sqrt(F.abs(F.col("{col}")))) '
+        f'if "{col}" in df.columns else df)'
+    )
 
 
 def _encode_one_hot(col, _p):
