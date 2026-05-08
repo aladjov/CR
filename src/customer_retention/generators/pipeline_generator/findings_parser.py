@@ -522,7 +522,8 @@ class FindingsParser:
 
     def _index_raw_source_columns(self, discovered_events: Dict[str, ExplorationFindings]) -> None:
         for name, findings in discovered_events.items():
-            self._raw_source_columns[name] = set(findings.columns.keys())
+            cols = set(findings.columns.keys())
+            self._raw_source_columns.setdefault(name, set()).update(cols)
             per_col: Dict[str, List[str]] = {}
             for col_name, col_finding in findings.columns.items():
                 tm = getattr(col_finding, "type_metrics", None) or {}
@@ -537,7 +538,15 @@ class FindingsParser:
                         for c in top_cats
                     ]
             if per_col:
-                self._value_counts_by_source[name] = per_col
+                # Merge — don't replace. Two findings files (entity-level and
+                # pre-aggregated) can both register columns under the same
+                # source name; the second pass otherwise clobbers the first
+                # and loses raw event-stream value-counts (e.g. event_type)
+                # that only the entity-level file carries.
+                bucket = self._value_counts_by_source.setdefault(name, {})
+                for col, vals in per_col.items():
+                    if col not in bucket:
+                        bucket[col] = vals
         self._augment_value_counts_from_spec()
 
     _SPEC_TRAILING_WINDOW_RE = re.compile(r"^(?P<head>.+)_count_(?:\d+[dhw]|all_time)$")
@@ -1211,6 +1220,7 @@ class FindingsParser:
         source_findings: Optional[Dict[str, "ExplorationFindings"]] = None,
     ) -> None:
         self._apply_bronze_recommendations(config, registry)
+        self._apply_registry_bronze_aggregations(config, registry)
         self._apply_imbalance_recommendations(config, registry)
         self._apply_silver_recommendations(config, registry)
         zero_inflation_opt_in_prefixes = self._collect_zero_inflation_opt_in_prefixes(
@@ -1595,6 +1605,43 @@ class FindingsParser:
             if cfg is target_bronze:
                 return name
         return None
+
+    def _apply_registry_bronze_aggregations(
+        self, config: PipelineConfig, registry: RecommendationRegistry
+    ) -> None:
+        """Promote ``registry.bronze_aggregations`` onto event_cfg for sources
+        the operator didn't restate in NB10's ``BRONZE_AGGREGATIONS`` dict.
+
+        Without this, a per-source declaration made via
+        ``add_bronze_value_counts`` / ``add_bronze_per_grid_date_mode`` during
+        exploration is silently ignored at codegen unless the operator
+        manually echoes it into NB10. Recs that depend on the per-value count
+        shape (e.g. ``subscription_terminate_to_start_ratio_*``) get dropped.
+        Operator overrides win on conflict; only un-overridden sources are
+        filled in here.
+        """
+        ba = getattr(registry, "bronze_aggregations", None) or {}
+        if not isinstance(ba, dict) or not ba:
+            return
+        if self._bronze_aggregation_overrides is None:
+            self._bronze_aggregation_overrides = {}
+        for src, entry in ba.items():
+            if src in self._bronze_aggregation_overrides:
+                continue
+            if src not in config.bronze_event:
+                continue
+            if not isinstance(entry, dict):
+                continue
+            recognized = {
+                k: v for k, v in entry.items()
+                if k in _RECOGNIZED_BRONZE_OVERRIDE_KEYS
+            }
+            if not recognized:
+                continue
+            self._bronze_aggregation_overrides[src] = recognized
+            self._apply_bronze_aggregation_overrides(
+                config.bronze_event[src], src,
+            )
 
     def _apply_bronze_recommendations(self, config: PipelineConfig, registry: RecommendationRegistry) -> None:
         sources_to_process = dict(registry.sources)
@@ -2480,6 +2527,17 @@ class FindingsParser:
             for src in dd.source_columns:
                 for suffix in ("_delta_hours", "_hour", "_dow", "_is_weekend"):
                     columns.add(f"{src}{suffix}")
+            # The runtime aggregator computes datetime-derived features per row
+            # (`compute_temporal_features`) and then runs them through the same
+            # window aggregation as numeric `value_columns`. Mirror that fan-out
+            # so silver_derived recs referencing `<src>_<suffix>_<func>_<window>`
+            # (e.g. `PAYMENT_DATE_is_weekend_max_all_time`) survive parity.
+            if agg and agg.windows and agg.agg_funcs:
+                for src in dd.source_columns:
+                    for suffix in ("_delta_hours", "_hour", "_dow", "_is_weekend"):
+                        for window in agg.windows:
+                            for func in agg.agg_funcs:
+                                columns.add(f"{src}{suffix}_{func}_{window}")
         for text_cfg in event_cfg.text_features:
             if text_cfg.component_columns:
                 columns |= set(text_cfg.component_columns)
