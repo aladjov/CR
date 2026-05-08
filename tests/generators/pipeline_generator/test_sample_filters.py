@@ -136,7 +136,8 @@ class TestSampleFilterAppendsLandingFilterStep:
         assert len(sample_steps) == 1
         step = sample_steps[0]
         assert step.type == PipelineTransformationType.LANDING_FILTER
-        assert step.parameters["predicate"] == "REVENUE_MARKET_SEGMENT in ['Emerging', 'Small']"
+        # Bracket -> paren translation: Spark SQL `IN` rejects `[...]`.
+        assert step.parameters["predicate"] == "REVENUE_MARKET_SEGMENT in ('Emerging', 'Small')"
         assert step.parameters["sibling_views"] == []
 
     def test_predicate_with_subquery_records_sibling(self, tmp_path):

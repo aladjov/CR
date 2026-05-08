@@ -1403,11 +1403,18 @@ class FindingsParser:
                 if name in config.landing:
                     siblings.append(name)
                     seen.add(name)
+            # Translate Python-list `in [a, b]` into Spark-SQL `in (a, b)`
+            # — exploration's filter executor goes through
+            # `_spark_safe_query_expr`, but production's generated landing
+            # script feeds the predicate straight into Spark SQL via
+            # `df.filter(...)` and rejects bracket lists with PARSE_SYNTAX_ERROR.
+            from customer_retention.core.compat import _spark_safe_query_expr
+            sql_predicate = _spark_safe_query_expr(str(predicate))
             target.filters.append(TransformationStep(
                 type=PipelineTransformationType.LANDING_FILTER,
                 column=dataset,
                 parameters={
-                    "predicate": str(predicate),
+                    "predicate": sql_predicate,
                     "sibling_views": list(siblings),
                 },
                 rationale="NB00 SAMPLE_FILTER_COLUMNS (cohort scope)",
