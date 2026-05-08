@@ -696,15 +696,30 @@ def run_bronze():
     df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
     return df
 
-result = run_bronze()
-_summary = f"{result.count():,} rows, {len(result.columns)} columns"
-# Narrow-projection display (see silver template for full rationale): rendering
-# wide DataFrames through Databricks' display widget serialises the entire
-# logical plan to protobuf, which trips Catalyst attribute-id resolution at
-# wide schemas. Project to entity/key cols + row-limit; the table is already
-# committed to Delta above.
-_disp = [c for c in ("entity_id", "ACCOUNT_ID", "as_of_date") if c in result.columns] or list(result.columns[:10])
-display(result.select(*_disp).limit(20))
+import json as _bronze_json
+import traceback as _bronze_tb
+try:
+    result = run_bronze()
+    _summary = f"{result.count():,} rows, {len(result.columns)} columns"
+    # Narrow-projection display (see silver template for full rationale): rendering
+    # wide DataFrames through Databricks' display widget serialises the entire
+    # logical plan to protobuf, which trips Catalyst attribute-id resolution at
+    # wide schemas. Project to entity/key cols + row-limit; the table is already
+    # committed to Delta above.
+    _disp = [c for c in ("entity_id", "ACCOUNT_ID", "as_of_date") if c in result.columns] or list(result.columns[:10])
+    display(result.select(*_disp).limit(20))
+except Exception as _bronze_exc:
+    print("=" * 70, flush=True)
+    print(f"[bronze] FATAL: {type(_bronze_exc).__name__}: {_bronze_exc}", flush=True)
+    print("=" * 70, flush=True)
+    print(_bronze_tb.format_exc(), flush=True)
+    dbutils.notebook.exit(_bronze_json.dumps({
+        "status": "FAILED",
+        "stage": "bronze",
+        "error_type": type(_bronze_exc).__name__,
+        "error_message": str(_bronze_exc)[:2000],
+    }))
+    raise
 dbutils.notebook.exit(_summary)
 """,
     "databricks_bronze_event.py.j2": """# Databricks notebook source
@@ -1169,11 +1184,26 @@ def run_bronze_event():
     return df
 {%- endif %}
 
-result = run_bronze_event()
-_summary = f"{result.count():,} rows, {len(result.columns)} columns"
-# Narrow-projection display (see silver template for full rationale).
-_disp = [c for c in ("entity_id", "ACCOUNT_ID", "as_of_date", "feature_timestamp") if c in result.columns] or list(result.columns[:10])
-display(result.select(*_disp).limit(20))
+import json as _bronze_json
+import traceback as _bronze_tb
+try:
+    result = run_bronze_event()
+    _summary = f"{result.count():,} rows, {len(result.columns)} columns"
+    # Narrow-projection display (see silver template for full rationale).
+    _disp = [c for c in ("entity_id", "ACCOUNT_ID", "as_of_date", "feature_timestamp") if c in result.columns] or list(result.columns[:10])
+    display(result.select(*_disp).limit(20))
+except Exception as _bronze_exc:
+    print("=" * 70, flush=True)
+    print(f"[bronze_event] FATAL: {type(_bronze_exc).__name__}: {_bronze_exc}", flush=True)
+    print("=" * 70, flush=True)
+    print(_bronze_tb.format_exc(), flush=True)
+    dbutils.notebook.exit(_bronze_json.dumps({
+        "status": "FAILED",
+        "stage": "bronze_event",
+        "error_type": type(_bronze_exc).__name__,
+        "error_message": str(_bronze_exc)[:2000],
+    }))
+    raise
 dbutils.notebook.exit(_summary)
 """,
     "databricks_bronze_entity.py.j2": """# Databricks notebook source
@@ -1423,11 +1453,26 @@ def run_bronze_entity():
         DeltaTable.forName(spark, output_table).optimize().executeCompaction()
     return df
 
-result = run_bronze_entity()
-_summary = f"{result.count():,} rows, {len(result.columns)} columns"
-# Narrow-projection display (see silver template for full rationale).
-_disp = [c for c in ("entity_id", "ACCOUNT_ID", "as_of_date") if c in result.columns] or list(result.columns[:10])
-display(result.select(*_disp).limit(20))
+import json as _bronze_json
+import traceback as _bronze_tb
+try:
+    result = run_bronze_entity()
+    _summary = f"{result.count():,} rows, {len(result.columns)} columns"
+    # Narrow-projection display (see silver template for full rationale).
+    _disp = [c for c in ("entity_id", "ACCOUNT_ID", "as_of_date") if c in result.columns] or list(result.columns[:10])
+    display(result.select(*_disp).limit(20))
+except Exception as _bronze_exc:
+    print("=" * 70, flush=True)
+    print(f"[bronze_entity] FATAL: {type(_bronze_exc).__name__}: {_bronze_exc}", flush=True)
+    print("=" * 70, flush=True)
+    print(_bronze_tb.format_exc(), flush=True)
+    dbutils.notebook.exit(_bronze_json.dumps({
+        "status": "FAILED",
+        "stage": "bronze_entity",
+        "error_type": type(_bronze_exc).__name__,
+        "error_message": str(_bronze_exc)[:2000],
+    }))
+    raise
 dbutils.notebook.exit(_summary)
 """,
     "databricks_silver.py.j2": """# Databricks notebook source
@@ -1718,26 +1763,50 @@ def run_silver():
     merged.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
     _timings["delta_write"] = round(_time.monotonic() - _t4, 2)
     print(f"  delta_write: {_timings['delta_write']:.1f}s")
-    _t5 = _time.monotonic()
-    from delta.tables import DeltaTable
-    _z_cols = [c for c in ["entity_id", "as_of_date"] if c in [f.name for f in merged.schema.fields]]
-    if _z_cols:
-        DeltaTable.forName(spark, output_table).optimize().executeZOrderBy(_z_cols)
+    # Z-Order skipped by default. On wide silver tables it adds 30-90 min for
+    # a marginal read-time speedup that doesn't materially help downstream.
+    if OPTIMIZE_AFTER_WRITE:
+        _t5 = _time.monotonic()
+        from delta.tables import DeltaTable
+        _z_cols = [c for c in ["entity_id", "as_of_date"] if c in [f.name for f in merged.schema.fields]]
+        if _z_cols:
+            DeltaTable.forName(spark, output_table).optimize().executeZOrderBy(_z_cols)
+        else:
+            DeltaTable.forName(spark, output_table).optimize().executeCompaction()
+        _timings["optimize"] = round(_time.monotonic() - _t5, 2)
+        print(f"  optimize: {_timings['optimize']:.1f}s")
     else:
-        DeltaTable.forName(spark, output_table).optimize().executeCompaction()
-    _timings["optimize"] = round(_time.monotonic() - _t5, 2)
-    print(f"  optimize: {_timings['optimize']:.1f}s")
+        _timings["optimize"] = 0.0
+        print(f"  optimize: SKIPPED (OPTIMIZE_AFTER_WRITE=False)")
     _timings["total"] = round(_time.monotonic() - _t0, 2)
     print(f"  total: {_timings['total']:.1f}s")
     return output_table, _timings, _report
 
-_output_table, _silver_timings, _silver_report = run_silver()
-_result = spark.table(_output_table)
-_row_count = _result.count()
-_col_count = len(_result.columns)
+# Set to True to re-enable post-write OPTIMIZE+ZORDER on the silver table.
+OPTIMIZE_AFTER_WRITE = False
 
 import json
+import traceback as _silver_tb
+try:
+    _output_table, _silver_timings, _silver_report = run_silver()
+    _result = spark.table(_output_table)
+    _row_count = _result.count()
+    _col_count = len(_result.columns)
+except Exception as _silver_exc:
+    print("=" * 70, flush=True)
+    print(f"[silver] FATAL: {type(_silver_exc).__name__}: {_silver_exc}", flush=True)
+    print("=" * 70, flush=True)
+    print(_silver_tb.format_exc(), flush=True)
+    dbutils.notebook.exit(json.dumps({
+        "status": "FAILED",
+        "stage": "silver",
+        "error_type": type(_silver_exc).__name__,
+        "error_message": str(_silver_exc)[:2000],
+    }))
+    raise
+
 _silver_results = {
+    "status": "OK",
     "rows": _row_count,
     "columns": _col_count,
     "elapsed_seconds": _silver_timings,
@@ -2082,10 +2151,25 @@ def run_gold():
     print(f"  gold_total: {_time.monotonic() - _t0:.1f}s")
     return saved
 
-result = run_gold()
-_row_count = result.count()
-_col_count = len(result.columns)
-_summary = f"{_row_count:,} rows, {_col_count} columns"
+import json as _gold_json
+import traceback as _gold_tb
+try:
+    result = run_gold()
+    _row_count = result.count()
+    _col_count = len(result.columns)
+    _summary = f"{_row_count:,} rows, {_col_count} columns"
+except Exception as _gold_exc:
+    print("=" * 70, flush=True)
+    print(f"[gold] FATAL: {type(_gold_exc).__name__}: {_gold_exc}", flush=True)
+    print("=" * 70, flush=True)
+    print(_gold_tb.format_exc(), flush=True)
+    dbutils.notebook.exit(_gold_json.dumps({
+        "status": "FAILED",
+        "stage": "gold",
+        "error_type": type(_gold_exc).__name__,
+        "error_message": str(_gold_exc)[:2000],
+    }))
+    raise
 
 from pathlib import Path
 from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
@@ -2869,11 +2953,27 @@ def train_and_evaluate():
 
 # COMMAND ----------
 
-_training_results = train_and_evaluate()
-print("\\n" + "=" * 60)
-print("TRAINING RESULTS")
-print("=" * 60)
-print(json.dumps(_training_results, indent=2, default=str))
+import traceback as _training_tb
+try:
+    _training_results = train_and_evaluate()
+    if isinstance(_training_results, dict):
+        _training_results.setdefault("status", "OK")
+    print("\\n" + "=" * 60)
+    print("TRAINING RESULTS")
+    print("=" * 60)
+    print(json.dumps(_training_results, indent=2, default=str))
+except Exception as _training_exc:
+    print("=" * 70, flush=True)
+    print(f"[training] FATAL: {type(_training_exc).__name__}: {_training_exc}", flush=True)
+    print("=" * 70, flush=True)
+    print(_training_tb.format_exc(), flush=True)
+    dbutils.notebook.exit(json.dumps({
+        "status": "FAILED",
+        "stage": "training",
+        "error_type": type(_training_exc).__name__,
+        "error_message": str(_training_exc)[:2000],
+    }))
+    raise
 dbutils.notebook.exit(json.dumps(_training_results, default=str))
 """,
     "databricks_landing.py.j2": """# Databricks notebook source
@@ -3085,10 +3185,25 @@ def run_landing():
         DeltaTable.forName(spark, output_table).optimize().executeCompaction()
     return df
 
-result = run_landing()
-_summary = f"{result.count():,} rows, {len(result.columns)} columns"
-# Row-limited display (landing is narrow but uniform pattern across stages).
-display(result.limit(20))
+import json as _landing_json
+import traceback as _landing_tb
+try:
+    result = run_landing()
+    _summary = f"{result.count():,} rows, {len(result.columns)} columns"
+    # Row-limited display (landing is narrow but uniform pattern across stages).
+    display(result.limit(20))
+except Exception as _landing_exc:
+    print("=" * 70, flush=True)
+    print(f"[landing] FATAL: {type(_landing_exc).__name__}: {_landing_exc}", flush=True)
+    print("=" * 70, flush=True)
+    print(_landing_tb.format_exc(), flush=True)
+    dbutils.notebook.exit(_landing_json.dumps({
+        "status": "FAILED",
+        "stage": "landing",
+        "error_type": type(_landing_exc).__name__,
+        "error_message": str(_landing_exc)[:2000],
+    }))
+    raise
 dbutils.notebook.exit(_summary)
 """,
     "databricks_target_derive.py.j2": """# Databricks notebook source
@@ -3213,6 +3328,7 @@ def _spark_job_id():
 def run_notebook(path, timeout=86400):
     sj_before = _spark_job_id()
     start = time.time()
+    failure_payload = None
     try:
         result = dbutils.notebook.run(path, timeout, _ns_params)
         elapsed = time.time() - start
@@ -3220,16 +3336,35 @@ def run_notebook(path, timeout=86400):
         _profile.append({"notebook": path, "elapsed": round(elapsed, 3),
                          "spark_jobs": (sj_after - sj_before) if sj_before >= 0 and sj_after >= 0 else None,
                          "status": "completed"})
+        # Generated notebooks structured-exit on top-level exceptions with
+        # {"status":"FAILED",...}; surface that as a real RuntimeError so the
+        # pipeline halts at the failed stage instead of cascading.
+        if result:
+            try:
+                _parsed = json.loads(result)
+            except (ValueError, TypeError):
+                _parsed = None
+            if isinstance(_parsed, dict) and _parsed.get("status") == "FAILED":
+                failure_payload = _parsed
     except Exception as exc:
         elapsed = time.time() - start
         sj_after = _spark_job_id()
         _profile.append({"notebook": path, "elapsed": round(elapsed, 3),
                          "spark_jobs": (sj_after - sj_before) if sj_before >= 0 and sj_after >= 0 else None,
                          "status": "failed"})
-        result = f"FAILED: {exc}"
+        line = f"{path}: FAILED ({elapsed:.1f}s) -> {type(exc).__name__}: {exc}"
+        print(line)
+        _log.append(line)
+        raise
     line = f"{path}: {result} ({elapsed:.1f}s)"
     print(line)
     _log.append(line)
+    if failure_payload is not None:
+        raise RuntimeError(
+            f"{path} failed: {failure_payload.get('error_type', '?')}: "
+            f"{failure_payload.get('error_message', '')} "
+            f"(see spawned notebook output for full traceback)"
+        )
     return result
 
 # COMMAND ----------
@@ -3440,7 +3575,7 @@ GLOBAL_NOTEBOOKS = [
     "10_spec_generation",
 ]
 
-NOTEBOOK_TIMEOUT = 1800
+NOTEBOOK_TIMEOUT = 28800  # 8h ceiling per spawned notebook
 
 # COMMAND ----------
 
