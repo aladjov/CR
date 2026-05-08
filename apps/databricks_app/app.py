@@ -295,7 +295,9 @@ if _ctx_diagnostic:
     st.warning(f"Dashboard run context unavailable — {_ctx_diagnostic}")
 
 
-def _render_assign_button(entity_id: str, *, holdout: bool = False) -> None:
+def _render_assign_button(
+    entity_id: str, *, holdout: bool = False, key_namespace: str = "default",
+) -> None:
     """Render the self-assign / unassign control inline with the L4 header.
 
     The button reads the cached ``assignments()`` frame so its label
@@ -337,9 +339,12 @@ def _render_assign_button(entity_id: str, *, holdout: bool = False) -> None:
         help_text = "Claim this account for yourself."
 
     disabled = holdout or other or not me
+    # Streamlit renders both tabs on every run (tabs are display-toggled,
+    # not lazy), so without a tab-scoped namespace the same entity selected
+    # in both tabs produces duplicate widget keys and the page crashes.
     clicked = st.button(
         label,
-        key=f"assign_btn::{entity_id}",
+        key=f"assign_btn::{key_namespace}::{entity_id}",
         disabled=disabled,
         help=help_text,
         use_container_width=True,
@@ -356,7 +361,7 @@ def _render_assign_button(entity_id: str, *, holdout: bool = False) -> None:
         st.rerun()
 
 
-def _render_l4_panel(entity_id: str, *, lead: str) -> None:
+def _render_l4_panel(entity_id: str, *, lead: str, key_namespace: str) -> None:
     """Render the L4 profile (header + assign button + profile body).
 
     Shared by the Dashboard tab (driven by ``selected_entity``) and the
@@ -365,6 +370,11 @@ def _render_l4_panel(entity_id: str, *, lead: str) -> None:
     title rather than consuming a separate full-width band underneath.
     ``vertical_alignment="center"`` keeps the button visually anchored to
     the title.
+
+    ``key_namespace`` segregates widget keys across tabs. Streamlit
+    renders both tabs on every run, so without per-tab namespacing the
+    same entity selected in both places (drill picked X, search typed X)
+    crashes the page with ``StreamlitDuplicateElementKey``.
     """
     try:
         is_holdout = data.account_is_holdout(entity_id)
@@ -379,7 +389,9 @@ def _render_l4_panel(entity_id: str, *, lead: str) -> None:
             lead=lead,
         )
     with btn_col:
-        _render_assign_button(entity_id, holdout=is_holdout)
+        _render_assign_button(
+            entity_id, holdout=is_holdout, key_namespace=key_namespace,
+        )
     try:
         customer_profile.render(entity_id=entity_id)
     except Exception as exc:
@@ -480,6 +492,7 @@ with _tab_dashboard:
         _render_l4_panel(
             str(_selected_entity),
             lead="Everything we know about this customer and why the model flagged them.",
+            key_namespace="dash",
         )
 
 
@@ -540,4 +553,5 @@ with _tab_search:
                 "recommended set — the population deviation panel still shows "
                 "where this customer's features sit relative to the cohort."
             ),
+            key_namespace="search",
         )

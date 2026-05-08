@@ -30,7 +30,7 @@ class TestAssignButtonWiring:
         helper_idx = src.find("def _render_l4_panel(")
         assert helper_idx > 0
         l4_idx = src.find("Level 04 · Profile", helper_idx)
-        button_idx = src.find("_render_assign_button(entity_id", helper_idx)
+        button_idx = src.find("_render_assign_button(", helper_idx)
         profile_idx = src.find(
             "customer_profile.render(entity_id=entity_id)", helper_idx
         )
@@ -62,11 +62,21 @@ class TestAssignButtonWiring:
         # The race-condition feedback path: another CSM beat us to it.
         assert '"claimed_by_other"' in src
 
-    def test_button_keyed_per_entity(self, src):
-        # Streamlit reuses widgets by key. Without entity-scoped keys, a
-        # button retains state from the previous selection and clicks fire
-        # against the wrong entity.
-        assert 'key=f"assign_btn::{entity_id}"' in src
+    def test_button_keyed_per_entity_and_tab(self, src):
+        # Streamlit reuses widgets by key. The key must scope on
+        # ``entity_id`` (so clicks fire against the right account) AND
+        # on a tab namespace (so the same entity selected in both
+        # Dashboard and Search tabs doesn't collide -- both tabs are
+        # rendered on every run, not lazily, so duplicate keys crash
+        # the page with StreamlitDuplicateElementKey).
+        assert 'key=f"assign_btn::{key_namespace}::{entity_id}"' in src
+
+    def test_l4_panel_threads_distinct_namespaces_per_tab(self, src):
+        # Dashboard and Search must pass different namespaces; otherwise
+        # the duplicate-key crash returns the moment a user picks the
+        # same entity in both tabs.
+        assert 'key_namespace="dash"' in src
+        assert 'key_namespace="search"' in src
 
 
 class TestHeaderInlineLayout:
@@ -110,7 +120,9 @@ class TestHoldoutDisabled:
     def test_holdout_passed_to_button(self, src):
         # The helper computes is_holdout once and forwards it; both tabs
         # benefit from the holdout policy without duplicating the lookup.
-        assert "_render_assign_button(entity_id, holdout=is_holdout)" in src
+        # The forward is expressed as ``holdout=is_holdout`` regardless of
+        # how the call is wrapped across lines.
+        assert "holdout=is_holdout" in src
         assert "data.account_is_holdout(entity_id)" in src
 
     def test_holdout_label_visible(self, src):
