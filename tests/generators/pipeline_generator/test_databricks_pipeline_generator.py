@@ -269,6 +269,75 @@ class TestDatabricksPipelineGeneratorGenerate:
                 ast.parse(content)
 
 
+class TestGeneratorDiagnosticSummary:
+    """PA-5: ``DatabricksPipelineGenerator.diagnostic_summary()`` exposes
+    the parser's structured pre-codegen audit on the generator object so
+    NB10 can call it without constructing a separate ``FindingsParser``.
+    Replaces the operator-side ``probe_codegen_diagnostics`` user_code
+    cell that reproduced parts of the same data via raw YAML inspection.
+    """
+
+    def test_method_exists_on_generator(self, sample_findings_dir, tmp_path):
+        gen = DatabricksPipelineGenerator(
+            str(sample_findings_dir), str(tmp_path), "p",
+        )
+        assert hasattr(gen, "diagnostic_summary"), (
+            "DatabricksPipelineGenerator must expose diagnostic_summary() "
+            "so NB10 can replace probe_codegen_diagnostics with a single "
+            "framework call."
+        )
+
+    def test_returns_dict_with_canonical_top_level_keys(
+        self, sample_findings_dir, tmp_path,
+    ):
+        gen = DatabricksPipelineGenerator(
+            str(sample_findings_dir), str(tmp_path), "p",
+        )
+        summary = gen.diagnostic_summary()
+        for key in (
+            "target_column", "target_dataset", "landing", "bronze_event",
+            "silver", "gold", "feature_spec", "parity",
+        ):
+            assert key in summary, f"missing key {key!r} in generator-level summary"
+
+    def test_delegates_to_parser_diagnostic_summary(
+        self, sample_findings_dir, tmp_path,
+    ):
+        """Generator-level method must produce the same dict the parser
+        would produce on the same config — no divergence between the two
+        entry points."""
+        gen = DatabricksPipelineGenerator(
+            str(sample_findings_dir), str(tmp_path), "p",
+        )
+        config = gen._build_config()
+        gen_summary = gen.diagnostic_summary(config)
+        parser_summary = gen._parser.diagnostic_summary(config)
+        assert gen_summary == parser_summary
+
+    def test_accepts_pre_built_config(self, sample_findings_dir, tmp_path):
+        """Caller can pass a pre-parsed PipelineConfig (built once for
+        generation, reused for diagnostics) instead of paying for two
+        parse() calls."""
+        gen = DatabricksPipelineGenerator(
+            str(sample_findings_dir), str(tmp_path), "p",
+        )
+        config = gen._build_config()
+        s = gen.diagnostic_summary(config=config)
+        assert s["target_column"] == config.target_column
+
+    def test_local_pipeline_generator_has_same_method(self, sample_findings_dir, tmp_path):
+        """Both generator subclasses must expose the method — otherwise
+        the local-vs-databricks parity workflow has a missing audit."""
+        from customer_retention.generators.pipeline_generator.generator import (
+            PipelineGenerator,
+        )
+        gen = PipelineGenerator(
+            str(sample_findings_dir), str(tmp_path), "p",
+        )
+        s = gen.diagnostic_summary()
+        assert "parity" in s
+
+
 class TestExplorationProfileExternalisation:
     """The exploration_feature_profile is externalised to a sibling JSON
     file rather than embedded as an inline Python literal — see protocols.py

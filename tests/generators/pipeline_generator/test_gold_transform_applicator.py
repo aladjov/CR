@@ -282,6 +282,160 @@ class TestBuildGoldStepsEncodingDedup:
         assert steps[0].parameters == {"method": "one_hot"}
 
 
+class TestBuildGoldStepsCategoricalBaseline:
+    """PA-2 closure: ``build_gold_steps(..., categorical_columns=...)`` must
+    mirror ``FindingsParser._build_gold_config`` baseline.
+
+    The parser unconditionally seeds ``config.gold.encodings`` with one
+    ``one_hot`` step per nominal/ordinal/cyclical column from findings,
+    THEN iterates registry recs and skips any whose ``target_column``
+    is already in the baseline-seeded ``seen_encoding_columns`` set.
+    Net effect:
+      * Nominal/ordinal/cyclical column with a registered ``binary``
+        rec → production emits one_hot (rec is skipped, baseline wins).
+      * Nominal/ordinal/cyclical column with NO registered rec →
+        production still emits one_hot (baseline-only).
+      * Nominal/ordinal/cyclical column with a ``one_hot`` rec →
+        production emits one_hot (baseline wins on dedup; rec details
+        like rationale are lost — same as the parser).
+      * Non-categorical column with any registered rec → behaves as
+        before (rec wins).
+
+    ``build_gold_steps`` must mirror this exactly when the caller
+    supplies ``categorical_columns`` so NB08's exploration path emits
+    the same encoding as production.
+    """
+
+    def test_baseline_one_hot_for_categorical_with_no_rec(self):
+        reg = RecommendationRegistry()
+        reg.init_gold("churn")
+        steps = build_gold_steps(
+            reg, {"REVENUE_MARKET_SEGMENT", "ACCOUNT_ID"},
+            categorical_columns={"REVENUE_MARKET_SEGMENT"},
+        )
+        assert len(steps) == 1
+        assert steps[0].type == PipelineTransformationType.ENCODE
+        assert steps[0].column == "REVENUE_MARKET_SEGMENT"
+        assert steps[0].parameters == {"method": "one_hot"}
+
+    def test_categorical_with_only_binary_rec_emits_one_hot(self):
+        """Mirror parser baseline-wins semantics: binary rec on a
+        categorical column is overridden by the always-one_hot baseline.
+        """
+        reg = RecommendationRegistry()
+        reg.init_gold("churn")
+        reg.add_gold_encoding(
+            "REVENUE_MARKET_SEGMENT", "binary",
+            "Binary 2-distinct categorical", "04",
+        )
+        steps = build_gold_steps(
+            reg, {"REVENUE_MARKET_SEGMENT"},
+            categorical_columns={"REVENUE_MARKET_SEGMENT"},
+        )
+        assert len(steps) == 1
+        assert steps[0].parameters == {"method": "one_hot"}, (
+            "Categorical column with only a binary rec must emit one_hot "
+            "to match parser's baseline-wins semantics. Without this, "
+            "NB08 would label-encode (binary) while production codegen "
+            "one-hots — different feature column names."
+        )
+
+    def test_non_categorical_keeps_registered_method(self):
+        """Columns NOT marked categorical keep the registered method —
+        NB04's `target` encoding for high-cardinality numerics or IDs
+        must round-trip through NB08 unchanged.
+        """
+        reg = RecommendationRegistry()
+        reg.init_gold("churn")
+        reg.add_gold_encoding("ZIP", "target", "high cardinality", "04")
+        steps = build_gold_steps(
+            reg, {"ZIP"},
+            categorical_columns=set(),  # ZIP not declared categorical
+        )
+        assert len(steps) == 1
+        assert steps[0].parameters == {"method": "target"}
+
+    def test_categorical_baseline_skipped_when_column_not_in_pipeline(self):
+        """Categorical column not present in pipeline_columns must NOT
+        emit a baseline one_hot — same gate the registered-rec path
+        already enforces.
+        """
+        reg = RecommendationRegistry()
+        reg.init_gold("churn")
+        steps = build_gold_steps(
+            reg, {"OTHER_COL"},
+            categorical_columns={"REVENUE_MARKET_SEGMENT"},
+        )
+        assert steps == []
+
+    def test_target_column_excluded_from_categorical_baseline(self):
+        """The target column must never be emitted as a feature
+        encoding step — it's the label, not a feature. Parser excludes
+        ``target_column`` in ``_build_gold_config``.
+        """
+        reg = RecommendationRegistry()
+        reg.init_gold("churn")
+        steps = build_gold_steps(
+            reg, {"churn", "REVENUE_MARKET_SEGMENT"},
+            categorical_columns={"churn", "REVENUE_MARKET_SEGMENT"},
+            target_column="churn",
+        )
+        assert {s.column for s in steps} == {"REVENUE_MARKET_SEGMENT"}
+
+    def test_categorical_baseline_dedups_against_registered_one_hot(self):
+        """A categorical column with a registered one_hot rec must emit
+        exactly ONE step, not two (baseline + rec).
+        """
+        reg = RecommendationRegistry()
+        reg.init_gold("churn")
+        reg.add_gold_encoding(
+            "REVENUE_MARKET_SEGMENT", "one_hot",
+            "Low cardinality (4 unique values)", "06",
+        )
+        steps = build_gold_steps(
+            reg, {"REVENUE_MARKET_SEGMENT"},
+            categorical_columns={"REVENUE_MARKET_SEGMENT"},
+        )
+        assert len(steps) == 1
+        assert steps[0].parameters == {"method": "one_hot"}
+
+    def test_default_no_categorical_columns_keeps_legacy_behavior(self):
+        """When ``categorical_columns`` is None or omitted, build_gold_steps
+        keeps existing dedup-with-one_hot-preference semantics. No
+        synthetic baseline rows. Backward compat.
+        """
+        reg = RecommendationRegistry()
+        reg.init_gold("churn")
+        reg.add_gold_encoding("ZIP", "target", "rationale", "04")
+        steps_legacy = build_gold_steps(reg, {"ZIP"})
+        assert len(steps_legacy) == 1
+        assert steps_legacy[0].parameters == {"method": "target"}
+        steps_explicit_none = build_gold_steps(reg, {"ZIP"}, categorical_columns=None)
+        assert steps_explicit_none == steps_legacy
+
+    def test_categorical_baseline_preserves_first_seen_order(self):
+        """When mixing registered and baseline-emitted columns, the
+        deterministic order is the same as the parser: registered recs
+        first (in registry order), baseline-only columns after (in the
+        order they appear in ``categorical_columns`` iteration). Tests
+        the 3-column SPS-shape: one column with a one_hot rec, one with
+        only a binary rec, one with no rec at all.
+        """
+        reg = RecommendationRegistry()
+        reg.init_gold("churn")
+        reg.add_gold_encoding("REVENUE_MARKET_SEGMENT", "one_hot", "rec", "06")
+        reg.add_gold_encoding("INDUSTRY", "binary", "rec", "04")
+        steps = build_gold_steps(
+            reg, {"REVENUE_MARKET_SEGMENT", "INDUSTRY", "BUSINESS_TYPE"},
+            categorical_columns={"REVENUE_MARKET_SEGMENT", "INDUSTRY", "BUSINESS_TYPE"},
+        )
+        assert {s.column for s in steps} == {
+            "REVENUE_MARKET_SEGMENT", "INDUSTRY", "BUSINESS_TYPE",
+        }
+        for step in steps:
+            assert step.parameters == {"method": "one_hot"}
+
+
 class TestBuildGoldStepsIncludesScaling:
     """Parity: exploration must apply scalings so numeric features match Databricks gold."""
 

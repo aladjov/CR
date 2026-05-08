@@ -306,12 +306,13 @@ class FindingsParser:
         )
         from customer_retention.runtime.flags import is_user_extensions_disabled
         self._ext_disabled: bool = is_user_extensions_disabled(disable_user_extensions)
-        # `strict_datetime_parity=True` (default) raises when `FeatureSpec`
-        # selects a datetime-derived feature whose source column is not
-        # declared in the dataset's `datetime_derivation_sources`. When
-        # `False`, the parser auto-extends the source list (warn-only)
-        # and lets codegen continue. The runtime gate in NB07/NB08 still
-        # catches the missing column at training time.
+        # `strict_datetime_parity=False` (default) auto-extends the
+        # dataset's `datetime_derivation_sources` (warn-only) when
+        # `FeatureSpec` selects a datetime-derived feature whose
+        # source column wasn't declared. Set to `True` to raise
+        # instead — useful when the operator wants codegen to refuse
+        # any silent schema patch. The runtime gate in NB07/NB08 still
+        # catches the missing column at training time either way.
         self._strict_datetime_parity: bool = bool(strict_datetime_parity)
 
     @property
