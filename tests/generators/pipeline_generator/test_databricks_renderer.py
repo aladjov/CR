@@ -220,7 +220,10 @@ class TestRenderSparkStepCall:
         assert "count" in result
         assert "/" in result or "div" in result.lower()
 
-    def test_derived_ratio_no_runtime_guard(self):
+    def test_derived_ratio_runtime_guard(self):
+        # Generated code now wraps every per-column derived call with a
+        # column-existence guard so a rec targeting a column absent from the
+        # stage's input degrades to a no-op instead of crashing the stage.
         step = TransformationStep(
             type=PipelineTransformationType.DERIVED_COLUMN,
             column="click_to_open_rate",
@@ -228,9 +231,10 @@ class TestRenderSparkStepCall:
             rationale="",
         )
         result = render_spark_step_call(step)
-        assert "in df.columns" not in result
         assert "clicked_velocity_pct" in result
         assert "opened_velocity_pct" in result
+        assert 'in df.columns' in result
+        assert 'else df' in result
 
     def test_derived_column_interaction(self):
         step = TransformationStep(
@@ -244,7 +248,7 @@ class TestRenderSparkStepCall:
         assert "b" in result
         assert "*" in result
 
-    def test_derived_interaction_no_runtime_guard(self):
+    def test_derived_interaction_runtime_guard(self):
         step = TransformationStep(
             type=PipelineTransformationType.DERIVED_COLUMN,
             column="combo",
@@ -252,9 +256,10 @@ class TestRenderSparkStepCall:
             rationale="",
         )
         result = render_spark_step_call(step)
-        assert "in df.columns" not in result
+        assert 'in df.columns' in result
+        assert 'else df' in result
 
-    def test_derived_composite_no_runtime_guard(self):
+    def test_derived_composite_runtime_guard(self):
         step = TransformationStep(
             type=PipelineTransformationType.DERIVED_COLUMN,
             column="avg_score",
@@ -262,7 +267,8 @@ class TestRenderSparkStepCall:
             rationale="",
         )
         result = render_spark_step_call(step)
-        assert "in df.columns" not in result
+        assert 'in df.columns' in result
+        assert 'else df' in result
 
     def test_derived_composite_empty_columns_raises(self):
         step = TransformationStep(
@@ -399,7 +405,8 @@ class TestRenderSparkStepCall:
             rationale="",
         )
         result = render_spark_step_call(step)
-        assert result == '_cap_then_log(df, "revenue")'
+        assert '_cap_then_log(df, "revenue")' in result
+        assert '"revenue" in df.columns' in result
 
 
 class TestDatabricksRenderConfig:

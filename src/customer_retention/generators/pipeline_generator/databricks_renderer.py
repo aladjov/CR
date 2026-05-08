@@ -30,10 +30,12 @@ def render_spark_step_call(step: TransformationStep) -> str:
 
 
 def _impute_null(col, p):
+    # Guard against recommendations that target a column not in this stage's
+    # input — same rationale as the per-column transforms below.
     value = p.get("value", 0)
     if isinstance(value, str):
-        return f'df.fillna("{value}", subset=["{col}"])'
-    return f'df.fillna({value}, subset=["{col}"])'
+        return f'(df.fillna("{value}", subset=["{col}"]) if "{col}" in df.columns else df)'
+    return f'(df.fillna({value}, subset=["{col}"]) if "{col}" in df.columns else df)'
 
 
 def _cap_outlier(col, p):
@@ -100,8 +102,9 @@ def _derived_ratio(col, p):
     num = p.get("numerator", "")
     den = p.get("denominator", "")
     return (
-        f'df.withColumn("{col}", '
-        f'F.col("{num}") / F.when(F.col("{den}") != 0, F.col("{den}")).otherwise(F.lit(None)))'
+        f'(df.withColumn("{col}", '
+        f'F.col("{num}") / F.when(F.col("{den}") != 0, F.col("{den}")).otherwise(F.lit(None))) '
+        f'if all(c in df.columns for c in ["{num}", "{den}"]) else df)'
     )
 
 
@@ -109,7 +112,10 @@ def _derived_interaction(col, p):
     features = p.get("features", [])
     col_a = features[0] if len(features) > 0 else p.get("col_a", "")
     col_b = features[1] if len(features) > 1 else p.get("col_b", "")
-    return f'df.withColumn("{col}", F.col("{col_a}") * F.col("{col_b}"))'
+    return (
+        f'(df.withColumn("{col}", F.col("{col_a}") * F.col("{col_b}")) '
+        f'if all(c in df.columns for c in ["{col_a}", "{col_b}"]) else df)'
+    )
 
 
 def _derived_composite(col, p):
@@ -117,23 +123,31 @@ def _derived_composite(col, p):
     if not columns:
         raise ValueError(f"Composite derived column '{col}' requires non-empty 'columns' parameter")
     expr_parts = " + ".join(f'F.col("{c}")' for c in columns)
-    return f'df.withColumn("{col}", ({expr_parts}) / {len(columns)})'
+    cols_repr = "[" + ", ".join(f'"{c}"' for c in columns) + "]"
+    return (
+        f'(df.withColumn("{col}", ({expr_parts}) / {len(columns)}) '
+        f'if all(c in df.columns for c in {cols_repr}) else df)'
+    )
 
 
 def _segment_aware_cap(col, p):
     n_segments = p.get("n_segments", 2)
-    return f'_segment_aware_cap(df, "{col}", n_segments={n_segments})'
+    return (
+        f'(_segment_aware_cap(df, "{col}", n_segments={n_segments}) '
+        f'if "{col}" in df.columns else df)'
+    )
 
 
 def _zero_inflation_handling(col, _p):
     return (
-        f'df.withColumn("{col}_is_zero", F.when(F.col("{col}") == 0, 1).otherwise(0))'
-        f'.withColumn("{col}_log", F.when(F.col("{col}") > 0, F.log1p(F.col("{col}"))).otherwise(0))'
+        f'(df.withColumn("{col}_is_zero", F.when(F.col("{col}") == 0, 1).otherwise(0))'
+        f'.withColumn("{col}_log", F.when(F.col("{col}") > 0, F.log1p(F.col("{col}"))).otherwise(0)) '
+        f'if "{col}" in df.columns else df)'
     )
 
 
 def _cap_then_log(col, _p):
-    return f'_cap_then_log(df, "{col}")'
+    return f'(_cap_then_log(df, "{col}") if "{col}" in df.columns else df)'
 
 
 def _type_cast(col, p):
@@ -208,10 +222,11 @@ def _derived_recency(col, p):
         return f'df  # silver_derived recency {col!r}: source unresolvable'
     src = sources[0]
     return (
-        f'df.withColumn("{col}", '
+        f'(df.withColumn("{col}", '
         f'F.when(F.col("{src}").isNotNull() & F.col("as_of_date").isNotNull(), '
         f'F.datediff(F.col("as_of_date"), F.to_date(F.col("{src}"))).cast("double"))'
-        f'.otherwise(F.lit(None)))'
+        f'.otherwise(F.lit(None))) '
+        f'if "{src}" in df.columns else df)'
     )
 
 
@@ -221,10 +236,11 @@ def _derived_duration(col, p):
         return f'df  # silver_derived duration {col!r}: source unresolvable'
     a, b = sources[0], sources[1]
     return (
-        f'df.withColumn("{col}", '
+        f'(df.withColumn("{col}", '
         f'F.when(F.col("{a}").isNotNull() & F.col("{b}").isNotNull(), '
         f'F.datediff(F.to_date(F.col("{b}")), F.to_date(F.col("{a}"))).cast("double"))'
-        f'.otherwise(F.lit(None)))'
+        f'.otherwise(F.lit(None))) '
+        f'if all(c in df.columns for c in ["{a}", "{b}"]) else df)'
     )
 
 
@@ -243,12 +259,13 @@ def _derived_cyclical(col, p):
         return f'df  # silver_derived cyclical {col!r}: source unresolvable'
     src = sources[0]
     return (
-        f'df.withColumn("{src}_month_sin", '
+        f'(df.withColumn("{src}_month_sin", '
         f'F.when(F.col("{src}").isNotNull(), '
         f'F.sin(2 * 3.141592653589793 * F.month(F.col("{src}")) / 12)).otherwise(F.lit(None)))'
         f'.withColumn("{src}_month_cos", '
         f'F.when(F.col("{src}").isNotNull(), '
-        f'F.cos(2 * 3.141592653589793 * F.month(F.col("{src}")) / 12)).otherwise(F.lit(None)))'
+        f'F.cos(2 * 3.141592653589793 * F.month(F.col("{src}")) / 12)).otherwise(F.lit(None))) '
+        f'if "{src}" in df.columns else df)'
     )
 
 
@@ -258,10 +275,11 @@ def _derived_tenure(col, p):
         return f'df  # silver_derived tenure {col!r}: source unresolvable'
     src = sources[0]
     return (
-        f'df.withColumn("{col}", '
+        f'(df.withColumn("{col}", '
         f'F.when(F.col("{src}").isNotNull() & F.col("as_of_date").isNotNull(), '
         f'(F.datediff(F.col("as_of_date"), F.to_date(F.col("{src}"))) / 365.25).cast("double"))'
-        f'.otherwise(F.lit(None)))'
+        f'.otherwise(F.lit(None))) '
+        f'if "{src}" in df.columns else df)'
     )
 
 
@@ -276,12 +294,16 @@ def _derived_extraction(col, p):
     if not sources:
         return f'df  # silver_derived extraction {col!r}: source unresolvable'
     src = sources[0]
+    # Three-way fall-through: passthrough if `{col}` is already present
+    # (landing emitted it), derive from `{src}` when present, otherwise no-op
+    # so a missing source from a phantom rec doesn't crash the stage.
     return (
-        f'df if "{col}" in df.columns else '
-        f'df.withColumn("{col}", '
+        f'(df if "{col}" in df.columns else '
+        f'(df.withColumn("{col}", '
         f'F.when(F.col("{src}").isNotNull(), '
         f'F.when(F.dayofweek(F.to_date(F.col("{src}"))).isin(1, 7), 1.0).otherwise(0.0))'
-        f'.otherwise(F.lit(None)))'
+        f'.otherwise(F.lit(None))) '
+        f'if "{src}" in df.columns else df))'
     )
 
 
