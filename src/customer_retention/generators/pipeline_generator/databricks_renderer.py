@@ -1282,6 +1282,13 @@ def load_aggregated():
 def apply_post_shaping(df):
 {%- for func_name, steps in post_groups %}
     df = {{ func_name }}(df)
+{%- if not loop.last %}
+    # Plan-truncation checkpoint between post-shaping groups (defensive: a
+    # bronze entity with hundreds of post-shaping columns would otherwise
+    # build the same deep withColumn chain that crashes Spark Connect at
+    # gold scale).
+    df = df.localCheckpoint(eager=True)
+{%- endif %}
 {%- endfor %}
     return df
 
@@ -1703,6 +1710,13 @@ def merge_sources(bronze_outputs):
 def apply_derived_columns(df):
 {%- for func_name, steps in derived_groups %}
     df = {{ func_name }}(df)
+{%- if not loop.last %}
+    # Plan-truncation checkpoint between derived-column groups: each group
+    # chains per-column withColumn, so without periodic materialisation a
+    # wide-engagement silver run drifts into the same Catalyst-explosion
+    # failure mode the gold transforms hit.
+    df = df.localCheckpoint(eager=True)
+{%- endif %}
 {%- endfor %}
     return df
 
@@ -1989,6 +2003,30 @@ def _label_encode(df, col):
     )
     return df
 
+# Chained `withColumn` builds one Project node per call; with hundreds of
+# columns, Catalyst optimization and Spark Connect plan serialization fail with
+# opaque SparkConnectGrpcException (status=UNKNOWN). The batch helpers below
+# fold N transforms into ONE `select(...)` (one Project node) and chunk at
+# `_BATCH_CHUNK_SIZE` so a single select doesn't itself become unwieldy.
+_BATCH_CHUNK_SIZE = 500
+
+def _apply_batched_select(df, expr_by_col):
+    # Apply a per-column expression map via chunked single-select calls.
+    # `expr_by_col` is a dict[col -> Column]. For every column present in
+    # `df.columns`, emits the mapped expression aliased back to the same name;
+    # other columns pass through unchanged. Chunked at `_BATCH_CHUNK_SIZE` to
+    # keep each select width bounded.
+    targets = [c for c in df.columns if c in expr_by_col]
+    if not targets:
+        return df
+    for chunk_start in range(0, len(targets), _BATCH_CHUNK_SIZE):
+        chunk = set(targets[chunk_start:chunk_start + _BATCH_CHUNK_SIZE])
+        df = df.select(*[
+            expr_by_col[c].alias(c) if c in chunk else F.col(c)
+            for c in df.columns
+        ])
+    return df
+
 def _batch_scale_standard(df, cols):
     cols = [c for c in cols if c in df.columns]
     if not cols:
@@ -1997,13 +2035,14 @@ def _batch_scale_standard(df, cols):
     for c in cols:
         exprs.extend([F.mean(c).alias(f"{c}__mean"), F.stddev(c).alias(f"{c}__std")])
     stats = df.agg(*exprs).collect()[0]
+    expr_by_col = {}
     for c in cols:
         mean_val = stats[f"{c}__mean"] or 0
         std_val = stats[f"{c}__std"] or 1
         if std_val == 0:
             std_val = 1
-        df = df.withColumn(c, (F.col(c) - mean_val) / std_val)
-    return df
+        expr_by_col[c] = (F.col(c) - mean_val) / std_val
+    return _apply_batched_select(df, expr_by_col)
 
 def _batch_scale_minmax(df, cols):
     cols = [c for c in cols if c in df.columns]
@@ -2013,41 +2052,129 @@ def _batch_scale_minmax(df, cols):
     for c in cols:
         exprs.extend([F.min(c).alias(f"{c}__min"), F.max(c).alias(f"{c}__max")])
     stats = df.agg(*exprs).collect()[0]
+    expr_by_col = {}
     for c in cols:
         min_val = stats[f"{c}__min"] or 0
         max_val = stats[f"{c}__max"] or 1
         range_val = max_val - min_val
         if range_val == 0:
             range_val = 1
-        df = df.withColumn(c, (F.col(c) - min_val) / range_val)
-    return df
+        expr_by_col[c] = (F.col(c) - min_val) / range_val
+    return _apply_batched_select(df, expr_by_col)
 
 def _batch_segment_aware_cap(df, cols):
     cols = [c for c in cols if c in df.columns]
     if not cols:
         return df
     quantile_map = dict(zip(cols, df.approxQuantile(cols, [0.25, 0.75], 0.01)))
+    expr_by_col = {}
     for c in cols:
         qs = quantile_map[c]
         if len(qs) == 2:
             q1, q3 = qs
             iqr = q3 - q1
             lower, upper = q1 - 1.5 * iqr, q3 + 1.5 * iqr
-            df = df.withColumn(c,
+            expr_by_col[c] = (
                 F.when(F.col(c) < lower, lower)
                 .when(F.col(c) > upper, upper)
-                .otherwise(F.col(c)))
-    return df
+                .otherwise(F.col(c))
+            )
+    return _apply_batched_select(df, expr_by_col)
 
 def _batch_cap_then_log(df, cols):
     cols = [c for c in cols if c in df.columns]
     if not cols:
         return df
     quantile_map = dict(zip(cols, df.approxQuantile(cols, [0.99], 0.01)))
+    expr_by_col = {}
     for c in cols:
         qs = quantile_map[c]
         if qs:
-            df = df.withColumn(c, F.log1p(F.greatest(F.least(F.col(c), F.lit(qs[0])), F.lit(0)).cast("double")))
+            expr_by_col[c] = F.log1p(
+                F.greatest(F.least(F.col(c), F.lit(qs[0])), F.lit(0)).cast("double")
+            )
+    return _apply_batched_select(df, expr_by_col)
+
+def _batch_log_transform(df, cols):
+    # log1p applied to each column in one chunked `select` (keeps in-place).
+    cols = [c for c in cols if c in df.columns]
+    if not cols:
+        return df
+    return _apply_batched_select(df, {c: F.log1p(F.col(c)) for c in cols})
+
+def _batch_sqrt_transform(df, cols):
+    # sqrt(abs(col)) applied to each column in one chunked `select`.
+    cols = [c for c in cols if c in df.columns]
+    if not cols:
+        return df
+    return _apply_batched_select(df, {c: F.sqrt(F.abs(F.col(c))) for c in cols})
+
+def _batch_yeo_johnson(df, cols):
+    # Codegen Yeo-Johnson approximation: log1p(abs(col)). Single chunked select.
+    cols = [c for c in cols if c in df.columns]
+    if not cols:
+        return df
+    return _apply_batched_select(df, {c: F.log1p(F.abs(F.col(c))) for c in cols})
+
+def _batch_zero_inflation(df, cols):
+    # For each col, emits two NEW columns `<col>_is_zero` and `<col>_log` in
+    # a single chunked select. Keeps the original column intact.
+    cols = [c for c in cols if c in df.columns]
+    if not cols:
+        return df
+    new_exprs = []
+    for c in cols:
+        new_exprs.append(F.when(F.col(c) == 0, 1).otherwise(0).alias(f"{c}_is_zero"))
+        new_exprs.append(
+            F.when(F.col(c) > 0, F.log1p(F.col(c))).otherwise(0).alias(f"{c}_log")
+        )
+    for chunk_start in range(0, len(new_exprs), _BATCH_CHUNK_SIZE):
+        chunk = new_exprs[chunk_start:chunk_start + _BATCH_CHUNK_SIZE]
+        df = df.select(*[F.col(c) for c in df.columns], *chunk)
+    return df
+
+def _batch_one_hot_encode(df, cols, max_categories=100):
+    # Bulk one-hot encode multiple columns.
+    # Collects distinct values for ALL listed columns in ONE Spark job via
+    # `collect_set` aggregation, then materialises the indicator columns via a
+    # single chunked `select`. Falls back to per-column `_label_encode` for
+    # columns whose cardinality exceeds `max_categories`.
+    # With 24 categorical columns this collapses 24 separate `distinct().collect()`
+    # Spark jobs into 1, and replaces the chained `withColumn` per category with
+    # a single Project node per chunk.
+    cols = [c for c in cols if c in df.columns]
+    if not cols:
+        return df
+    distinct_exprs = [F.collect_set(F.col(c)).alias(c) for c in cols]
+    row = df.agg(*distinct_exprs).collect()[0]
+    one_hot_plan = {}
+    label_encode_cols = []
+    for c in cols:
+        cats = [v for v in (row[c] or []) if v is not None]
+        if not cats:
+            continue
+        if len(cats) > max_categories:
+            print(
+                f"WARNING: column '{c}' has {len(cats)} categories "
+                f"(>{max_categories}), using label encoding instead"
+            )
+            label_encode_cols.append(c)
+        else:
+            one_hot_plan[c] = sorted(str(v) for v in cats)
+    if one_hot_plan:
+        new_exprs = []
+        for c, cats in one_hot_plan.items():
+            for cat in cats:
+                safe_name = f"{c}_{sanitize_column_token(cat)}"
+                new_exprs.append(
+                    F.when(F.col(c) == cat, 1).otherwise(0).alias(safe_name)
+                )
+        for chunk_start in range(0, len(new_exprs), _BATCH_CHUNK_SIZE):
+            chunk = new_exprs[chunk_start:chunk_start + _BATCH_CHUNK_SIZE]
+            df = df.select(*[F.col(c) for c in df.columns], *chunk)
+        df = df.drop(*list(one_hot_plan.keys()))
+    for c in label_encode_cols:
+        df = _label_encode(df, c)
     return df
 
 # COMMAND ----------
@@ -2057,9 +2184,15 @@ def apply_encodings(df):
 {%- if _prov %}
 {{ _prov }}
 {%- endif %}
+{%- set enc_ns = namespace(one_hot=[], label=[]) %}
 {%- for step in config.gold.encodings %}
-    # {{ step.rationale }}
-    df = {{ render_spark_step_call(step) }}
+{%- if step.parameters.get('method') in ('one_hot', 'onehot') %}{% set enc_ns.one_hot = enc_ns.one_hot + [step.column] %}{% else %}{% set enc_ns.label = enc_ns.label + [step.column] %}{% endif %}
+{%- endfor %}
+{%- if enc_ns.one_hot %}
+    df = _batch_one_hot_encode(df, [{% for c in enc_ns.one_hot %}"{{ c }}"{{ ", " if not loop.last }}{% endfor %}])
+{%- endif %}
+{%- for c in enc_ns.label %}
+    df = _label_encode(df, "{{ c }}")
 {%- endfor %}
     return df
 
@@ -2086,6 +2219,11 @@ def apply_scalings(df):
 def apply_transformations(df):
 {%- for func_name, steps in transform_groups %}
     df = {{ func_name }}(df)
+{%- if not loop.last %}
+    # Plan-truncation checkpoint between groups: prevents Catalyst from walking
+    # an unbounded chain of Project nodes across all transform groups.
+    df = df.localCheckpoint(eager=True)
+{%- endif %}
 {%- endfor %}
     return df
 
@@ -2099,6 +2237,14 @@ def {{ func_name }}(df):
     df = _batch_cap_then_log(df, [{% for t in steps %}"{{ t.column }}"{{ ", " if not loop.last }}{% endfor %}])
 {%- elif func_name == "cap_segment_aware_outliers" %}
     df = _batch_segment_aware_cap(df, [{% for t in steps %}"{{ t.column }}"{{ ", " if not loop.last }}{% endfor %}])
+{%- elif func_name == "apply_log_transforms" %}
+    df = _batch_log_transform(df, [{% for t in steps %}"{{ t.column }}"{{ ", " if not loop.last }}{% endfor %}])
+{%- elif func_name == "apply_sqrt_transforms" %}
+    df = _batch_sqrt_transform(df, [{% for t in steps %}"{{ t.column }}"{{ ", " if not loop.last }}{% endfor %}])
+{%- elif func_name == "apply_power_transforms" %}
+    df = _batch_yeo_johnson(df, [{% for t in steps %}"{{ t.column }}"{{ ", " if not loop.last }}{% endfor %}])
+{%- elif func_name == "handle_zero_inflation" %}
+    df = _batch_zero_inflation(df, [{% for t in steps %}"{{ t.column }}"{{ ", " if not loop.last }}{% endfor %}])
 {%- else %}
 {%- for t in steps %}
     # {{ t.rationale }}
@@ -2161,12 +2307,18 @@ def run_gold():
     print(f"  load_silver: {_time.monotonic() - _t0:.1f}s")
     _t1 = _time.monotonic()
     df = apply_transformations(df)
+    # Plan-truncation checkpoint: after the transform groups (each itself a
+    # single Project node post-batching), materialise once before the encoding
+    # fan-out so Catalyst sees a fresh, shallow plan for the wide select that
+    # one-hot encoding emits.
+    df = df.localCheckpoint(eager=True)
     print(f"  transformations: {_time.monotonic() - _t1:.1f}s")
     _t2 = _time.monotonic()
     df = apply_feature_selection(df)
     print(f"  feature_selection: {_time.monotonic() - _t2:.1f}s")
     _t3 = _time.monotonic()
     df = apply_encodings(df)
+    df = df.localCheckpoint(eager=True)
     print(f"  encodings: {_time.monotonic() - _t3:.1f}s")
     _t4 = _time.monotonic()
     df = apply_scalings(df)
