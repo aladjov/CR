@@ -2527,17 +2527,6 @@ class FindingsParser:
             for src in dd.source_columns:
                 for suffix in ("_delta_hours", "_hour", "_dow", "_is_weekend"):
                     columns.add(f"{src}{suffix}")
-            # The runtime aggregator computes datetime-derived features per row
-            # (`compute_temporal_features`) and then runs them through the same
-            # window aggregation as numeric `value_columns`. Mirror that fan-out
-            # so silver_derived recs referencing `<src>_<suffix>_<func>_<window>`
-            # (e.g. `PAYMENT_DATE_is_weekend_max_all_time`) survive parity.
-            if agg and agg.windows and agg.agg_funcs:
-                for src in dd.source_columns:
-                    for suffix in ("_delta_hours", "_hour", "_dow", "_is_weekend"):
-                        for window in agg.windows:
-                            for func in agg.agg_funcs:
-                                columns.add(f"{src}{suffix}_{func}_{window}")
         for text_cfg in event_cfg.text_features:
             if text_cfg.component_columns:
                 columns |= set(text_cfg.component_columns)
@@ -3300,6 +3289,8 @@ class FindingsParser:
             categorical_value_counts=categorical_value_counts,
         )
 
+    _DATETIME_DERIVED_SUFFIXES = ("_delta_hours", "_hour", "_dow", "_is_weekend")
+
     @staticmethod
     def _apply_sparse_aggregate_prune(
         *, ts, value_columns: List[str], blocked: Dict[str, List[str]],
@@ -3313,12 +3304,19 @@ class FindingsParser:
         median-imputed downstream, polluting selection with near-constant noise.
         ``count``/``sum`` remain emitted; categorical and binary aggregates are
         not affected. Fails open (no pruning) when metadata is missing.
+
+        Datetime-derived columns (``_delta_hours`` / ``_hour`` / ``_dow`` /
+        ``_is_weekend``) are exempt — they're per-row signals computed at
+        ingestion, where ``max``/``mean`` are well-defined even at one event
+        per entity (e.g. ``max(is_weekend)`` = "ever fired on a weekend").
         """
         if ts is None or ts.avg_events_per_entity is None:
             return
         if float(ts.avg_events_per_entity) >= threshold:
             return
         for col in value_columns:
+            if col.endswith(FindingsParser._DATETIME_DERIVED_SUFFIXES):
+                continue
             existing = set(blocked.get(col, []))
             existing.update(["mean", "max"])
             blocked[col] = sorted(existing)
