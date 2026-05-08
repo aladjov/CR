@@ -3656,6 +3656,15 @@ class FindingsParser:
                 )
             else:
                 event_cfg.aggregation.windows = resolved_windows
+        # `_event_aggregated_columns` only emits per-value count columns when
+        # "value_counts" is in `categorical_agg_funcs`; mirror the runtime intent.
+        if "value_counts_columns" in overrides:
+            if event_cfg.aggregation is None:
+                event_cfg.aggregation = AggregationWindowConfig(windows=[])
+            _funcs = list(event_cfg.aggregation.categorical_agg_funcs or [])
+            if "value_counts" not in _funcs:
+                _funcs.append("value_counts")
+                event_cfg.aggregation.categorical_agg_funcs = _funcs
 
     def _discover_event_sources(
         self, source_findings: Dict[str, ExplorationFindings]
