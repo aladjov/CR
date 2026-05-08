@@ -3848,9 +3848,17 @@ class TestDatabricksGoldFeatureStoreRegistration:
         assert "return saved" in fn
 
     def test_gold_no_triple_materialization(self, renderer, sample_pipeline_config):
+        # After the FINAL Delta write to `output_table`, gold should not
+        # touch `df` again (no incidental .count(), .show(), or extra
+        # saveAsTable). The staging round-trip introduced for wide-schema
+        # safety writes to `_staging_table` first, then re-reads, then
+        # writes to `output_table` — that's deliberate (one disk-backed
+        # plan barrier, not triple-execution of the wide upstream plan),
+        # so the assertion grep starts from the LAST saveAsTable, not the
+        # first.
         result = renderer.render_gold(sample_pipeline_config)
         fn = result[result.index("def run_gold") :]
-        after_save = fn[fn.index("saveAsTable") :]
+        after_save = fn[fn.rindex("saveAsTable") :]
         lines_with_df_ref = [
             line.strip()
             for line in after_save.splitlines()
@@ -3862,7 +3870,7 @@ class TestDatabricksGoldFeatureStoreRegistration:
             and not line.strip().startswith("#")
             and "df.schema" not in line
         ]
-        assert not lines_with_df_ref, f"Stale df references after saveAsTable: {lines_with_df_ref}"
+        assert not lines_with_df_ref, f"Stale df references after final saveAsTable: {lines_with_df_ref}"
 
     def test_gold_display_is_bounded(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)

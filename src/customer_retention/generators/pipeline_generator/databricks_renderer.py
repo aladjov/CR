@@ -1824,18 +1824,30 @@ def run_silver():
     _timings["holdout_mask"] = round(_time.monotonic() - _t3, 2)
     print(f"  holdout_mask: {_timings['holdout_mask']:.1f}s")
     _t4 = _time.monotonic()
-    # Wide-schema barrier (same class of bug as the gold pre-write checkpoint
-    # and the silver display narrow-projection workaround): at ~2620 cols the
-    # cumulative AttributeReferences from temporal merge + apply_derived_columns
-    # + holdout-mask can trip Catalyst's adaptive-plan attribute-index resolver
-    # on the write path with `IllegalArgumentException: Cannot find column
-    # index for attribute X#NNNN`. Materialising here gives saveAsTable a
-    # shallow plan with stable attribute IDs.
-    merged = merged.localCheckpoint(eager=True)
+    # Wide-schema barrier (~2620 cols): the cumulative AttributeReferences
+    # from temporal merge + apply_derived_columns + holdout-mask can trip
+    # Catalyst's adaptive-plan attribute-index resolver on the write path
+    # with `IllegalArgumentException: Cannot find column index for attribute
+    # X#NNNN`. Disable AQE for the write and stage through a temp Delta
+    # table so the final write sees a fresh, shallow plan with stable
+    # attribute IDs. Same class of bug the display narrow-projection
+    # workaround below documents.
     output_table = silver_table()
-    merged.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
+    _staging_table = output_table + "__staging"
+    _aqe_prev = spark.conf.get("spark.sql.adaptive.enabled", "true")
+    spark.conf.set("spark.sql.adaptive.enabled", "false")
+    try:
+        (merged.write.format("delta")
+            .mode("overwrite")
+            .option("overwriteSchema", "true")
+            .saveAsTable(_staging_table))
+        merged = spark.table(_staging_table)
+        merged.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
+    finally:
+        spark.conf.set("spark.sql.adaptive.enabled", _aqe_prev)
+        spark.sql(f"DROP TABLE IF EXISTS {_staging_table}")
     _timings["delta_write"] = round(_time.monotonic() - _t4, 2)
-    print(f"  delta_write: {_timings['delta_write']:.1f}s")
+    print(f"  delta_write (staging round-trip): {_timings['delta_write']:.1f}s")
     # Z-Order skipped by default. On wide silver tables it adds 30-90 min for
     # a marginal read-time speedup that doesn't materially help downstream.
     if OPTIMIZE_AFTER_WRITE:
@@ -2344,19 +2356,35 @@ def run_gold():
         for c in df.columns
     ]
     df = df.select(*_f32_exprs)
-    # Wide-schema barrier: at ~3000 columns the cumulative AttributeReference
+    output_table = gold_table()
+    # Wide-schema barrier (~3000 columns): the cumulative AttributeReference
     # map carried by the post-encoding selects (rename + ntz cast + f32 cast)
     # trips Catalyst's adaptive-plan attribute-index resolver on the Delta
     # write path with an opaque `IllegalArgumentException: Cannot find column
-    # index for attribute X#NNNN`. Materialising here resets the plan to a
-    # single read-from-checkpoint, so the writer sees a shallow plan with
-    # consistent attribute IDs. Same class of bug the silver display
-    # narrow-projection workaround already documents.
-    df = df.localCheckpoint(eager=True)
-    output_table = gold_table()
+    # index for attribute X#NNNN`. AQE is the optimisation phase that
+    # rewrites the plan and reassigns ExprIds at runtime, so disabling it
+    # for the write is the surgical fix. localCheckpoint is unreliable on
+    # Spark Connect at this width — often returns a logical-plan reference
+    # that still carries the original ExprIds rather than forcing
+    # materialisation — so we also stage to a temp Delta table and read
+    # back: the disk round-trip guarantees a fresh, shallow plan. Same
+    # class of bug the silver display narrow-projection workaround already
+    # documents.
+    _staging_table = output_table + "__staging"
     _t5 = _time.monotonic()
-    df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
-    print(f"  delta_write: {_time.monotonic() - _t5:.1f}s")
+    _aqe_prev = spark.conf.get("spark.sql.adaptive.enabled", "true")
+    spark.conf.set("spark.sql.adaptive.enabled", "false")
+    try:
+        (df.write.format("delta")
+            .mode("overwrite")
+            .option("overwriteSchema", "true")
+            .saveAsTable(_staging_table))
+        df = spark.table(_staging_table)
+        df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
+    finally:
+        spark.conf.set("spark.sql.adaptive.enabled", _aqe_prev)
+        spark.sql(f"DROP TABLE IF EXISTS {_staging_table}")
+    print(f"  delta_write (staging round-trip): {_time.monotonic() - _t5:.1f}s")
     del df
     from delta.tables import DeltaTable
     saved = spark.table(output_table)
