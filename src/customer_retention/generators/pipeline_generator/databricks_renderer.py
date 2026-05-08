@@ -1824,6 +1824,14 @@ def run_silver():
     _timings["holdout_mask"] = round(_time.monotonic() - _t3, 2)
     print(f"  holdout_mask: {_timings['holdout_mask']:.1f}s")
     _t4 = _time.monotonic()
+    # Wide-schema barrier (same class of bug as the gold pre-write checkpoint
+    # and the silver display narrow-projection workaround): at ~2620 cols the
+    # cumulative AttributeReferences from temporal merge + apply_derived_columns
+    # + holdout-mask can trip Catalyst's adaptive-plan attribute-index resolver
+    # on the write path with `IllegalArgumentException: Cannot find column
+    # index for attribute X#NNNN`. Materialising here gives saveAsTable a
+    # shallow plan with stable attribute IDs.
+    merged = merged.localCheckpoint(eager=True)
     output_table = silver_table()
     merged.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
     _timings["delta_write"] = round(_time.monotonic() - _t4, 2)
@@ -2336,6 +2344,15 @@ def run_gold():
         for c in df.columns
     ]
     df = df.select(*_f32_exprs)
+    # Wide-schema barrier: at ~3000 columns the cumulative AttributeReference
+    # map carried by the post-encoding selects (rename + ntz cast + f32 cast)
+    # trips Catalyst's adaptive-plan attribute-index resolver on the Delta
+    # write path with an opaque `IllegalArgumentException: Cannot find column
+    # index for attribute X#NNNN`. Materialising here resets the plan to a
+    # single read-from-checkpoint, so the writer sees a shallow plan with
+    # consistent attribute IDs. Same class of bug the silver display
+    # narrow-projection workaround already documents.
+    df = df.localCheckpoint(eager=True)
     output_table = gold_table()
     _t5 = _time.monotonic()
     df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
