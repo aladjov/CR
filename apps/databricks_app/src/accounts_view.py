@@ -6,9 +6,10 @@ available — click a header to resort.
 """
 from __future__ import annotations
 
+import pandas as pd
 import streamlit as st
 
-from . import data, state
+from . import auth, data, state
 
 _TIER_GLYPH = {"Low": "● ", "Medium": "● ", "High": "● "}  # dot prefix, coloured via column_config? Streamlit doesn't style per-row — use unicode dots.
 
@@ -20,6 +21,25 @@ def _tier_label(tier) -> str:
     return f"{glyph}  {tier}"
 
 
+def _assignment_label(assigned_to, me: str | None) -> str:
+    """Render the ``assigned_to`` cell.
+
+    ``Mine`` is reserved for the current user so a CSM can scan their own
+    column at a glance; everyone else surfaces the local-part of their
+    email (``jane.doe`` from ``jane.doe@churnkit.com``) for compactness.
+    Returns an empty string for unassigned rows so the column visually
+    recedes when most rows are blank.
+    """
+    if assigned_to is None or (isinstance(assigned_to, float) and pd.isna(assigned_to)):
+        return ""
+    text = str(assigned_to).strip()
+    if not text:
+        return ""
+    if me and text.lower() == me.lower():
+        return "Mine"
+    return text.split("@", 1)[0] if "@" in text else text
+
+
 def render() -> None:
     pb = state.get("selected_playbook")
     ar = state.get("selected_archetype")
@@ -29,13 +49,34 @@ def render() -> None:
         st.info("No accounts in this scope.")
         return
 
+    # Left-merge the cached assignments frame so the In-scope table can
+    # surface "Mine" / owner handle / blank without modifying the upstream
+    # ``v_eligible_all_playbooks`` view. Empty assignments DataFrame leaves
+    # every row unassigned.
+    me = auth.current_user_email()
+    try:
+        assigns = data.assignments()
+    except Exception:
+        assigns = pd.DataFrame(columns=["entity_id", "assigned_to"])
+    if assigns is None or assigns.empty:
+        df = df.assign(assigned_to=None)
+    else:
+        df = df.merge(
+            assigns[["entity_id", "assigned_to"]],
+            on="entity_id",
+            how="left",
+        )
+
     display = df[[
         "entity_id", "churn_probability", "expected_loss", "value_at_risk",
         "risk_tier", "archetype_name",
         "policy_rank_among_eligible", "eligible_playbook_count",
-        "recommended", "is_holdout",
+        "recommended", "is_holdout", "assigned_to",
     ]].copy()
     display["risk_tier"] = display["risk_tier"].map(_tier_label)
+    display["assigned_to"] = display["assigned_to"].map(
+        lambda v: _assignment_label(v, me)
+    )
 
     display = display.rename(columns={
         "entity_id":                  "Entity",
@@ -48,6 +89,7 @@ def render() -> None:
         "eligible_playbook_count":    "Plays",
         "recommended":                "Rec.",
         "is_holdout":                 "Holdout",
+        "assigned_to":                "Assigned to",
     })
 
     col_config = {
@@ -61,6 +103,10 @@ def render() -> None:
         "Plays":         st.column_config.NumberColumn(format="%d", width="small"),
         "Rec.":          st.column_config.CheckboxColumn(width="small"),
         "Holdout":       st.column_config.CheckboxColumn(width="small"),
+        "Assigned to":   st.column_config.TextColumn(
+            width="small",
+            help="CSM who has self-assigned this account. 'Mine' = you.",
+        ),
     }
 
     event = st.dataframe(

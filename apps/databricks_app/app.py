@@ -17,7 +17,7 @@ import pandas as pd
 import streamlit as st
 from src.masthead import l1_title_html, masthead_title
 
-from src import accounts_view, archetype_view, customer_profile, data, state, treemap
+from src import accounts_view, archetype_view, auth, customer_profile, data, state, treemap
 
 
 def _load_run_context() -> tuple[dict, str | None]:
@@ -373,6 +373,59 @@ if _selected_playbook:
 
 
 # --- Level 4 · Customer profile --------------------------------------------
+def _render_assign_button(entity_id: str) -> None:
+    """Render the self-assign / unassign control next to the L4 header.
+
+    The button reads the cached ``assignments()`` frame so its label
+    reflects current ownership without firing extra SQL on every rerun.
+    Three states:
+      - unassigned         -> "Assign to me"        (enabled)
+      - assigned to me     -> "Unassign"            (enabled)
+      - assigned to other  -> "Claimed · <handle>"  (disabled)
+    """
+    me = auth.current_user_email()
+    try:
+        owner = data.assignment_for(entity_id)
+    except Exception as exc:
+        st.caption(f"Assignment lookup failed: {exc}")
+        return
+    mine = bool(me and owner and owner.strip().lower() == me.lower())
+    other = bool(owner and not mine)
+
+    if mine:
+        label = "Unassign"
+    elif other:
+        handle = owner.split("@", 1)[0] if "@" in (owner or "") else (owner or "")
+        label = f"Claimed · {handle}"
+    else:
+        label = "Assign to me"
+
+    _, right = st.columns([6, 1])
+    with right:
+        clicked = st.button(
+            label,
+            key=f"assign_btn::{entity_id}",
+            disabled=other or not me,
+            help=(
+                "Sign in to self-assign." if not me
+                else "Release this account." if mine
+                else "Already claimed by another CSM." if other
+                else "Claim this account for yourself."
+            ),
+            use_container_width=True,
+        )
+    if clicked and me:
+        try:
+            result = data.toggle_assignment(entity_id, me)
+        except Exception as exc:
+            st.error(f"Assignment update failed: {exc}")
+            return
+        data.assignments.clear()
+        if result == "claimed_by_other":
+            st.warning("Another CSM claimed this account first.")
+        st.rerun()
+
+
 _selected_entity = state.get("selected_entity")
 if _selected_entity:
     _level_header(
@@ -381,6 +434,7 @@ if _selected_entity:
         title_html=escape(str(_selected_entity)),
         lead="Everything we know about this customer and why the model flagged them.",
     )
+    _render_assign_button(str(_selected_entity))
     try:
         customer_profile.render()
     except Exception as exc:
