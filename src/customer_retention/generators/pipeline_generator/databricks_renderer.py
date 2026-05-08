@@ -153,11 +153,17 @@ def _cap_then_log(col, _p):
 def _type_cast(col, p):
     dtype = p.get("dtype", "double")
     spark_type = {"float": "double", "int": "int", "string": "string"}.get(dtype, dtype)
-    return f'df.withColumn("{col}", F.col("{col}").cast("{spark_type}"))'
+    return (
+        f'(df.withColumn("{col}", F.col("{col}").cast("{spark_type}")) '
+        f'if "{col}" in df.columns else df)'
+    )
 
 
 def _yeo_johnson(col, _p):
-    return f'df.withColumn("{col}", F.log1p(F.abs(F.col("{col}"))))'
+    return (
+        f'(df.withColumn("{col}", F.log1p(F.abs(F.col("{col}")))) '
+        f'if "{col}" in df.columns else df)'
+    )
 
 
 def _dispatch_encode(col, p):
@@ -177,15 +183,17 @@ def _dispatch_scale(col, p):
 def _filter_step(col, p):
     condition = p.get("condition", "non_negative")
     if condition == "non_negative":
-        return f'df.filter(F.col("{col}") >= 0)'
-    if condition == "range":
+        expr = f'df.filter(F.col("{col}") >= 0)'
+    elif condition == "range":
         min_val = p.get("min_value", 0)
         max_val = p.get("max_value", 1000000)
-        return f'df.filter(F.col("{col}").between({min_val}, {max_val}))'
-    if condition == "valid_values":
+        expr = f'df.filter(F.col("{col}").between({min_val}, {max_val}))'
+    elif condition == "valid_values":
         valid = p.get("valid_values", [])
-        return f'df.filter(F.col("{col}").isin({valid}))'
-    return f'df.filter(F.col("{col}").isNotNull())'
+        expr = f'df.filter(F.col("{col}").isin({valid}))'
+    else:
+        expr = f'df.filter(F.col("{col}").isNotNull())'
+    return f'({expr} if "{col}" in df.columns else df)'
 
 
 def _resolve_derived_sources(p, col, *, prefix=None, suffix=None, infix=None):
