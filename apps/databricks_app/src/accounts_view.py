@@ -70,7 +70,7 @@ def render() -> None:
         return
 
     # Left-merge the cached assignments frame so the In-scope table can
-    # surface "Mine" / owner handle / blank without modifying the upstream
+    # surface "Me" / owner handle / blank without modifying the upstream
     # ``v_eligible_all_playbooks`` view. Empty assignments DataFrame leaves
     # every row unassigned.
     me = auth.current_user_email()
@@ -125,7 +125,7 @@ def render() -> None:
         "Holdout":       st.column_config.CheckboxColumn(width="small"),
         "Assigned to":   st.column_config.TextColumn(
             width="small",
-            help="CSM who has self-assigned this account. 'Mine' = you.",
+            help="CSM who has self-assigned this account. 'Me' = you.",
         ),
     }
 
