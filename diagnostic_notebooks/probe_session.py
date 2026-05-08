@@ -96,6 +96,158 @@ def _autodetect_workspace_root() -> Optional[str]:
     return None
 
 
+def _resolve_executed_notebook(framework_root: str, rel_subpath: str) -> str:
+    """Pick the deployed copy of a framework notebook over the master clone.
+
+    The probe's `framework_root` typically resolves to
+    ``/Workspace/Repos/<user>/customer_retention`` — the git-synced master
+    clone, which is project-agnostic by design (no engagement-specific
+    cells). The notebooks the operator actually *executes* live in the
+    deployed user-workspace mirror at
+    ``/Workspace/Users/<user>/customer_retention``, where the SPS paste
+    cells (00010001, 00025001-4, 00026001, 00046001, 00115001, 06065001-2,
+    etc.) physically exist.
+
+    When ``framework_root`` matches the ``Repos/`` shape, derive the
+    sibling ``Users/`` path and prefer it when the file actually exists.
+    Falls back to the framework_root copy when no deployed mirror is
+    present (fresh engagement, or local non-Databricks runs).
+
+    The argument ``rel_subpath`` is the trailing path under the workspace
+    root (e.g. ``"exploration_notebooks/00_start_here.ipynb"``).
+    """
+    fr = str(framework_root)
+    candidates = []
+    if "/Workspace/Repos/" in fr:
+        users_root = fr.replace("/Workspace/Repos/", "/Workspace/Users/", 1)
+        candidates.append(f"{users_root}/{rel_subpath}")
+    candidates.append(f"{fr}/{rel_subpath}")
+    for c in candidates:
+        if Path(c).exists():
+            return c
+    # Nothing exists yet — return the deployed-user variant as the default
+    # so error messages point operators at the path they're expected to
+    # populate, rather than the master clone.
+    return candidates[0]
+
+
+def discover_pipeline_dirs(
+    run_root: Optional[Path],
+    framework_root: Optional[Path],
+    *,
+    verbose: bool = False,
+) -> list[Path]:
+    """Bounded BFS for every dir matching the per-target pipeline shape
+    (``landing/`` + ``silver/`` siblings) under both ``<run_root>/generated_pipelines/``
+    and ``<framework_root>/generated_pipelines/``. Also walks the sibling
+    ``Workspace/Users/...`` tree when ``framework_root`` is the ``Repos/``
+    clone, since NB10 commonly writes to the user-workspace mirror.
+
+    De-duplicates by path. Sorted by mtime (newest first).
+    """
+    roots: list[Path] = []
+    if run_root is not None:
+        roots.append(Path(run_root) / "generated_pipelines")
+    if framework_root is not None:
+        roots.append(Path(framework_root) / "generated_pipelines")
+        fr_str = str(framework_root)
+        if "/Workspace/Repos/" in fr_str:
+            roots.append(
+                Path(fr_str.replace("/Workspace/Repos/", "/Workspace/Users/", 1))
+                / "generated_pipelines"
+            )
+    if verbose:
+        for r in roots:
+            print(f"  [diag] discover_pipeline_dirs root: {r} "
+                  f"{'EXISTS' if r.exists() else 'MISSING'}")
+    out: list[Path] = []
+    for root in roots:
+        if not root.exists():
+            continue
+        stack = [(root, 0)]
+        while stack:
+            cur, depth = stack.pop()
+            if depth > 4:
+                continue
+            try:
+                entries = [c for c in cur.iterdir() if c.is_dir()]
+            except (OSError, PermissionError):
+                continue
+            if (cur / "landing").is_dir() and (cur / "silver").is_dir():
+                out.append(cur)
+                continue
+            stack.extend((c, depth + 1) for c in entries)
+    seen: set[str] = set()
+    uniq: list[Path] = []
+    for d in out:
+        s = str(d)
+        if s not in seen:
+            seen.add(s)
+            uniq.append(d)
+
+    def _mtime(p: Path) -> float:
+        manifest = p / "generation_manifest.json"
+        try:
+            return manifest.stat().st_mtime if manifest.exists() else p.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    uniq.sort(key=_mtime, reverse=True)
+    return uniq
+
+
+def active_pipeline_dirs(
+    run_root: Optional[Path],
+    framework_root: Optional[Path],
+    *,
+    pipeline_name: Optional[str] = None,
+    verbose: bool = False,
+) -> tuple[list[Path], list[Path]]:
+    """Return ``(active, stale)`` lists from the discovered pipeline dirs.
+
+    "Active" = matches ``pipeline_name`` (when supplied) OR the freshest
+    ``generation_manifest.json`` mtime when no name is given. Probes that
+    iterate "active" emit FAILs for the latest NB10 codegen output;
+    probes that surface the "stale" list emit INFO for residue from
+    earlier framework versions or different pipeline configurations.
+
+    Filters out directories that share a `generated_pipelines/` parent
+    with the active dir but were not written by the latest NB10 run —
+    typically a `customer_churn` left over after the operator switched
+    to `PIPELINE_NAME = "sps_churn"`.
+
+    Resolution priority for ``pipeline_name``:
+        1. argument
+        2. ``CR_PIPELINE_NAME`` env / widget / task value
+        3. None → freshest-by-mtime fallback
+    """
+    if pipeline_name is None:
+        pipeline_name = _resolve("pipeline_name") or None
+
+    discovered = discover_pipeline_dirs(
+        run_root, framework_root, verbose=verbose
+    )
+    if not discovered:
+        return [], []
+
+    active: list[Path] = []
+    stale: list[Path] = []
+    if pipeline_name:
+        for d in discovered:
+            (active if d.name == pipeline_name else stale).append(d)
+        # Pipeline_name was set but no match — fall back to freshest, treat
+        # all remaining as stale so probes still report something.
+        if not active:
+            active = [discovered[0]]
+            stale = discovered[1:]
+    else:
+        # No pipeline_name binding: take the freshest (already sorted by
+        # mtime in discover_pipeline_dirs) as active, the rest stale.
+        active = [discovered[0]]
+        stale = discovered[1:]
+    return active, stale
+
+
 def _autodetect_catalog_schema(experiments_root: str) -> tuple[Optional[str], Optional[str]]:
     """Parse ``(catalog, schema)`` from ``/Volumes/<catalog>/<schema>/<volume>/..``.
 
@@ -310,12 +462,20 @@ def bind_probe_session(extra_defaults: Optional[Dict[str, str]] = None) -> Probe
     catalog = _resolve("catalog", extras.get("catalog", auto_cat))
     schema = _resolve("schema", extras.get("schema", auto_sch))
 
-    # Notebook paths default to siblings under the auto-detected framework root.
+    # Notebook paths: prefer the executed copy (deployed user-workspace
+    # mirror) over the framework_root master clone. When the operator runs
+    # NB00/NB06 from /Workspace/Users/<user>/customer_retention/... and the
+    # probes scan /Workspace/Repos/<user>/customer_retention/..., every
+    # cell-presence check FAILs with false positives on the project-agnostic
+    # master clone. `_resolve_executed_notebook` picks the deployed copy
+    # whenever it exists; falls back to the master path for fresh runs.
     nb10_raw = _resolve(
         "nb10_export_path",
         extras.get(
             "nb10_export_path",
-            f"{framework_root}/exploration_notebooks/10_spec_generation.ipynb",
+            _resolve_executed_notebook(
+                framework_root, "exploration_notebooks/10_spec_generation.ipynb"
+            ),
         ),
     )
     nb00 = Path(
@@ -323,7 +483,9 @@ def bind_probe_session(extra_defaults: Optional[Dict[str, str]] = None) -> Probe
             "nb00_path",
             extras.get(
                 "nb00_path",
-                f"{framework_root}/exploration_notebooks/00_start_here.ipynb",
+                _resolve_executed_notebook(
+                    framework_root, "exploration_notebooks/00_start_here.ipynb"
+                ),
             ),
         )
     )
@@ -332,7 +494,9 @@ def bind_probe_session(extra_defaults: Optional[Dict[str, str]] = None) -> Probe
             "nb06_path",
             extras.get(
                 "nb06_path",
-                f"{framework_root}/exploration_notebooks/06_feature_opportunities.ipynb",
+                _resolve_executed_notebook(
+                    framework_root, "exploration_notebooks/06_feature_opportunities.ipynb"
+                ),
             ),
         )
     )
