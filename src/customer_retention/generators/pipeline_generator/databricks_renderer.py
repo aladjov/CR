@@ -2402,11 +2402,35 @@ def _apply_feature_spec_gate(df, spec):
         df = df.drop(*_leakage_drops)
     _missing = [c for c in spec.selected_features if c not in df.columns]
     if _missing:
-        raise RuntimeError(
-            f"FeatureSpec parity violation: gold missing {len(_missing)} declared "
-            f"features: {_missing[:10]}. Bronze/silver/gold derivation is out of sync "
-            "with exploration — regenerate gold or re-run NB08."
-        )
+        # Operator escape hatch: when an upstream phantom-rec or column-rename
+        # left a spec'd feature unproduced, raising here blocks training
+        # entirely. The orchestrator passes `auto_drop_missing_features` via
+        # `_ns_params` (same channel as `experiments_dir`/`run_id`); when it
+        # resolves truthy the missing features are warned and dropped so
+        # training proceeds. Operator should then add them to
+        # `PARITY_IGNORED_FEATURES` post-hoc once the cause is identified.
+        try:
+            _auto_drop = bool(dbutils.widgets.get("auto_drop_missing_features"))
+        except Exception:
+            _auto_drop = False
+        if _auto_drop:
+            warnings.warn(
+                f"[TRAINING] auto-dropping {len(_missing)} missing features from spec "
+                f"(auto_drop_missing_features=1): {_missing[:20]}",
+                stacklevel=1,
+            )
+            _missing_set = set(_missing)
+            spec.selected_features = [
+                c for c in spec.selected_features if c not in _missing_set
+            ]
+        else:
+            raise RuntimeError(
+                f"FeatureSpec parity violation: gold missing {len(_missing)} declared "
+                f"features: {_missing[:10]}. Bronze/silver/gold derivation is out of sync "
+                "with exploration — regenerate gold or re-run NB08. "
+                "Pass auto_drop_missing_features=1 via the runner's _ns_params to drop "
+                "missing features and continue."
+            )
     keep = list(spec.selected_features)
     for meta_col in (TARGET, TIMESTAMP_COLUMN, ENTITY_KEY, spec.target_column,
                      spec.entity_column, spec.timestamp_column):
