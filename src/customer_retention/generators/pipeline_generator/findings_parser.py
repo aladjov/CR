@@ -532,12 +532,13 @@ class FindingsParser:
         """Count of `silver.derived_columns` recs in the on-disk
         recommendations registry, before any pipeline filtering. Used
         by `diagnostic_summary` to surface the A4 declared-vs-emitted
-        gap. Returns ``None`` when no recommendations file is present.
+        gap. Returns ``None`` when no recommendations file is present
+        (``_load_recommendations`` already returns ``None`` for a
+        missing file). YAML-parse and registry-shape errors propagate
+        — a corrupt registry should fail the manifest write loudly,
+        not silently zero out the parity counter.
         """
-        try:
-            registry = self._load_recommendations()
-        except Exception:
-            return None
+        registry = self._load_recommendations()
         if registry is None or registry.silver is None:
             return None
         return len(registry.silver.derived_columns or [])
@@ -1756,7 +1757,9 @@ class FindingsParser:
         # PA-3: registry-declared per-column landing drops — case-EXACT,
         # idempotent against operator-side ``landing_drop_columns_overrides``
         # which `_apply_landing_overrides` later appends to the same list.
-        for rec in getattr(landing, "drop_columns", []):
+        # `_landing_from_dict` always supplies an empty list when YAML omits
+        # the key, so direct attribute access is safe even on older recs.
+        for rec in landing.drop_columns:
             dataset = rec.parameters.get("dataset")
             target = self._resolve_landing_target(config, dataset, kind="drop_columns")
             existing = set(target.drop_columns)

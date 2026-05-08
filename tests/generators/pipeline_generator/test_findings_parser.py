@@ -8469,6 +8469,56 @@ class TestDiagnosticSummary:
         decoded = json.loads(encoded)
         assert decoded["target_column"] == summary["target_column"]
 
+    def test_parity_silver_lost_is_none_when_no_recommendations_file(
+        self, aggregated_event_setup,
+    ):
+        from customer_retention.generators.pipeline_generator.findings_parser import (
+            FindingsParser,
+        )
+        parser = FindingsParser(str(aggregated_event_setup))
+        parity = parser.diagnostic_summary()["parity"]
+        assert parity["silver_declared"] is None
+        assert parity["silver_lost"] is None
+
+    def test_parity_silver_lost_clamped_to_zero_when_emitted_exceeds_declared(
+        self, aggregated_event_setup,
+    ):
+        """If a downstream code path inflates silver.derived_columns
+        beyond what's declared in the on-disk registry, ``silver_lost``
+        must clamp to 0 (never go negative)."""
+        import yaml
+
+        from customer_retention.generators.pipeline_generator.findings_parser import (
+            FindingsParser,
+        )
+        from customer_retention.generators.pipeline_generator.models import (
+            PipelineTransformationType,
+            TransformationStep,
+        )
+
+        (aggregated_event_setup / "recommendations.yaml").write_text(yaml.dump({
+            "silver": {
+                "entity_column": "customer_id",
+                "time_column": None,
+                "joins": [],
+                "aggregations": [],
+                "derived_columns": [],
+            },
+        }))
+        parser = FindingsParser(str(aggregated_event_setup))
+        config = parser.parse()
+        config.silver.derived_columns.append(TransformationStep(
+            type=PipelineTransformationType.DERIVED_COLUMN,
+            column="extra",
+            parameters={"action": "ratio", "numerator": "n", "denominator": "d"},
+            rationale="r",
+            source_notebook="nb",
+        ))
+        parity = parser.diagnostic_summary(config)["parity"]
+        assert parity["silver_declared"] == 0
+        assert parity["silver_emitted"] == 1
+        assert parity["silver_lost"] == 0
+
 
 class TestStrictDatetimeParityDefault:
     """PA-4: the constructor default for `strict_datetime_parity` is

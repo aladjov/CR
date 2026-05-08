@@ -47,17 +47,23 @@ PA-6 — Lane-1 registration companion:
     register_contract_ratio_features(registry, ...)
     register_subscription_ratio_features(registry, ...)
 
-    Emits one ``add_silver_derived(column, expression, feature_type=...,
-    source_columns=...)`` per window using the dataset-PREFIXED column
-    names — production silver-derived application reads the prefixed
-    names (TemporalMerger always prefixes when multiple datasets emit
-    a colliding column, and the prefixed form is what FindingsParser's
-    silver-derived collision-aware predictor resolves). The helpers do
-    NOT consult ``df.columns`` (they may be called from a notebook
-    cell that has not yet computed the ratios), so a window the
-    operator registers is a window the codegen will attempt to
-    materialise; calling the math helper for the same window then
-    closes the exploration-side parity loop.
+    Emits one ``add_silver_ratio(column, numerator, denominator, ...)``
+    per window using the dataset-PREFIXED column names. Codegen's
+    ``apply_derived_ratio`` reads the ``numerator`` / ``denominator``
+    keys to materialise the ratio at silver-transform time; passing
+    them through ``add_silver_ratio`` (rather than ``add_silver_derived``)
+    is what makes the rec actually fire in production — the executor
+    ignores the ``expression`` / ``source_columns`` form.
+
+    Because the production path uses ``apply_derived_ratio``
+    (``numerator / denominator.replace(0, NaN)``) and the in-cell math
+    helper uses a safe-divide ``term.fillna(0) / (start.fillna(0) + 1)``
+    formula, NB06's canonical exploration-vs-production parity comes
+    from running the registered rec through ``apply_gold_transforms``
+    (which calls ``apply_derived_ratio``) — not from the math helper.
+    The math helper remains useful as a one-off NB04/NB06 inspection
+    aid; for full parity, register the rec and let ``apply_gold_transforms``
+    materialise the column.
 """
 from __future__ import annotations
 
@@ -159,15 +165,6 @@ def derive_subscription_ratio_features(
     return derive_event_ratio_features(df, dataset="subscription", windows=windows)
 
 
-def _terminate_to_start_expression(term: str, start: str) -> str:
-    """Canonical expression rendered into ``add_silver_derived`` recs.
-
-    Mirrors the in-cell math in :func:`derive_event_ratio_features` so
-    silver-derived codegen and exploration produce the same column.
-    """
-    return f"fillna({term}, 0) / (fillna({start}, 0) + 1)"
-
-
 def register_event_ratio_features(
     registry: Any,
     *,
@@ -176,19 +173,25 @@ def register_event_ratio_features(
     source_notebook: str = "06_feature_opportunities",
     rationale: Optional[str] = None,
 ) -> list[str]:
-    """Emit one ``add_silver_derived`` rec per window for the dataset's
+    """Emit one ``add_silver_ratio`` rec per window for the dataset's
     terminate-to-start ratio (PA-6).
 
-    Uses the dataset-PREFIXED column names so the rec's
-    ``source_columns`` round-trip through silver-derived codegen
-    (which sees prefixed names when ``TemporalMerger`` prepends
-    ``{dataset}__`` on collision — the production case for any
-    multi-source merge).
+    Uses ``add_silver_ratio`` (not ``add_silver_derived``) so the rec
+    parameters carry the ``numerator`` / ``denominator`` keys that
+    ``gold_transform_applicator._derived_source_columns`` reads to
+    plumb sources into ``apply_derived_ratio`` at codegen time. The
+    ``add_silver_derived`` path leaves source columns in
+    ``parameters["source_columns"]`` only — the executor's ratio
+    handler does not look at that field, so a rec emitted via
+    ``add_silver_derived`` would be silently no-op'd in production.
+
+    Column names use the dataset-PREFIXED form so the rec round-trips
+    through ``TemporalMerger`` (which prepends ``{dataset}__`` on
+    column collision — the production case for any multi-source
+    merge).
 
     Returns the list of emitted ratio column names so the caller can
-    print or count them. Idempotent on repeat calls only insofar as
-    ``add_silver_derived`` itself accepts duplicates: callers should
-    avoid double-registration.
+    print or count them.
     """
     if not dataset:
         raise ValueError("register_event_ratio_features requires a non-empty dataset")
@@ -201,17 +204,17 @@ def register_event_ratio_features(
         ratio = f"{dataset}_terminate_to_start_ratio_{w}"
         per_window_rationale = rationale or (
             f"Per-window cancellation gradient for {dataset} at {w}: "
-            f"terminate / (start + 1) safe-divide. Source columns are "
-            f"the per-grid-date event_type counts emitted by the "
-            f"bronze aggregator (Cycles 002/003/004)."
+            f"terminate / start ratio with safe-divide via "
+            f"`apply_derived_ratio` (NaN on zero start, median-imputed "
+            f"downstream). Source columns are per-grid-date event_type "
+            f"counts emitted by the bronze aggregator."
         )
-        registry.add_silver_derived(
+        registry.add_silver_ratio(
             column=ratio,
-            expression=_terminate_to_start_expression(term, start),
-            feature_type="ratio",
+            numerator=term,
+            denominator=start,
             rationale=per_window_rationale,
             source_notebook=source_notebook,
-            source_columns=[term, start],
         )
         emitted.append(ratio)
     return emitted

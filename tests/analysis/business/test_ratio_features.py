@@ -314,13 +314,13 @@ class TestRegisterEventRatioFeatures:
         )
         rec = reg.silver.derived_columns[0]
         params = rec.parameters or {}
-        assert params["source_columns"] == [
-            "contract__event_type_terminate_count_90d",
-            "contract__event_type_start_count_90d",
-        ]
+        # PA-6 / C1: the rec must use add_silver_ratio's numerator+denominator
+        # shape so `gold_transform_applicator._derived_source_columns` plumbs
+        # the names into `apply_derived_ratio` at codegen.
+        assert rec.action == "ratio"
+        assert params["numerator"] == "contract__event_type_terminate_count_90d"
+        assert params["denominator"] == "contract__event_type_start_count_90d"
         assert params["feature_type"] == "ratio"
-        assert "contract__event_type_terminate_count_90d" in params["expression"]
-        assert "contract__event_type_start_count_90d" in params["expression"]
 
     def test_default_windows_match_panel_grid(self):
         from customer_retention.analysis.business import (
@@ -342,10 +342,8 @@ class TestRegisterEventRatioFeatures:
         rec = reg.silver.derived_columns[0]
         assert emitted == ["subscription_terminate_to_start_ratio_180d"]
         assert rec.target_column == "subscription_terminate_to_start_ratio_180d"
-        assert rec.parameters["source_columns"] == [
-            "subscription__event_type_terminate_count_180d",
-            "subscription__event_type_start_count_180d",
-        ]
+        assert rec.parameters["numerator"] == "subscription__event_type_terminate_count_180d"
+        assert rec.parameters["denominator"] == "subscription__event_type_start_count_180d"
 
     def test_contract_helper_emits_contract_prefixed_columns(self):
         from customer_retention.analysis.business import register_contract_ratio_features
@@ -354,10 +352,8 @@ class TestRegisterEventRatioFeatures:
         emitted = register_contract_ratio_features(reg, windows=("30d",))
         rec = reg.silver.derived_columns[0]
         assert emitted == ["contract_terminate_to_start_ratio_30d"]
-        assert rec.parameters["source_columns"] == [
-            "contract__event_type_terminate_count_30d",
-            "contract__event_type_start_count_30d",
-        ]
+        assert rec.parameters["numerator"] == "contract__event_type_terminate_count_30d"
+        assert rec.parameters["denominator"] == "contract__event_type_start_count_30d"
 
     def test_explicit_rationale_propagates(self):
         from customer_retention.analysis.business import register_event_ratio_features
@@ -434,3 +430,51 @@ class TestRegisterEventRatioFeatures:
         out, emitted_cols = derive_contract_ratio_features(panel, windows=("30d",))
         assert emitted_recs == emitted_cols
         assert "contract_terminate_to_start_ratio_30d" in out.columns
+
+    def test_rec_round_trips_through_build_silver_derived_steps(self):
+        """C1 regression coverage: the rec emitted by register_*_ratio_features
+        must produce a usable TransformationStep when consumed by
+        ``build_silver_derived_steps`` — i.e., ``_derived_source_columns``
+        finds the numerator/denominator and the column-presence check
+        passes against a panel containing the prefixed inputs.
+        """
+        from customer_retention.analysis.business import register_contract_ratio_features
+        from customer_retention.generators.pipeline_generator.gold_transform_applicator import (
+            build_silver_derived_steps,
+        )
+        from customer_retention.generators.pipeline_generator.models import (
+            PipelineTransformationType,
+        )
+
+        reg = self._registry()
+        register_contract_ratio_features(reg, windows=("90d",))
+        pipeline_columns = {
+            "contract__event_type_terminate_count_90d",
+            "contract__event_type_start_count_90d",
+            "ACCOUNT_ID",
+            "as_of_date",
+        }
+        steps = build_silver_derived_steps(reg, pipeline_columns)
+        assert len(steps) == 1
+        step = steps[0]
+        assert step.type is PipelineTransformationType.DERIVED_COLUMN
+        assert step.column == "contract_terminate_to_start_ratio_90d"
+        assert step.parameters["action"] == "ratio"
+        assert step.parameters["numerator"] == "contract__event_type_terminate_count_90d"
+        assert step.parameters["denominator"] == "contract__event_type_start_count_90d"
+
+    def test_rec_skipped_when_source_columns_missing_from_panel(self):
+        """The codegen-side filter `_derived_source_columns` rejects steps
+        whose numerator/denominator aren't in `pipeline_columns`. Verify
+        a rec emitted against a panel without the prefixed inputs is
+        skipped (rather than emitted and then no-op'd at executor time)."""
+        from customer_retention.analysis.business import register_contract_ratio_features
+        from customer_retention.generators.pipeline_generator.gold_transform_applicator import (
+            build_silver_derived_steps,
+        )
+
+        reg = self._registry()
+        register_contract_ratio_features(reg, windows=("90d",))
+        pipeline_columns = {"ACCOUNT_ID", "as_of_date"}  # no event_type counts
+        steps = build_silver_derived_steps(reg, pipeline_columns)
+        assert steps == []
