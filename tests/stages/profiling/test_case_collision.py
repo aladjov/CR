@@ -191,3 +191,20 @@ class TestRegistryAddLandingDropColumnsAPI:
         rec = round_tripped.landing.drop_columns[0]
         assert rec.parameters["dataset"] == "ds"
         assert rec.parameters["columns"] == ["A", "B"]
+
+    def test_kill_switch_drops_to_discarded_and_does_not_init_landing(self):
+        """When user_extensions are disabled, add_landing_drop_columns must
+        mirror add_landing_filter / add_landing_lifecycle_enrichment: route
+        the rec to the discarded audit list and do NOT lazily init landing
+        (a kill-switched run should leave `registry.landing` untouched so
+        the on-disk YAML stays clean of drop_columns recs)."""
+        reg = RecommendationRegistry(disable_user_extensions=True)
+        assert reg.landing is None
+        reg.add_landing_drop_columns(
+            dataset="ds", columns=["A"], rationale="r", source_notebook="nb",
+        )
+        assert reg.landing is None
+        assert len(reg._discarded_landing) == 1
+        discarded = reg._discarded_landing[0]
+        assert discarded.parameters["dataset"] == "ds"
+        assert discarded.parameters["columns"] == ["A"]

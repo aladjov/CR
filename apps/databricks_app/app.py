@@ -294,85 +294,7 @@ _render_reset_bar()
 if _ctx_diagnostic:
     st.warning(f"Dashboard run context unavailable — {_ctx_diagnostic}")
 
-# --- Level 1 · Portfolio ----------------------------------------------------
-_level_header(
-    level=1,
-    eyebrow="Level 01 · Portfolio",
-    title_html=l1_title_html(_ctx),
-)
-_render_stat_row()
 
-_section_head(
-    eyebrow="Playbooks breakdown",
-    title="Where the cohort sits today",
-    lead=(
-        "Every eligible customer across every active playbook. Tile size is the "
-        "eligible cohort; tile colour tracks mean churn probability — pale green "
-        "is safe, amber-yellow needs a look, deeper hues mean act first."
-    ),
-)
-
-try:
-    treemap.render()
-except Exception as exc:
-    st.error(f"Treemap failed: {exc}")
-
-st.markdown(
-    '<p class="chart-caption">'
-    '<span class="accent-green">▬</span>&nbsp;low risk · '
-    '<span class="accent-yellow">▬</span>&nbsp;medium · '
-    '<span class="accent-blue">▬</span>&nbsp;high · click any playbook to drill'
-    '</p>',
-    unsafe_allow_html=True,
-)
-
-
-# --- Level 2 · Playbook drill -----------------------------------------------
-_selected_playbook = state.get("selected_playbook")
-if _selected_playbook:
-    _level_header(
-        level=2,
-        eyebrow="Level 02 · Playbook",
-        title_html=escape(str(_selected_playbook)),
-        lead=(
-            "Archetypes within this playbook. Each tile is a behavioural cluster "
-            "of customers who share risk drivers. Click an archetype to narrow "
-            "the list below."
-        ),
-    )
-    try:
-        archetype_view.render()
-    except Exception as exc:
-        st.error(f"Archetype view failed: {exc}")
-
-
-# --- Level 3 · Customer list ------------------------------------------------
-if _selected_playbook:
-    _archetype = state.get("selected_archetype")
-    if _archetype:
-        lead_l3 = (
-            f"Customers in {_selected_playbook} · {_archetype}, "
-            "sorted by expected loss. Click a row to open the profile below."
-        )
-    else:
-        lead_l3 = (
-            f"Customers in {_selected_playbook}, sorted by expected loss. "
-            "Click a row to open the profile below, or narrow further by "
-            "picking an archetype tile above."
-        )
-    _level_header(
-        level=3,
-        eyebrow="Level 03 · Customers",
-        title_html="In scope",
-        lead=lead_l3,
-    )
-    try:
-        accounts_view.render()
-    except Exception as exc:
-        st.error(f"Accounts list failed: {exc}")
-
-
-# --- Level 4 · Customer profile --------------------------------------------
 def _render_assign_button(entity_id: str, *, holdout: bool = False) -> None:
     """Render the self-assign / unassign control inline with the L4 header.
 
@@ -434,27 +356,188 @@ def _render_assign_button(entity_id: str, *, holdout: bool = False) -> None:
         st.rerun()
 
 
-_selected_entity = state.get("selected_entity")
-if _selected_entity:
-    # Header + button live in a single columns row so the assign control
-    # sits inline with the profile title rather than consuming a separate
-    # full-width band underneath. ``vertical_alignment="center"`` keeps the
-    # button visually anchored to the title.
+def _render_l4_panel(entity_id: str, *, lead: str) -> None:
+    """Render the L4 profile (header + assign button + profile body).
+
+    Shared by the Dashboard tab (driven by ``selected_entity``) and the
+    Search tab (driven by ``searched_entity``). Header + button live in a
+    single columns row so the assign control sits inline with the profile
+    title rather than consuming a separate full-width band underneath.
+    ``vertical_alignment="center"`` keeps the button visually anchored to
+    the title.
+    """
     try:
-        _is_holdout = data.account_is_holdout(str(_selected_entity))
+        is_holdout = data.account_is_holdout(entity_id)
     except Exception:
-        _is_holdout = False
-    _hdr_col, _btn_col = st.columns([6, 1], vertical_alignment="center")
-    with _hdr_col:
+        is_holdout = False
+    hdr_col, btn_col = st.columns([6, 1], vertical_alignment="center")
+    with hdr_col:
         _level_header(
             level=4,
             eyebrow="Level 04 · Profile",
-            title_html=escape(str(_selected_entity)),
-            lead="Everything we know about this customer and why the model flagged them.",
+            title_html=escape(entity_id),
+            lead=lead,
         )
-    with _btn_col:
-        _render_assign_button(str(_selected_entity), holdout=_is_holdout)
+    with btn_col:
+        _render_assign_button(entity_id, holdout=is_holdout)
     try:
-        customer_profile.render()
+        customer_profile.render(entity_id=entity_id)
     except Exception as exc:
         st.error(f"Customer profile failed: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Tabs
+# ---------------------------------------------------------------------------
+# Two intents:
+#   - Dashboard : top-down drill (L1 portfolio -> L2 playbook -> L3 list -> L4)
+#   - Search    : targeted lookup by entity_id, jumps straight to L4
+# State keys are intentionally distinct (`selected_entity` vs `searched_entity`)
+# so switching tabs doesn't fold a search hit into the drill breadcrumb (which
+# would skip L1/L2/L3 and confuse the trail).
+_tab_dashboard, _tab_search = st.tabs(["Dashboard", "Search"])
+
+
+with _tab_dashboard:
+    # --- Level 1 · Portfolio ------------------------------------------------
+    _level_header(
+        level=1,
+        eyebrow="Level 01 · Portfolio",
+        title_html=l1_title_html(_ctx),
+    )
+    _render_stat_row()
+
+    _section_head(
+        eyebrow="Playbooks breakdown",
+        title="Where the cohort sits today",
+        lead=(
+            "Every eligible customer across every active playbook. Tile size is the "
+            "eligible cohort; tile colour tracks mean churn probability — pale green "
+            "is safe, amber-yellow needs a look, deeper hues mean act first."
+        ),
+    )
+
+    try:
+        treemap.render()
+    except Exception as exc:
+        st.error(f"Treemap failed: {exc}")
+
+    st.markdown(
+        '<p class="chart-caption">'
+        '<span class="accent-green">▬</span>&nbsp;low risk · '
+        '<span class="accent-yellow">▬</span>&nbsp;medium · '
+        '<span class="accent-blue">▬</span>&nbsp;high · click any playbook to drill'
+        '</p>',
+        unsafe_allow_html=True,
+    )
+
+    # --- Level 2 · Playbook drill ------------------------------------------
+    _selected_playbook = state.get("selected_playbook")
+    if _selected_playbook:
+        _level_header(
+            level=2,
+            eyebrow="Level 02 · Playbook",
+            title_html=escape(str(_selected_playbook)),
+            lead=(
+                "Archetypes within this playbook. Each tile is a behavioural cluster "
+                "of customers who share risk drivers. Click an archetype to narrow "
+                "the list below."
+            ),
+        )
+        try:
+            archetype_view.render()
+        except Exception as exc:
+            st.error(f"Archetype view failed: {exc}")
+
+    # --- Level 3 · Customer list -------------------------------------------
+    if _selected_playbook:
+        _archetype = state.get("selected_archetype")
+        if _archetype:
+            lead_l3 = (
+                f"Customers in {_selected_playbook} · {_archetype}, "
+                "sorted by expected loss. Click a row to open the profile below."
+            )
+        else:
+            lead_l3 = (
+                f"Customers in {_selected_playbook}, sorted by expected loss. "
+                "Click a row to open the profile below, or narrow further by "
+                "picking an archetype tile above."
+            )
+        _level_header(
+            level=3,
+            eyebrow="Level 03 · Customers",
+            title_html="In scope",
+            lead=lead_l3,
+        )
+        try:
+            accounts_view.render()
+        except Exception as exc:
+            st.error(f"Accounts list failed: {exc}")
+
+    # --- Level 4 · Customer profile ----------------------------------------
+    _selected_entity = state.get("selected_entity")
+    if _selected_entity:
+        _render_l4_panel(
+            str(_selected_entity),
+            lead="Everything we know about this customer and why the model flagged them.",
+        )
+
+
+with _tab_search:
+    _section_head(
+        eyebrow="Search",
+        title="Look up an account by entity ID",
+        lead=(
+            "Jump straight to a customer's profile. Search covers every entity "
+            "scored in the latest run — driver attribution (SHAP) is precomputed "
+            "only for the top recommended accounts, so for entities outside that "
+            "set the profile shows the prediction and population deviation without "
+            "the per-feature contribution chart."
+        ),
+    )
+
+    with st.form("entity_search_form", clear_on_submit=False):
+        _input_col, _submit_col = st.columns([6, 1], vertical_alignment="bottom")
+        with _input_col:
+            _raw_search = st.text_input(
+                "Entity ID",
+                key="entity_search_input",
+                placeholder="e.g. 1D70F6",
+                label_visibility="collapsed",
+            )
+        with _submit_col:
+            _search_submitted = st.form_submit_button(
+                "Search", use_container_width=True
+            )
+
+    if _search_submitted:
+        _cleaned = (_raw_search or "").strip()
+        if not _cleaned:
+            state.set_searched_entity(None)
+        else:
+            try:
+                _exists = data.entity_exists_in_latest_run(_cleaned)
+            except Exception as exc:
+                _exists = False
+                st.error(f"Lookup failed: {exc}")
+            if _exists:
+                state.set_searched_entity(_cleaned)
+            else:
+                # Keep any prior pick on screen rather than blanking the
+                # panel; the warning is enough feedback that this typed
+                # value didn't resolve.
+                st.warning(
+                    f"No entity with id `{_cleaned}` was found in the latest scoring run."
+                )
+
+    _searched_entity = state.get("searched_entity")
+    if _searched_entity:
+        _render_l4_panel(
+            str(_searched_entity),
+            lead=(
+                "Everything we know about this customer and why the model flagged them. "
+                "If the driver chart is missing this account is outside the top "
+                "recommended set — the population deviation panel still shows "
+                "where this customer's features sit relative to the cohort."
+            ),
+        )

@@ -291,13 +291,12 @@ class PipelineGeneratorBase(ABC):
         # PA-5: bake the parser's diagnostic_summary into the manifest so
         # the post-generation audit (operator-readable JSON) carries
         # per-dataset landing/bronze_event datetime sources, the silver
-        # declared-vs-emitted A4 check, and gold encoding methods.
-        diag_summary = None
-        try:
-            diag_summary = self._parser.diagnostic_summary(config)
-        except Exception:  # noqa: BLE001
-            # Diagnostic summary is decorative; never block manifest write.
-            diag_summary = None
+        # declared-vs-emitted A4 check, and gold encoding methods. By
+        # the time `_write_generation_manifest` runs, `parse()` has
+        # already succeeded (every `_write_*` call before this consumed
+        # the same `config`), so summary errors here would be real
+        # bugs — propagate them rather than swallowing.
+        diag_summary = self._parser.diagnostic_summary(config)
         manifest = build_generation_manifest(
             config,
             generated_files,

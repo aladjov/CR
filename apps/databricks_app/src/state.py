@@ -21,6 +21,7 @@ _KEYS = (
     "selected_archetype",
     "selected_risk_tier",
     "selected_entity",
+    "searched_entity",
 )
 
 
@@ -64,6 +65,16 @@ def set_risk_tier(tier: Optional[str]) -> None:
 
 def set_entity(name: Optional[str]) -> None:
     st.session_state.selected_entity = name
+
+
+def set_searched_entity(name: Optional[str]) -> None:
+    """Pin the entity displayed by the Search tab.
+
+    Kept distinct from ``selected_entity`` so switching tabs doesn't fold
+    a search-bar pick into the drill-down breadcrumb (which would skip
+    L1/L2/L3 and confuse the trail) and vice-versa.
+    """
+    st.session_state.searched_entity = name
 
 
 def clear_all() -> None:

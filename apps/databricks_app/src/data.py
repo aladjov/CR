@@ -488,6 +488,42 @@ def assignment_for(entity_id: str) -> str | None:
     return str(hit.iloc[0]["assigned_to"])
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def entity_exists_in_latest_run(entity_id: str) -> bool:
+    """Return ``True`` when ``entity_id`` was scored in the latest run.
+
+    Used by the Search tab to validate the typed ID before rendering the
+    profile. Reads ``eligibility_snapshot`` rather than ``v_account_explanation``
+    because the snapshot is the canonical "scored entities" pool — covers
+    every entity the model produced a prediction for, not just the in-scope
+    top-K. SHAP availability is a separate concern handled by the template
+    (which gates the driver block on ``account_top_shap_features``).
+    """
+    if not entity_id or not entity_id.strip():
+        return False
+    cfg = load_config()
+    df = _query(
+        cfg,
+        f"""
+        WITH latest_run AS (
+            SELECT scoring_run_id
+            FROM {cfg.fqn_prefix}.eligibility_snapshot
+            WHERE as_of_date = (
+                SELECT MAX(as_of_date) FROM {cfg.fqn_prefix}.eligibility_snapshot
+            )
+            LIMIT 1
+        )
+        SELECT 1 AS hit
+        FROM {cfg.fqn_prefix}.eligibility_snapshot s
+        JOIN latest_run lr ON s.scoring_run_id = lr.scoring_run_id
+        WHERE s.entity_id = :eid
+        LIMIT 1
+        """,
+        {"eid": entity_id.strip()},
+    )
+    return not df.empty
+
+
 def account_is_holdout(entity_id: str) -> bool:
     """Return ``True`` when ``entity_id`` is a holdout row.
 

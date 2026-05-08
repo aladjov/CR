@@ -23,15 +23,20 @@ class TestAssignButtonWiring:
         assert "_render_assign_button" in src
 
     def test_button_renders_inside_l4_block(self, src):
-        # The button must appear after the L4 header and before the
-        # customer_profile.render() call so it sits visually next to the
-        # profile, scoped to the selected entity.
-        l4_idx = src.find("Level 04 · Profile")
-        button_call_idx = src.find("_render_assign_button(str(_selected_entity)")
-        profile_render_idx = src.find("customer_profile.render()")
-        assert l4_idx > 0
-        assert button_call_idx > l4_idx
-        assert profile_render_idx > button_call_idx
+        # Inside the shared ``_render_l4_panel`` helper, the button must
+        # render after the L4 header and before customer_profile.render()
+        # so it sits visually next to the profile, scoped to the entity
+        # passed in by either tab.
+        helper_idx = src.find("def _render_l4_panel(")
+        assert helper_idx > 0
+        l4_idx = src.find("Level 04 · Profile", helper_idx)
+        button_idx = src.find("_render_assign_button(entity_id", helper_idx)
+        profile_idx = src.find(
+            "customer_profile.render(entity_id=entity_id)", helper_idx
+        )
+        assert l4_idx > helper_idx
+        assert button_idx > l4_idx
+        assert profile_idx > button_idx
 
     def test_button_invokes_toggle_with_email(self, src):
         assert "data.toggle_assignment(entity_id, me)" in src
@@ -68,9 +73,13 @@ class TestHeaderInlineLayout:
     def test_header_and_button_share_a_columns_row(self, src):
         # The button must render inside the same ``st.columns`` row as the
         # L4 header so it sits visually next to the title rather than
-        # taking a full-width band of its own.
-        assert "st.columns([6, 1]" in src
-        assert "_hdr_col" in src and "_btn_col" in src
+        # taking a full-width band of its own. Helper-scope locals
+        # ``hdr_col`` and ``btn_col`` are what the panel uses now.
+        helper_idx = src.find("def _render_l4_panel(")
+        assert helper_idx > 0
+        helper_block = src[helper_idx:src.find("\n\n\n", helper_idx) or len(src)]
+        assert "st.columns([6, 1]" in helper_block
+        assert "hdr_col" in helper_block and "btn_col" in helper_block
 
     def test_columns_are_vertically_centered(self, src):
         # Without vertical centering the button floats at the top of its
@@ -79,11 +88,15 @@ class TestHeaderInlineLayout:
         assert 'vertical_alignment="center"' in src
 
     def test_level_header_renders_inside_left_column(self, src):
-        # ``_level_header`` must be called inside ``with _hdr_col:`` so the
+        # ``_level_header`` must be called inside ``with hdr_col:`` so the
         # rendered HTML lands in the column, not full-width above it.
-        with_hdr_idx = src.find("with _hdr_col:")
-        level_header_idx = src.find("_level_header(\n            level=4")
-        with_btn_idx = src.find("with _btn_col:")
+        helper_idx = src.find("def _render_l4_panel(")
+        helper_block = src[helper_idx:src.find("\n\n\n", helper_idx) or len(src)]
+        with_hdr_idx = helper_block.find("with hdr_col:")
+        level_header_idx = helper_block.find(
+            "_level_header(\n            level=4"
+        )
+        with_btn_idx = helper_block.find("with btn_col:")
         assert with_hdr_idx > 0 and level_header_idx > with_hdr_idx
         assert with_btn_idx > level_header_idx
 
@@ -95,7 +108,10 @@ class TestHoldoutDisabled:
         assert "data.account_is_holdout(" in src
 
     def test_holdout_passed_to_button(self, src):
-        assert "_render_assign_button(str(_selected_entity), holdout=_is_holdout)" in src
+        # The helper computes is_holdout once and forwards it; both tabs
+        # benefit from the holdout policy without duplicating the lookup.
+        assert "_render_assign_button(entity_id, holdout=is_holdout)" in src
+        assert "data.account_is_holdout(entity_id)" in src
 
     def test_holdout_label_visible(self, src):
         # The label must explain *why* the button is disabled -- a plain

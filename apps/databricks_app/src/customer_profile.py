@@ -247,8 +247,16 @@ def _fetch_data_source(ds: DataSource, entity_id: str):
         conn.close()
 
 
-def render() -> None:
-    entity = state.get("selected_entity")
+def render(entity_id: str | None = None) -> None:
+    """Render the L4 customer profile.
+
+    When ``entity_id`` is provided the panel renders for that entity;
+    otherwise it falls back to ``selected_entity`` (the drill-down pick).
+    The parameterized form is what lets the Search tab share the same
+    template+enrichment pipeline without coupling its state to the
+    L1->L4 cascade.
+    """
+    entity = entity_id if entity_id is not None else state.get("selected_entity")
     if not entity:
         return
 
