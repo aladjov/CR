@@ -1280,15 +1280,12 @@ def load_aggregated():
 {% set post_groups = group_steps(config.post_shaping) %}
 {% if config.post_shaping %}
 def apply_post_shaping(df):
+    # Each per-column group is shallow on its own. A `localCheckpoint`
+    # between groups is unreliable on Spark Connect so we don't add one
+    # here; bronze typically stays well under the column count where
+    # the wide-schema attribute-resolver bug surfaces.
 {%- for func_name, steps in post_groups %}
     df = {{ func_name }}(df)
-{%- if not loop.last %}
-    # Plan-truncation checkpoint between post-shaping groups (defensive: a
-    # bronze entity with hundreds of post-shaping columns would otherwise
-    # build the same deep withColumn chain that crashes Spark Connect at
-    # gold scale).
-    df = df.localCheckpoint(eager=True)
-{%- endif %}
 {%- endfor %}
     return df
 
@@ -1708,15 +1705,12 @@ def merge_sources(bronze_outputs):
 {% set derived_groups = group_steps(config.silver.derived_columns) %}
 {% if config.silver.derived_columns %}
 def apply_derived_columns(df):
+    # Plan barrier between groups is the silver write's staging round-trip
+    # (in `run_silver` below) — `localCheckpoint` is unreliable on Spark
+    # Connect at this column count and just adds plan markers Catalyst has
+    # to walk later.
 {%- for func_name, steps in derived_groups %}
     df = {{ func_name }}(df)
-{%- if not loop.last %}
-    # Plan-truncation checkpoint between derived-column groups: each group
-    # chains per-column withColumn, so without periodic materialisation a
-    # wide-engagement silver run drifts into the same Catalyst-explosion
-    # failure mode the gold transforms hit.
-    df = df.localCheckpoint(eager=True)
-{%- endif %}
 {%- endfor %}
     return df
 
@@ -2165,8 +2159,12 @@ def _batch_one_hot_encode(df, cols, max_categories=100):
     cols = [c for c in cols if c in df.columns]
     if not cols:
         return df
+    # Narrow projection for the distinct collection — running agg+collect on
+    # the wide df (~3000 cols) trips Catalyst's adaptive-plan attribute-index
+    # resolver during execution. `df.select(*cols)` gives the agg a tiny
+    # schema to plan against; the resulting collect is cheap.
     distinct_exprs = [F.collect_set(F.col(c)).alias(c) for c in cols]
-    row = df.agg(*distinct_exprs).collect()[0]
+    row = df.select(*cols).agg(*distinct_exprs).collect()[0]
     one_hot_plan = {}
     label_encode_cols = []
     for c in cols:
@@ -2237,13 +2235,15 @@ def apply_scalings(df):
 
 {% set transform_groups = group_steps(config.gold.transformations) %}
 def apply_transformations(df):
+    # Each `apply_*_transforms` group below collapses N per-column
+    # withColumn into ONE chunked single-`select`, so the per-group plan
+    # is shallow. The hard plan barrier between transformations and the
+    # next stage (encoding) is the staging round-trip in `run_gold` —
+    # `localCheckpoint` here is unreliable on Spark Connect at this
+    # column count (often returns a logical-plan reference instead of
+    # forcing materialisation), so we don't rely on it.
 {%- for func_name, steps in transform_groups %}
     df = {{ func_name }}(df)
-{%- if not loop.last %}
-    # Plan-truncation checkpoint between groups: prevents Catalyst from walking
-    # an unbounded chain of Project nodes across all transform groups.
-    df = df.localCheckpoint(eager=True)
-{%- endif %}
 {%- endfor %}
     return df
 
@@ -2320,71 +2320,87 @@ def _register_feature_table(table_name, df):
             raise
         print(f"[GOLD] Feature table {table_name} already registered")
 
+def _stage_and_reload(df, table_name):
+    # Force a hard plan barrier by writing to Delta and reading back. Used
+    # between major gold stages because `localCheckpoint(eager=True)` is
+    # unreliable on Spark Connect at ~3000 columns — it often returns a
+    # logical-plan reference that still carries the original ExprIds
+    # rather than forcing executor-side materialisation, so the deep
+    # plan accumulates and Catalyst's column-index resolver crashes
+    # later. A Delta round-trip is unambiguous: the returned df's plan
+    # is a single read-from-table with stable, fresh attribute IDs.
+    (df.write.format("delta")
+        .mode("overwrite")
+        .option("overwriteSchema", "true")
+        .saveAsTable(table_name))
+    return spark.table(table_name)
+
 def run_gold():
     import time as _time
     _t0 = _time.monotonic()
-    df = spark.table(silver_table())
-    print(f"  load_silver: {_time.monotonic() - _t0:.1f}s")
-    _t1 = _time.monotonic()
-    df = apply_transformations(df)
-    # Plan-truncation checkpoint: after the transform groups (each itself a
-    # single Project node post-batching), materialise once before the encoding
-    # fan-out so Catalyst sees a fresh, shallow plan for the wide select that
-    # one-hot encoding emits.
-    df = df.localCheckpoint(eager=True)
-    print(f"  transformations: {_time.monotonic() - _t1:.1f}s")
-    _t2 = _time.monotonic()
-    df = apply_feature_selection(df)
-    print(f"  feature_selection: {_time.monotonic() - _t2:.1f}s")
-    _t3 = _time.monotonic()
-    df = apply_encodings(df)
-    df = df.localCheckpoint(eager=True)
-    print(f"  encodings: {_time.monotonic() - _t3:.1f}s")
-    _t4 = _time.monotonic()
-    df = apply_scalings(df)
-    print(f"  scalings: {_time.monotonic() - _t4:.1f}s")
-    if "as_of_date" in df.columns:
-        df = df.withColumnRenamed("as_of_date", TIMESTAMP_COLUMN)
-    elif "feature_timestamp" in df.columns:
-        df = df.withColumnRenamed("feature_timestamp", TIMESTAMP_COLUMN)
-    df = _cast_timestamp_ntz_to_timestamp(df)
-    from pyspark.sql.types import DoubleType, LongType, IntegerType, ShortType
-    _NUMERIC_TYPES = (DoubleType, LongType, IntegerType, ShortType)
-    _f32_exprs = [
-        F.col(c).cast("float").alias(c) if isinstance(df.schema[c].dataType, _NUMERIC_TYPES)
-        else F.col(c)
-        for c in df.columns
-    ]
-    df = df.select(*_f32_exprs)
     output_table = gold_table()
-    # Wide-schema barrier (~3000 columns): the cumulative AttributeReference
-    # map carried by the post-encoding selects (rename + ntz cast + f32 cast)
-    # trips Catalyst's adaptive-plan attribute-index resolver on the Delta
-    # write path with an opaque `IllegalArgumentException: Cannot find column
-    # index for attribute X#NNNN`. AQE is the optimisation phase that
-    # rewrites the plan and reassigns ExprIds at runtime, so disabling it
-    # for the write is the surgical fix. localCheckpoint is unreliable on
-    # Spark Connect at this width — often returns a logical-plan reference
-    # that still carries the original ExprIds rather than forcing
-    # materialisation — so we also stage to a temp Delta table and read
-    # back: the disk round-trip guarantees a fresh, shallow plan. Same
-    # class of bug the silver display narrow-projection workaround already
-    # documents.
-    _staging_table = output_table + "__staging"
-    _t5 = _time.monotonic()
+    _stg_xforms = output_table + "__stg_xforms"
+    _stg_enc = output_table + "__stg_enc"
+    _stg_final = output_table + "__stg_final"
+    # Disable AQE for the *entire* gold pipeline. AQE rewrites plans at
+    # runtime and reassigns ExprIds — at ~3000 columns this trips the
+    # column-index resolver with `IllegalArgumentException: Cannot find
+    # column index for attribute X#NNNN`. Setting it before silver read
+    # ensures every select-derived plan is built without AQE rewrites,
+    # not just the final write. Restored in `finally` below.
     _aqe_prev = spark.conf.get("spark.sql.adaptive.enabled", "true")
     spark.conf.set("spark.sql.adaptive.enabled", "false")
     try:
-        (df.write.format("delta")
-            .mode("overwrite")
-            .option("overwriteSchema", "true")
-            .saveAsTable(_staging_table))
-        df = spark.table(_staging_table)
+        df = spark.table(silver_table())
+        print(f"  load_silver: {_time.monotonic() - _t0:.1f}s")
+        _t1 = _time.monotonic()
+        df = apply_transformations(df)
+        # Hard plan barrier before the wide-schema agg+collect inside
+        # `_batch_one_hot_encode` — running that against the deep
+        # post-transform plan trips the same column-index resolver bug
+        # before encoding even begins. Staging here gives the agg a
+        # shallow input plan.
+        df = _stage_and_reload(df, _stg_xforms)
+        print(f"  transformations: {_time.monotonic() - _t1:.1f}s")
+        _t2 = _time.monotonic()
+        df = apply_feature_selection(df)
+        print(f"  feature_selection: {_time.monotonic() - _t2:.1f}s")
+        _t3 = _time.monotonic()
+        df = apply_encodings(df)
+        # Stage between encoding fan-out and scaling so the scaling agg
+        # plans against a fresh, post-encoding schema.
+        df = _stage_and_reload(df, _stg_enc)
+        print(f"  encodings: {_time.monotonic() - _t3:.1f}s")
+        _t4 = _time.monotonic()
+        df = apply_scalings(df)
+        print(f"  scalings: {_time.monotonic() - _t4:.1f}s")
+        if "as_of_date" in df.columns:
+            df = df.withColumnRenamed("as_of_date", TIMESTAMP_COLUMN)
+        elif "feature_timestamp" in df.columns:
+            df = df.withColumnRenamed("feature_timestamp", TIMESTAMP_COLUMN)
+        df = _cast_timestamp_ntz_to_timestamp(df)
+        from pyspark.sql.types import DoubleType, LongType, IntegerType, ShortType
+        _NUMERIC_TYPES = (DoubleType, LongType, IntegerType, ShortType)
+        _f32_exprs = [
+            F.col(c).cast("float").alias(c) if isinstance(df.schema[c].dataType, _NUMERIC_TYPES)
+            else F.col(c)
+            for c in df.columns
+        ]
+        df = df.select(*_f32_exprs)
+        # Final stage barrier so the output_table write plans against a
+        # shallow read (the rename + ntz cast + f32 cast otherwise stack
+        # back up before write).
+        _t5 = _time.monotonic()
+        df = _stage_and_reload(df, _stg_final)
         df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
+        print(f"  delta_write: {_time.monotonic() - _t5:.1f}s")
     finally:
         spark.conf.set("spark.sql.adaptive.enabled", _aqe_prev)
-        spark.sql(f"DROP TABLE IF EXISTS {_staging_table}")
-    print(f"  delta_write (staging round-trip): {_time.monotonic() - _t5:.1f}s")
+        for _t in (_stg_xforms, _stg_enc, _stg_final):
+            try:
+                spark.sql(f"DROP TABLE IF EXISTS {_t}")
+            except Exception:
+                pass
     del df
     from delta.tables import DeltaTable
     saved = spark.table(output_table)
