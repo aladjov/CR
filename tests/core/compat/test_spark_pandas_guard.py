@@ -364,3 +364,122 @@ def _collect_all_remaining_source_files() -> list[Path]:
 )
 def test_no_dangerous_spark_pandas_patterns_all_remaining(source_file: Path):
     _check_file(source_file)
+
+
+# ---------------------------------------------------------------------------
+# Chained-assignment guard
+# ---------------------------------------------------------------------------
+# `df[col] = expr` is fine in isolation but each occurrence on a
+# pyspark.pandas DataFrame adds a node to the lazy Spark plan. Sequences of
+# 4+ chained assignments on the same target inside one function balloon the
+# plan to the point where Spark Connect tries to checkpoint and may 404 on
+# a stale workspace path (root-cause of the spschurn-fa23ccd0 account
+# failure in `_derive_universal_features`). Replace such sequences with a
+# single batched `df = df.assign(**dict)` call (one Spark plan rewrite) or
+# build a Spark-native variant that emits a single `select(*)`.
+#
+# Threshold = 4: the original bug was 5+9 chained assigns; benign helpers
+# (e.g. `df[col] = as_tz_naive(df[col])` shape-preserving normalization)
+# stay well under.
+
+import ast as _ast
+
+_CHAINED_ASSIGN_THRESHOLD = 4
+
+
+def _max_consecutive_subscript_assigns(func: _ast.FunctionDef) -> tuple[int, str | None, int]:
+    """Walk a function body and return (max_consecutive, target_name, line).
+
+    Counts the longest run of consecutive top-level statements of the form
+    ``<target>[<key>] = <value>`` where ``<target>`` is the same variable.
+    Any non-matching statement (other assignment, call, control flow) resets
+    the counter.
+    """
+    best_count = 0
+    best_target = None
+    best_line = -1
+
+    def _walk(body: list[_ast.stmt]) -> None:
+        nonlocal best_count, best_target, best_line
+        run_target: str | None = None
+        run_count = 0
+        run_line = -1
+        for stmt in body:
+            target_name = None
+            if isinstance(stmt, _ast.Assign) and len(stmt.targets) == 1:
+                tgt = stmt.targets[0]
+                if (
+                    isinstance(tgt, _ast.Subscript)
+                    and isinstance(tgt.value, _ast.Name)
+                ):
+                    target_name = tgt.value.id
+            if target_name is not None and target_name == run_target:
+                run_count += 1
+            elif target_name is not None:
+                run_target = target_name
+                run_count = 1
+                run_line = stmt.lineno
+            else:
+                run_target = None
+                run_count = 0
+            if run_count > best_count:
+                best_count = run_count
+                best_target = run_target
+                best_line = run_line
+            # Recurse into nested bodies to catch chained assigns inside ifs.
+            for child in _ast.iter_child_nodes(stmt):
+                if isinstance(child, _ast.AST):
+                    nested_body = getattr(child, "body", None)
+                    if isinstance(nested_body, list):
+                        _walk(nested_body)
+                    nested_orelse = getattr(child, "orelse", None)
+                    if isinstance(nested_orelse, list):
+                        _walk(nested_orelse)
+
+    _walk(func.body)
+    return best_count, best_target, best_line
+
+
+def _check_chained_assigns(source_file: Path) -> None:
+    try:
+        tree = _ast.parse(source_file.read_text())
+    except SyntaxError:
+        return  # Defer to other tests; we only check parseable modules.
+    violations: list[str] = []
+    for node in _ast.walk(tree):
+        if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+            count, target, line = _max_consecutive_subscript_assigns(node)
+            if count >= _CHAINED_ASSIGN_THRESHOLD:
+                violations.append(
+                    f"  Line {line}: function `{node.name}` has {count} consecutive "
+                    f"`{target}[...] = expr` mutations. On pyspark.pandas DataFrames "
+                    f"each assignment grows the Spark plan; sequences this long can "
+                    f"trigger checkpoint-path errors (see spschurn-fa23ccd0 account "
+                    f"failure). Batch into a single `{target} = {target}.assign(**dict)` "
+                    f"call, or build a Spark-native variant emitting one `select(*)`."
+                )
+    assert not violations, (
+        f"\n{source_file.name} has chained subscript-assignment runs that ballooned "
+        f"the Spark plan in production:\n" + "\n".join(violations)
+    )
+
+
+@pytest.mark.parametrize(
+    "source_file", _collect_profiling_files(), ids=lambda p: p.name,
+)
+def test_no_chained_subscript_assigns_profiling(source_file: Path):
+    _check_chained_assigns(source_file)
+
+
+@pytest.mark.parametrize(
+    "source_file", _collect_features_files(), ids=lambda p: p.name,
+)
+def test_no_chained_subscript_assigns_features(source_file: Path):
+    _check_chained_assigns(source_file)
+
+
+@pytest.mark.parametrize(
+    "source_file", _collect_temporal_files(), ids=lambda p: p.name,
+)
+def test_no_chained_subscript_assigns_temporal(source_file: Path):
+    _check_chained_assigns(source_file)

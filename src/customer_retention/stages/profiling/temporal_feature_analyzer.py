@@ -679,13 +679,11 @@ class TemporalFeatureAnalyzer:
         if total_events == 0 or total_non_events == 0:
             return 0.0
 
-        grouped["pct_events"] = grouped["events"] / total_events
-        grouped["pct_non_events"] = grouped["non_events"] / total_non_events
-        grouped["pct_events"] = grouped["pct_events"].replace(0, 0.0001)
-        grouped["pct_non_events"] = grouped["pct_non_events"].replace(0, 0.0001)
-        grouped["woe"] = np.log(grouped["pct_events"] / grouped["pct_non_events"])
-        grouped["iv"] = (grouped["pct_events"] - grouped["pct_non_events"]) * grouped["woe"]
-        return float(grouped["iv"].sum())
+        pct_events = (grouped["events"] / total_events).replace(0, 0.0001)
+        pct_non_events = (grouped["non_events"] / total_non_events).replace(0, 0.0001)
+        woe = np.log(pct_events / pct_non_events)
+        iv = (pct_events - pct_non_events) * woe
+        return float(iv.sum())
 
     def _calculate_ks(self, feature: pd.Series, target: pd.Series) -> Tuple[float, float]:
         df_ks = native_pd.DataFrame({"feature": feature, "target": target}).dropna()

@@ -100,11 +100,12 @@ class TemporalTargetAnalyzer:
             })
             from customer_retention.core.compat.spark_backend import _as_pandas_api
             return _as_pandas_api(spark_df)
-        df_clean['_year'] = df_clean[datetime_col].dt.year
-        df_clean['_month'] = df_clean[datetime_col].dt.month
-        df_clean['_quarter'] = df_clean[datetime_col].dt.quarter
-        df_clean['_dow'] = df_clean[datetime_col].dt.dayofweek
-        return df_clean
+        return df_clean.assign(
+            _year=df_clean[datetime_col].dt.year,
+            _month=df_clean[datetime_col].dt.month,
+            _quarter=df_clean[datetime_col].dt.quarter,
+            _dow=df_clean[datetime_col].dt.dayofweek,
+        )
 
     def _calculate_period_stats(
         self,

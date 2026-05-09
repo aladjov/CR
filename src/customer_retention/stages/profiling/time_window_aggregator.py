@@ -745,15 +745,23 @@ def derive_extra_datetime_features(
         dow_name = f"{col}_dow"
         is_weekend_name = f"{col}_is_weekend"
 
-        df[delta_hours_name] = timestamp_diff_seconds(parsed, time_series) / 3600
-        df[hour_name] = parsed.dt.hour.astype("Float64")
-        df[dow_name] = parsed.dt.dayofweek.astype("Float64")
-        df[is_weekend_name] = (parsed.dt.dayofweek >= 5).astype("Float64")
+        new_cols = {
+            delta_hours_name: timestamp_diff_seconds(parsed, time_series) / 3600,
+            hour_name: parsed.dt.hour.astype("Float64"),
+            dow_name: parsed.dt.dayofweek.astype("Float64"),
+            is_weekend_name: (parsed.dt.dayofweek >= 5).astype("Float64"),
+        }
 
         if col in mask_set:
             future_mask = parsed > time_series
             for name in [delta_hours_name, hour_name, dow_name, is_weekend_name]:
-                df[name] = df[name].where(~future_mask)
+                new_cols[name] = new_cols[name].where(~future_mask)
+
+        # Single batched assign — one Spark plan rewrite for pyspark.pandas
+        # callers, one ``__setitem__`` call for native pandas. Replaces 4-8
+        # chained ``df[col] = expr`` mutations that ballooned the Spark plan
+        # under pyspark.pandas (banned pattern, see core.compat).
+        df = df.assign(**new_cols)
 
     return df, new_columns
 
@@ -819,6 +827,43 @@ def detect_milestone_pairs(datetime_columns: list[str]) -> list[tuple[str, str]]
     return pairs
 
 
+def _universal_feature_names(col: str) -> dict[str, str]:
+    return {
+        "days_since": f"days_since_{col}",
+        "days_until": f"days_until_{col}",
+        "log1p": f"log1p_days_since_{col}",
+        "is_missing": f"is_missing_{col}",
+        "is_future": f"is_future_{col}",
+    }
+
+
+def _milestone_feature_names(start_col: str, end_col: str) -> tuple[dict[str, str], str]:
+    prefix = _common_prefix(start_col, end_col)
+    names = {
+        "tenure": f"tenure_days_{start_col}",
+        "dtm": f"days_to_milestone_{end_col}",
+        "w7": f"within_7d_{end_col}",
+        "w30": f"within_30d_{end_col}",
+        "w90": f"within_90d_{end_col}",
+        "bucket": f"milestone_bucket_{end_col}",
+        "progress": f"contract_progress_{prefix}",
+    }
+    return names, prefix
+
+
+def _entity_datetime_feature_names(
+    datetime_columns: list[str],
+    milestone_pairs: Optional[list[tuple[str, str]]] = None,
+) -> list[str]:
+    out: list[str] = []
+    for col in datetime_columns:
+        out.extend(_universal_feature_names(col).values())
+    for start_col, end_col in (milestone_pairs or []):
+        names, _ = _milestone_feature_names(start_col, end_col)
+        out.extend(names.values())
+    return out
+
+
 def derive_entity_datetime_features(
     df: DataFrame, time_column: str, datetime_columns: list[str],
     milestone_pairs: Optional[list[tuple[str, str]]] = None,
@@ -826,67 +871,76 @@ def derive_entity_datetime_features(
 ) -> tuple[DataFrame, list[str]]:
     if not datetime_columns:
         return df, []
+
+    mask_set = set(mask_future_columns) if mask_future_columns else set()
+    new_columns = _entity_datetime_feature_names(datetime_columns, milestone_pairs)
+
+    if _is_spark_pandas(df) or _is_native_spark_df(df):
+        return _derive_entity_datetime_features_spark(
+            df, time_column, datetime_columns, milestone_pairs, mask_set,
+        ), new_columns
+
     df = df.copy()
     time_series = safe_to_datetime(df[time_column], errors="coerce")
-    mask_set = set(mask_future_columns) if mask_future_columns else set()
-    new_columns: list[str] = []
 
     for col in datetime_columns:
         parsed = safe_to_datetime(df[col], errors="coerce")
-        cols = _derive_universal_features(df, time_series, col, parsed, mask_set)
-        new_columns.extend(cols)
+        df = _derive_universal_features(df, time_series, col, parsed, mask_set)
 
     for start_col, end_col in (milestone_pairs or []):
         start_parsed = safe_to_datetime(df[start_col], errors="coerce")
         end_parsed = safe_to_datetime(df[end_col], errors="coerce")
-        cols = _derive_milestone_features(
+        df = _derive_milestone_features(
             df, time_series, start_col, end_col, start_parsed, end_parsed, mask_set,
         )
-        new_columns.extend(cols)
 
     return df, new_columns
 
 
 def _derive_universal_features(
     df: DataFrame, time_series, col: str, parsed, mask_set: set,
-) -> list[str]:
+) -> DataFrame:
+    """Compute the 5 universal datetime features for ``col`` and return a new
+    DataFrame with them attached.
+
+    Returns the augmented DataFrame instead of mutating in place so that one
+    batched ``df.assign(**dict)`` is emitted per call (single Spark plan
+    rewrite under pyspark.pandas) rather than 5-9 chained ``df[col] = expr``
+    mutations. Chained assignment on pyspark.pandas DataFrames balloons the
+    Spark plan and was the cause of the SparkConnect 404 on the ``account``
+    dataset in spschurn-fa23ccd0.
+    """
     delta = timestamp_diff_days(time_series, parsed)
-    names = {
-        "days_since": f"days_since_{col}",
-        "days_until": f"days_until_{col}",
-        "log1p": f"log1p_days_since_{col}",
-        "is_missing": f"is_missing_{col}",
-        "is_future": f"is_future_{col}",
+    names = _universal_feature_names(col)
+
+    new_cols = {
+        names["days_since"]: delta.astype("Float64"),
+        names["days_until"]: (-delta).astype("Float64"),
+        names["log1p"]: np.log1p(delta.abs()).astype("Float64"),
+        names["is_missing"]: parsed.isna().astype("Float64"),
+        names["is_future"]: (parsed > time_series).astype("Float64"),
     }
-    df[names["days_since"]] = delta.astype("Float64")
-    df[names["days_until"]] = (-delta).astype("Float64")
-    df[names["log1p"]] = np.log1p(delta.abs()).astype("Float64")
-    df[names["is_missing"]] = parsed.isna().astype("Float64")
-    df[names["is_future"]] = (parsed > time_series).astype("Float64")
 
     if col in mask_set:
         future_mask = parsed > time_series
-        for name in names.values():
-            if name != names["is_missing"]:
-                df[name] = df[name].where(~future_mask)
+        for name in (
+            names["days_since"], names["days_until"],
+            names["log1p"], names["is_future"],
+        ):
+            new_cols[name] = new_cols[name].where(~future_mask)
 
-    col_names = list(names.values())
-    return col_names
+    return df.assign(**new_cols)
 
 
 def _derive_milestone_features(
     df: DataFrame, time_series, start_col: str, end_col: str,
     start_parsed, end_parsed, mask_set: set,
-) -> list[str]:
-    prefix = _common_prefix(start_col, end_col)
-
-    tenure_name = f"tenure_days_{start_col}"
-    dtm_name = f"days_to_milestone_{end_col}"
-    w7_name = f"within_7d_{end_col}"
-    w30_name = f"within_30d_{end_col}"
-    w90_name = f"within_90d_{end_col}"
-    bucket_name = f"milestone_bucket_{end_col}"
-    progress_name = f"contract_progress_{prefix}"
+) -> DataFrame:
+    """Compute the 7 milestone-pair features and return a new DataFrame with
+    them attached. See ``_derive_universal_features`` for why this returns a
+    new frame instead of mutating in place.
+    """
+    names, _ = _milestone_feature_names(start_col, end_col)
 
     tenure = timestamp_diff_days(time_series, start_parsed).astype("Float64")
     dtm = timestamp_diff_days(end_parsed, time_series).astype("Float64")
@@ -896,23 +950,138 @@ def _derive_milestone_features(
     edges = [-np.inf, -90, -30, -7, 0, 7, 30, 90, np.inf]
     bucket = cut(dtm, bins=edges, labels=False).astype("Float64")
 
-    df[tenure_name] = tenure
-    df[dtm_name] = dtm
-    df[w7_name] = (dtm.abs() <= 7).astype("Float64")
-    df[w30_name] = (dtm.abs() <= 30).astype("Float64")
-    df[w90_name] = (dtm.abs() <= 90).astype("Float64")
-    df[bucket_name] = bucket
-    df[progress_name] = progress
-
-    col_names = [tenure_name, dtm_name, w7_name, w30_name, w90_name, bucket_name, progress_name]
+    new_cols = {
+        names["tenure"]: tenure,
+        names["dtm"]: dtm,
+        names["w7"]: (dtm.abs() <= 7).astype("Float64"),
+        names["w30"]: (dtm.abs() <= 30).astype("Float64"),
+        names["w90"]: (dtm.abs() <= 90).astype("Float64"),
+        names["bucket"]: bucket,
+        names["progress"]: progress,
+    }
 
     for col, parsed in [(start_col, start_parsed), (end_col, end_parsed)]:
         if col in mask_set:
             future_mask = parsed > time_series
-            for name in col_names:
-                df[name] = df[name].where(~future_mask)
+            for name in list(new_cols):
+                new_cols[name] = new_cols[name].where(~future_mask)
 
-    return col_names
+    return df.assign(**new_cols)
+
+
+def _derive_entity_datetime_features_spark(
+    df: Any, time_column: str, datetime_columns: list[str],
+    milestone_pairs: Optional[list[tuple[str, str]]], mask_set: set,
+) -> Any:
+    """Spark-native variant of :func:`derive_entity_datetime_features`.
+
+    Builds every per-column / per-pair feature expression upfront and applies
+    them as a single ``select(*)`` so the resulting Spark plan has one node
+    per call instead of one per column-add. Mirrors
+    :func:`_derive_extra_datetime_features_spark`.
+    """
+    import pyspark.sql.functions as F  # noqa: N812
+
+    from customer_retention.core.compat.spark_backend import _as_pandas_api
+
+    was_pandas_api = not _is_native_spark_df(df)
+    spark_df = as_spark_df(df) if was_pandas_api else df
+
+    time_ts = F.expr(f"try_to_timestamp(`{time_column}`)")
+    time_epoch = F.unix_timestamp(time_ts).cast("double")
+    null_d = F.lit(None).cast("double")
+    seconds_per_day = F.lit(86400.0)
+
+    derived_names = set(_entity_datetime_feature_names(datetime_columns, milestone_pairs))
+    select_exprs: list[Any] = [F.col(c) for c in spark_df.columns if c not in derived_names]
+
+    for col in datetime_columns:
+        parsed_ts = F.expr(f"try_to_timestamp(`{col}`)")
+        parsed_epoch = F.unix_timestamp(parsed_ts).cast("double")
+        delta_days = ((time_epoch - parsed_epoch) / seconds_per_day).cast("double")
+        days_since = delta_days
+        days_until = (-delta_days).cast("double")
+        log1p_val = F.log1p(F.abs(delta_days)).cast("double")
+        is_missing = F.when(parsed_ts.isNull(), F.lit(1.0)).otherwise(F.lit(0.0))
+        is_future = F.when(parsed_ts > time_ts, F.lit(1.0)).otherwise(F.lit(0.0))
+
+        if col in mask_set:
+            future_mask = parsed_ts > time_ts
+            days_since = F.when(future_mask, null_d).otherwise(days_since)
+            days_until = F.when(future_mask, null_d).otherwise(days_until)
+            log1p_val = F.when(future_mask, null_d).otherwise(log1p_val)
+            is_future = F.when(future_mask, null_d).otherwise(is_future)
+
+        names = _universal_feature_names(col)
+        select_exprs.extend([
+            days_since.alias(names["days_since"]),
+            days_until.alias(names["days_until"]),
+            log1p_val.alias(names["log1p"]),
+            is_missing.alias(names["is_missing"]),
+            is_future.alias(names["is_future"]),
+        ])
+
+    for start_col, end_col in (milestone_pairs or []):
+        start_ts = F.expr(f"try_to_timestamp(`{start_col}`)")
+        end_ts = F.expr(f"try_to_timestamp(`{end_col}`)")
+        start_epoch = F.unix_timestamp(start_ts).cast("double")
+        end_epoch = F.unix_timestamp(end_ts).cast("double")
+
+        tenure = ((time_epoch - start_epoch) / seconds_per_day).cast("double")
+        dtm = ((end_epoch - time_epoch) / seconds_per_day).cast("double")
+        duration = ((end_epoch - start_epoch) / seconds_per_day).cast("double")
+
+        ratio = F.when(duration != F.lit(0.0), tenure / duration).otherwise(null_d)
+        progress = F.when(ratio < F.lit(0.0), F.lit(0.0)) \
+            .when(ratio > F.lit(2.0), F.lit(2.0)) \
+            .otherwise(ratio).cast("double")
+
+        bucket = (
+            F.when(dtm.isNull(), null_d)
+            .when(dtm < F.lit(-90.0), F.lit(0.0))
+            .when(dtm < F.lit(-30.0), F.lit(1.0))
+            .when(dtm < F.lit(-7.0), F.lit(2.0))
+            .when(dtm < F.lit(0.0), F.lit(3.0))
+            .when(dtm < F.lit(7.0), F.lit(4.0))
+            .when(dtm < F.lit(30.0), F.lit(5.0))
+            .when(dtm < F.lit(90.0), F.lit(6.0))
+            .otherwise(F.lit(7.0))
+        ).cast("double")
+
+        w7 = F.when(F.abs(dtm) <= F.lit(7.0), F.lit(1.0)).otherwise(F.lit(0.0))
+        w30 = F.when(F.abs(dtm) <= F.lit(30.0), F.lit(1.0)).otherwise(F.lit(0.0))
+        w90 = F.when(F.abs(dtm) <= F.lit(90.0), F.lit(1.0)).otherwise(F.lit(0.0))
+
+        if start_col in mask_set or end_col in mask_set:
+            masks = []
+            if start_col in mask_set:
+                masks.append(start_ts > time_ts)
+            if end_col in mask_set:
+                masks.append(end_ts > time_ts)
+            future_mask = masks[0]
+            for m in masks[1:]:
+                future_mask = future_mask | m
+            tenure = F.when(future_mask, null_d).otherwise(tenure)
+            dtm = F.when(future_mask, null_d).otherwise(dtm)
+            w7 = F.when(future_mask, null_d).otherwise(w7)
+            w30 = F.when(future_mask, null_d).otherwise(w30)
+            w90 = F.when(future_mask, null_d).otherwise(w90)
+            bucket = F.when(future_mask, null_d).otherwise(bucket)
+            progress = F.when(future_mask, null_d).otherwise(progress)
+
+        names, _ = _milestone_feature_names(start_col, end_col)
+        select_exprs.extend([
+            tenure.alias(names["tenure"]),
+            dtm.alias(names["dtm"]),
+            w7.alias(names["w7"]),
+            w30.alias(names["w30"]),
+            w90.alias(names["w90"]),
+            bucket.alias(names["bucket"]),
+            progress.alias(names["progress"]),
+        ])
+
+    result = spark_df.select(*select_exprs)
+    return _as_pandas_api(result) if was_pandas_api else result
 
 
 def _common_prefix(a: str, b: str) -> str:
