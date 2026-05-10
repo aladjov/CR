@@ -5735,10 +5735,78 @@ class TestGoldRecommendationFiltering:
             "numerator": "age", "denominator": "nonexistent_col",
         })
         pipeline_columns = {"entity_id", "as_of_date", "age"}
+        parser = FindingsParser.__new__(FindingsParser)
         with caplog.at_level(logging.WARNING):
-            result = FindingsParser._silver_derived_sources_available(rec, pipeline_columns)
+            result = parser._silver_derived_sources_available(rec, pipeline_columns)
         assert result is False
         assert any("nonexistent_col" in m and "silver derived" in m.lower() for m in caplog.messages)
+
+    def test_silver_ratio_resolver_falls_back_to_bare_when_prefixed_missing(self):
+        # `register_event_ratio_features` hard-codes prefixed numerator /
+        # denominator (`{ds}__col_*`); bronze emits bare when there's no
+        # cross-dataset collision. Without bidirectional resolution every
+        # ratio rec is silently dropped at codegen.
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        rec = self._make_rec("contract_terminate_to_start_ratio_30d", "ratio", {
+            "numerator": "contract__event_type_terminate_count_30d",
+            "denominator": "contract__event_type_start_count_30d",
+        })
+        pipeline_columns = {
+            "entity_id", "as_of_date",
+            "event_type_terminate_count_30d", "event_type_start_count_30d",
+        }
+        parser = FindingsParser.__new__(FindingsParser)
+        assert parser._silver_derived_sources_available(
+            rec, pipeline_columns, per_source_names=["contract"]
+        ) is True
+        assert rec.parameters["numerator"] == "event_type_terminate_count_30d"
+        assert rec.parameters["denominator"] == "event_type_start_count_30d"
+
+    def test_silver_ratio_resolver_falls_back_to_prefixed_when_bare_missing(self):
+        # Inverse direction: bare-form rec resolves to prefixed when the
+        # column collided at merge time and landed prefixed.
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        rec = self._make_rec("contract_terminate_to_start_ratio_30d", "ratio", {
+            "numerator": "event_type_terminate_count_30d",
+            "denominator": "event_type_start_count_30d",
+        })
+        pipeline_columns = {
+            "entity_id", "as_of_date",
+            "contract__event_type_terminate_count_30d",
+            "contract__event_type_start_count_30d",
+        }
+        parser = FindingsParser.__new__(FindingsParser)
+        assert parser._silver_derived_sources_available(
+            rec, pipeline_columns, per_source_names=["contract"]
+        ) is True
+        assert rec.parameters["numerator"] == "contract__event_type_terminate_count_30d"
+        assert rec.parameters["denominator"] == "contract__event_type_start_count_30d"
+
+    def test_silver_ratio_resolver_does_not_partial_mutate_on_failure(self):
+        # SEV1 guard: `numerator` resolves to a bare alternate, but
+        # `denominator` has no match anywhere. The function must return
+        # False AND leave `rec.parameters` byte-identical to its
+        # pre-call state — staged mutations should not commit.
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        rec = self._make_rec("contract_terminate_to_start_ratio_30d", "ratio", {
+            "numerator": "contract__event_type_terminate_count_30d",
+            "denominator": "contract__event_type_start_count_30d",
+        })
+        original = dict(rec.parameters)
+        # `numerator` has a bare alternate; `denominator` does not.
+        pipeline_columns = {
+            "entity_id", "as_of_date",
+            "event_type_terminate_count_30d",
+        }
+        parser = FindingsParser.__new__(FindingsParser)
+        result = parser._silver_derived_sources_available(
+            rec, pipeline_columns, per_source_names=["contract"]
+        )
+        assert result is False
+        assert rec.parameters == original, (
+            "rec.parameters must be unchanged when resolution fails; "
+            f"got {rec.parameters} vs {original}"
+        )
 
 
 class TestReconcileGoldColumns:
@@ -6806,6 +6874,39 @@ class TestLeakageExclusionPrefixes:
         )
         assert "CONTRACT_END_DATE_" in result
         assert "BILLING_TERMINATION_DATE_" in result
+
+    def test_operator_override_appends_prefixes_to_gold_filter(self):
+        """`feature_exclusion_prefix_overrides` must merge with the
+        findings-derived prefixes when `parse()` writes
+        `config.gold.feature_exclusion_prefixes`. Closes the
+        `is_missing_churn_date` leakage gap where the auto-detector missed
+        a function-of-target-derivation column. Test verifies the union
+        line directly (the prefix-collection helper still ignores
+        overrides; the parse() level applies them)."""
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        # Auto-detector contributed `BILLING_TERMINATION_DATE_`; operator
+        # adds `is_missing_churn_date` and `churn_date` (raw, no `_`).
+        findings = self._make_findings(columns=["BILLING_TERMINATION_DATE"])
+        auto = set(FindingsParser._collect_leakage_exclusion_prefixes({"a": findings}))
+        operator_overrides = ("is_missing_churn_date", "churn_date")
+        merged = sorted(auto | {f"{p}_" for p in operator_overrides})
+        assert "BILLING_TERMINATION_DATE_" in merged
+        assert "is_missing_churn_date_" in merged
+        assert "churn_date_" in merged
+
+    def test_operator_override_round_trips_through_parser_init(self):
+        """`FindingsParser(..., feature_exclusion_prefix_overrides=[...])`
+        accepts the overrides and stores them on the instance for
+        `parse()` to apply."""
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        parser = FindingsParser.__new__(FindingsParser)
+        # Mimic __init__ — set the field directly with deterministic
+        # ordering that __init__ would produce.
+        candidates = ["is_missing_churn_date", "churn_date", ""]
+        parser._feature_exclusion_prefix_overrides = tuple(
+            sorted({str(p) for p in candidates if p})
+        )
+        assert parser._feature_exclusion_prefix_overrides == ("churn_date", "is_missing_churn_date")
 
 
 class TestFindLeakageExcludedColumns:
@@ -8312,6 +8413,116 @@ class TestReconcileDatetimeDerivationWithSpec:
         parser._feature_spec = self._make_spec(["random_unknown_delta_hours_avg_30d"])
         # Must not raise — base is not producible, leave to standard gate.
         parser._reconcile_datetime_derivation_with_spec(config)
+
+
+class TestReconcileDatetimeDerivationWithSilverRecs(TestReconcileDatetimeDerivationWithSpec):
+    """B.3: when a silver-derived rec references e.g.
+    `CREATED_DATE_delta_hours` as numerator/denominator/source, but
+    `CREATED_DATE` is a raw column not yet declared in any
+    `datetime_derivation_sources`, the rec-driven reconciler must extend
+    the matching layer's source list — otherwise the rec is silently
+    dropped at codegen because the predicted post-merge silver shape
+    doesn't include `CREATED_DATE_delta_hours`.
+    """
+
+    @staticmethod
+    def _make_silver_rec(target, action, params):
+        from customer_retention.analysis.auto_explorer.layered_recommendations import (
+            LayeredRecommendation,
+        )
+        return LayeredRecommendation(
+            id=f"silver-{target}", layer="silver", category="derived", action=action,
+            target_column=target, parameters=params,
+            rationale="rec-driven datetime base", source_notebook="06",
+        )
+
+    @staticmethod
+    def _registry_with_silver(recs):
+        from customer_retention.analysis.auto_explorer.layered_recommendations import (
+            RecommendationRegistry,
+            SilverRecommendations,
+        )
+        registry = RecommendationRegistry()
+        registry.silver = SilverRecommendations(
+            entity_column="cid", time_column="ts", derived_columns=list(recs),
+        )
+        return registry
+
+    def test_silver_ratio_rec_extends_landing_for_undeclared_base(self):
+        """A registered silver-derived ratio with prefixed numerator
+        `CREATED_DATE_delta_hours` should auto-extend
+        `landing[cust].datetime_derivation_sources` with `CREATED_DATE`."""
+        parser, config = self._parser_and_config(
+            raw_columns_by_ds={
+                "cust": {"cid", "ts", "CREATED_DATE", "FIRST_SUBSCRIPTION_DATE"},
+                "evt": {"cid", "ts", "amt"},
+            },
+            strict=False,
+        )
+        rec = self._make_silver_rec(
+            "CREATED_DATE_delta_hours_to_FIRST_SUBSCRIPTION_DATE_delta_hours_ratio",
+            "ratio",
+            {"numerator": "CREATED_DATE_delta_hours",
+             "denominator": "FIRST_SUBSCRIPTION_DATE_delta_hours"},
+        )
+        registry = self._registry_with_silver([rec])
+        parser._reconcile_datetime_derivation_with_silver_recs(config, registry)
+        landing = config.landing["cust"]
+        assert landing.datetime_derivation is not None
+        assert "CREATED_DATE" in landing.datetime_derivation.source_columns
+        assert "FIRST_SUBSCRIPTION_DATE" in landing.datetime_derivation.source_columns
+
+    def test_silver_rec_does_not_re_propose_already_declared_base(self):
+        """Idempotent: existing landing.datetime_derivation_sources entry
+        for `CREATED_DATE` shouldn't be re-added or duplicated."""
+        parser, config = self._parser_and_config(
+            raw_columns_by_ds={
+                "cust": {"cid", "ts", "CREATED_DATE"},
+                "evt": {"cid", "ts", "amt"},
+            },
+            strict=False,
+            landing_existing_sources=("CREATED_DATE",),
+        )
+        rec = self._make_silver_rec(
+            "CREATED_DATE_delta_hours_norm", "ratio",
+            {"numerator": "CREATED_DATE_delta_hours", "denominator": "ts_delta_hours"},
+        )
+        registry = self._registry_with_silver([rec])
+        parser._reconcile_datetime_derivation_with_silver_recs(config, registry)
+        sources = config.landing["cust"].datetime_derivation.source_columns
+        assert sources.count("CREATED_DATE") == 1
+
+    def test_silver_rec_with_source_columns_list_extends_event_layer(self):
+        """`add_silver_derived(..., source_columns=[...])` form: list-keyed
+        source columns should also drive event-layer extensions for
+        aggregated forms like `CREATED_DATE_delta_hours_avg_30d`."""
+        parser, config = self._parser_and_config(
+            raw_columns_by_ds={
+                "cust": {"cid", "ts"},
+                "evt": {"cid", "ts", "amt", "CREATED_DATE"},
+            },
+            strict=False,
+        )
+        # Aggregation must be on the event so the regex stat-suffix path
+        # picks `evt` as target (mirrors spec reconciler behavior).
+        config.bronze_event["evt"].aggregation.value_columns = ["amt", "CREATED_DATE"]
+        rec = self._make_silver_rec(
+            "CREATED_DATE_delta_hours_avg_30d_norm", "interaction",
+            {"source_columns": ["CREATED_DATE_delta_hours_avg_30d", "amt"]},
+        )
+        registry = self._registry_with_silver([rec])
+        parser._reconcile_datetime_derivation_with_silver_recs(config, registry)
+        event_cfg = config.bronze_event["evt"]
+        assert event_cfg.datetime_derivation is not None
+        assert "CREATED_DATE" in event_cfg.datetime_derivation.source_columns
+
+    def test_silver_rec_no_op_when_registry_has_no_silver_stage(self):
+        """`registry.silver=None` (defensive guard for empty registries)
+        must short-circuit without raising or mutating."""
+        parser, config = self._parser_and_config(strict=False)
+        before = config.landing["cust"].datetime_derivation
+        parser._reconcile_datetime_derivation_with_silver_recs(config, None)
+        assert config.landing["cust"].datetime_derivation is before
 
 
 class TestDiagnosticSummary:

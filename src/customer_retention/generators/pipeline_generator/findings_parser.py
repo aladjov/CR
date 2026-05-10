@@ -242,6 +242,7 @@ class FindingsParser:
         landing_filter_overrides: Optional[Dict[str, str]] = None,
         landing_drop_columns_overrides: Optional[Dict[str, Iterable[str]]] = None,
         strict_datetime_parity: bool = False,
+        feature_exclusion_prefix_overrides: Optional[Iterable[str]] = None,
     ):
         self._findings_dir = Path(findings_dir)
         self._namespace = namespace
@@ -314,6 +315,16 @@ class FindingsParser:
         # any silent schema patch. The runtime gate in NB07/NB08 still
         # catches the missing column at training time either way.
         self._strict_datetime_parity: bool = bool(strict_datetime_parity)
+        # Operator-side leakage allowlist appended to the prefixes computed
+        # from per-dataset findings' `excluded_leaking_features`. Each entry
+        # is a base column name; the gold filter strips it and any
+        # `<base>_*` derivation. Use this for leakage features that the
+        # exploration's automatic detector missed (e.g. functions of the
+        # target derivation column like `is_missing_churn_date` whose
+        # signal collapses onto the target).
+        self._feature_exclusion_prefix_overrides: Tuple[str, ...] = tuple(
+            sorted({str(p) for p in (feature_exclusion_prefix_overrides or []) if p})
+        )
 
     @property
     def user_extensions_disabled(self) -> bool:
@@ -394,7 +405,16 @@ class FindingsParser:
             self._apply_event_recommendations(config, recommendations_registry)
         self._apply_landing_overrides(config)
         self._apply_sample_filters(config)
-        config.gold.feature_exclusion_prefixes = self._collect_leakage_exclusion_prefixes(source_findings, multi_dataset)
+        # `getattr` default mirrors the constructor default (empty tuple).
+        # Tests that instantiate via `FindingsParser.__new__(FindingsParser)`
+        # (skipping `__init__`) won't have the field set; default to an
+        # empty tuple so codegen continues without imposing any operator
+        # exclusion. Same defensive pattern as `_strict_datetime_parity`
+        # at the spec reconciler.
+        config.gold.feature_exclusion_prefixes = sorted(
+            set(self._collect_leakage_exclusion_prefixes(source_findings, multi_dataset))
+            | {f"{p}_" for p in getattr(self, "_feature_exclusion_prefix_overrides", ())}
+        )
         self._reconcile_discovered_event_transforms(config, discovered_events)
         self._reconcile_event_post_shaping(config)
         self._reconcile_bronze_columns(config)
@@ -1358,6 +1378,13 @@ class FindingsParser:
         self._apply_bronze_recommendations(config, registry)
         self._apply_registry_bronze_aggregations(config, registry)
         self._apply_imbalance_recommendations(config, registry)
+        # Lift datetime bases referenced by silver-derived rec source columns
+        # (e.g. `CREATED_DATE` in `CREATED_DATE_delta_hours_to_*_ratio`) into
+        # landing/bronze_event `datetime_derivation_sources` BEFORE the silver
+        # apply pass runs. Otherwise the predicted post-merge silver shape
+        # doesn't carry `CREATED_DATE_delta_hours` and every dependent rec
+        # is silently dropped at `_silver_derived_sources_available`.
+        self._reconcile_datetime_derivation_with_silver_recs(config, registry)
         self._apply_silver_recommendations(config, registry)
         zero_inflation_opt_in_prefixes = self._collect_zero_inflation_opt_in_prefixes(
             source_findings or {}, multi
@@ -2135,7 +2162,7 @@ class FindingsParser:
         pipeline_columns = self._collect_pipeline_columns(config)
         for rec in getattr(registry.silver, "derived_columns", []):
             self._hydrate_silver_derived_params(rec, predicted_silver, per_source_names)
-            if not self._silver_derived_sources_available(rec, pipeline_columns):
+            if not self._silver_derived_sources_available(rec, pipeline_columns, per_source_names):
                 continue
             step = self._map_silver_derived(rec)
             if step:
@@ -2449,28 +2476,26 @@ class FindingsParser:
                             expanded.add(f"{bare}_{stat}_{window}")
         return expanded
 
-    def _reconcile_datetime_derivation_with_spec(
-        self, config: "PipelineConfig",
-    ) -> None:
-        """Auto-extend or raise on datetime features whose source is undeclared.
+    def _walk_datetime_feature_candidates(
+        self,
+        config: "PipelineConfig",
+        candidates: Iterable[str],
+    ) -> Tuple[Dict[str, Set[str]], Dict[str, Set[str]], List[Tuple[str, str]]]:
+        """Walk ``candidates`` (any iterable of feature/column names), match
+        each against ``_DATETIME_AGG_WINDOW_RE`` and propose landing /
+        bronze_event ``datetime_derivation`` extensions for any base that's
+        a producible column but isn't yet declared on any layer.
 
-        ``FeatureSpec`` is the oracle. When a selected feature parses as
-        ``{base}_{kind}[_{stat}_{window}]`` AND ``{base}`` is a column the
-        bronze stage can produce (raw landing column, bronze derived
-        column, etc.) but is NOT yet listed in any ``datetime_derivation
-        .source_columns`` set, the reconciler must close the gap so the
-        landing/bronze templates emit the derived column at runtime.
+        Shared by ``_reconcile_datetime_derivation_with_spec`` (FeatureSpec
+        oracle, supports strict-raise mode via the caller) and
+        ``_reconcile_datetime_derivation_with_silver_recs`` (silver-derived-
+        rec source columns, always lenient — the rec-walk caller discards
+        ``unresolved`` and lets the existing
+        ``_silver_derived_sources_available`` warn-and-skip path handle any
+        rec whose source can't be lifted into a layer here).
 
-        ``_strict_datetime_parity=True`` raises a precise error pointing at
-        the suspected source column, so the operator either declares it
-        explicitly or removes the feature from the spec. ``False`` adds the
-        column to the matching layer's ``source_columns`` and logs a
-        warning so the operator can audit later. Either way, the gold
-        schema and the spec stay in sync — no silent drift.
+        Returns ``(proposed_landing, proposed_event, unresolved)``.
         """
-        spec = self._feature_spec
-        if spec is None:
-            return
         existing_landing_sources: Dict[str, Set[str]] = {}
         for ds, landing in config.landing.items():
             dd = getattr(landing, "datetime_derivation", None)
@@ -2501,11 +2526,15 @@ class FindingsParser:
             for step in config.silver.derived_columns:
                 producible.add(step.column)
         unresolved: List[Tuple[str, str]] = []
-        # Collect proposed extensions per dataset/layer so we apply them
-        # after the spec walk (mutating mid-iteration is unnecessary).
         proposed_landing: Dict[str, Set[str]] = {}
         proposed_event: Dict[str, Set[str]] = {}
-        for feature in spec.selected_features:
+        # `candidates` may be a `set` (silver-rec walker de-dupes via set
+        # builder); sort to a list so warn-log order, attachment order
+        # for first-match `break` paths, and the resulting strict-mode
+        # error message are byte-identical across runs and PYTHONHASHSEED.
+        for feature in sorted(c for c in candidates if c):
+            if not feature:
+                continue
             match = _DATETIME_AGG_WINDOW_RE.match(feature)
             if match is None:
                 continue
@@ -2575,6 +2604,82 @@ class FindingsParser:
                         break
                 if not attached:
                     unresolved.append((feature, base))
+        return proposed_landing, proposed_event, unresolved
+
+    def _apply_datetime_derivation_extensions(
+        self,
+        config: "PipelineConfig",
+        proposed_landing: Dict[str, Set[str]],
+        proposed_event: Dict[str, Set[str]],
+        driver_label: str,
+    ) -> None:
+        """Mutate ``config`` in place to merge the proposed datetime
+        derivation source extensions into ``landing[*].datetime_derivation``
+        and ``bronze_event[*].datetime_derivation``. ``driver_label`` is
+        embedded in the warn-level audit message so operators can tell
+        whether the FeatureSpec or a silver-derived rec drove the
+        extension.
+        """
+        for ds, sources in proposed_landing.items():
+            landing = config.landing[ds]
+            dd = landing.datetime_derivation
+            if dd is None:
+                landing.datetime_derivation = DatetimeDerivationConfig(
+                    source_columns=sorted(sources),
+                    reference_column=landing.time_column,
+                    mask_future_columns=[],
+                )
+            else:
+                merged = list(dict.fromkeys(list(dd.source_columns) + sorted(sources)))
+                dd.source_columns = merged
+            logger.warning(
+                "Auto-extended landing[%s].datetime_derivation_sources with %s "
+                "(driven by %s; strict_datetime_parity=False)",
+                ds, sorted(sources), driver_label,
+            )
+        for ds, sources in proposed_event.items():
+            event_cfg = config.bronze_event[ds]
+            dd = event_cfg.datetime_derivation
+            if dd is None:
+                event_cfg.datetime_derivation = DatetimeDerivationConfig(
+                    source_columns=sorted(sources),
+                    reference_column=event_cfg.time_column,
+                    mask_future_columns=[],
+                )
+            else:
+                merged = list(dict.fromkeys(list(dd.source_columns) + sorted(sources)))
+                dd.source_columns = merged
+            logger.warning(
+                "Auto-extended bronze_event[%s].datetime_derivation_sources with %s "
+                "(driven by %s; strict_datetime_parity=False)",
+                ds, sorted(sources), driver_label,
+            )
+
+    def _reconcile_datetime_derivation_with_spec(
+        self, config: "PipelineConfig",
+    ) -> None:
+        """Auto-extend or raise on datetime features whose source is undeclared.
+
+        ``FeatureSpec`` is the oracle. When a selected feature parses as
+        ``{base}_{kind}[_{stat}_{window}]`` AND ``{base}`` is a column the
+        bronze stage can produce (raw landing column, bronze derived
+        column, etc.) but is NOT yet listed in any ``datetime_derivation
+        .source_columns`` set, the reconciler must close the gap so the
+        landing/bronze templates emit the derived column at runtime.
+
+        ``_strict_datetime_parity=True`` raises a precise error pointing at
+        the suspected source column, so the operator either declares it
+        explicitly or removes the feature from the spec. ``False`` adds the
+        column to the matching layer's ``source_columns`` and logs a
+        warning so the operator can audit later. Either way, the gold
+        schema and the spec stay in sync — no silent drift.
+        """
+        spec = self._feature_spec
+        if spec is None:
+            return
+        proposed_landing, proposed_event, unresolved = (
+            self._walk_datetime_feature_candidates(config, spec.selected_features)
+        )
         # `getattr` default mirrors the constructor default (PA-4: lenient).
         # Tests that explicitly want strict mode set `_strict_datetime_parity
         # = True` after `FindingsParser.__new__(...)` (skipping __init__).
@@ -2601,42 +2706,55 @@ class FindingsParser:
             )
         if not (proposed_landing or proposed_event):
             return
-        # Auto-extension path: mutate config in place and emit a
-        # warn-level audit trail naming each extended column.
-        for ds, sources in proposed_landing.items():
-            landing = config.landing[ds]
-            dd = landing.datetime_derivation
-            if dd is None:
-                landing.datetime_derivation = DatetimeDerivationConfig(
-                    source_columns=sorted(sources),
-                    reference_column=landing.time_column,
-                    mask_future_columns=[],
-                )
-            else:
-                merged = list(dict.fromkeys(list(dd.source_columns) + sorted(sources)))
-                dd.source_columns = merged
-            logger.warning(
-                "Auto-extended landing[%s].datetime_derivation_sources with %s "
-                "(driven by FeatureSpec; strict_datetime_parity=False)",
-                ds, sorted(sources),
-            )
-        for ds, sources in proposed_event.items():
-            event_cfg = config.bronze_event[ds]
-            dd = event_cfg.datetime_derivation
-            if dd is None:
-                event_cfg.datetime_derivation = DatetimeDerivationConfig(
-                    source_columns=sorted(sources),
-                    reference_column=event_cfg.time_column,
-                    mask_future_columns=[],
-                )
-            else:
-                merged = list(dict.fromkeys(list(dd.source_columns) + sorted(sources)))
-                dd.source_columns = merged
-            logger.warning(
-                "Auto-extended bronze_event[%s].datetime_derivation_sources with %s "
-                "(driven by FeatureSpec; strict_datetime_parity=False)",
-                ds, sorted(sources),
-            )
+        self._apply_datetime_derivation_extensions(
+            config, proposed_landing, proposed_event, "FeatureSpec",
+        )
+
+    def _reconcile_datetime_derivation_with_silver_recs(
+        self,
+        config: "PipelineConfig",
+        registry: "RecommendationRegistry",
+    ) -> None:
+        """Mirror of ``_reconcile_datetime_derivation_with_spec`` but driven
+        by the source columns of registered silver-derived recs (not by the
+        FeatureSpec).
+
+        Closes the case where a silver-derived rec references e.g.
+        ``CREATED_DATE_delta_hours`` as numerator/denominator/source, but
+        ``CREATED_DATE`` is a raw column not yet declared in any landing
+        ``datetime_derivation_sources``. Without this pass, the rec is
+        silently dropped at codegen because the predicted post-merge silver
+        shape doesn't include ``CREATED_DATE_delta_hours``. Always lenient
+        — a missing rec that the rec-walk can't attach is left to the
+        existing ``_silver_derived_sources_available`` warn-and-skip path.
+        Idempotent against the spec reconciler — proposals are merged into
+        the same source lists.
+        """
+        if registry is None or not hasattr(registry, "silver") or registry.silver is None:
+            return
+        candidates: Set[str] = set()
+        for rec in getattr(registry.silver, "derived_columns", []) or []:
+            params = getattr(rec, "parameters", None) or {}
+            for key in ("source_columns", "features", "columns"):
+                vals = params.get(key)
+                if isinstance(vals, (list, tuple, set)):
+                    for v in vals:
+                        if isinstance(v, str):
+                            candidates.add(v)
+            for key in ("numerator", "denominator"):
+                v = params.get(key)
+                if isinstance(v, str) and v:
+                    candidates.add(v)
+        if not candidates:
+            return
+        proposed_landing, proposed_event, _unresolved = (
+            self._walk_datetime_feature_candidates(config, candidates)
+        )
+        if not (proposed_landing or proposed_event):
+            return
+        self._apply_datetime_derivation_extensions(
+            config, proposed_landing, proposed_event, "silver-derived recs",
+        )
 
     @staticmethod
     def _event_aggregated_columns(
@@ -2995,8 +3113,12 @@ class FindingsParser:
         existing = set(tf.feature_groups or [])
         tf.feature_groups = sorted(existing | groups_needed)
 
-    @staticmethod
-    def _silver_derived_sources_available(rec, pipeline_columns: Set[str]) -> bool:
+    def _silver_derived_sources_available(
+        self,
+        rec,
+        pipeline_columns: Set[str],
+        per_source_names: Optional[List[str]] = None,
+    ) -> bool:
         action = rec.action
         params = rec.parameters
         # Explicit `source_columns` from the registry (e.g., the declarative
@@ -3017,13 +3139,29 @@ class FindingsParser:
                 )
                 return False
             return True
+        # Action-keyed fallback (no explicit `source_columns`). For ratio /
+        # interaction / composite, route the named source columns through
+        # `_resolve_silver_derived_source` so a Lane-1 rec that hard-codes
+        # the prefixed form (`{ds}__col_*` — emitted by
+        # `register_event_ratio_features`) still resolves when bronze
+        # actually emitted the bare form (no cross-dataset collision in
+        # this run). Mutates `rec.parameters` in place so the renderer
+        # picks up the resolved name in `apply_derived_ratio(...)`.
+        #
+        # NOTE on mutation scope: `rec` is shared with the registry, so the
+        # resolved-name mutation persists on the in-memory registry for the
+        # remainder of this `parse()` call. NB10 does NOT re-save the merged
+        # registry post-codegen so this never reaches disk; if a future
+        # caller re-serializes the registry, the bare↔prefixed resolution
+        # would be baked into disk state. Today's contract is read-once,
+        # mutate-in-memory, never write back.
         if action == "ratio":
-            needed = {params.get("numerator", ""), params.get("denominator", "")}
+            keys: Tuple[str, ...] = ("numerator", "denominator")
         elif action == "interaction":
-            needed = set(params.get("features", []))
+            keys = ("features",)
         elif action == "composite":
-            needed = set(params.get("columns", []))
-            if not needed:
+            keys = ("columns",)
+            if not params.get("columns"):
                 logger.warning(
                     "Skipping silver derived-column '%s': composite recommendation has no 'columns' key",
                     rec.target_column,
@@ -3031,12 +3169,48 @@ class FindingsParser:
                 return False
         else:
             return True
-        missing = needed - pipeline_columns
-        if missing:
+        # Stage all resolutions in a side dict; only commit to
+        # `rec.parameters` when EVERY key resolves cleanly. Without this,
+        # a partial-success run (e.g. `numerator` resolves but `denominator`
+        # doesn't) would leave a half-mutated rec on the shared registry.
+        # The function returns False on partial failure so the immediate
+        # caller skips this rec, but the rec object is shared and any
+        # future consumer would see the stale mid-mutation state.
+        unresolved: List[str] = []
+        staged: Dict[str, Any] = {}
+        for key in keys:
+            val = params.get(key)
+            if val is None:
+                continue
+            if isinstance(val, list):
+                resolved_list: List[str] = []
+                for v in val:
+                    if not v:
+                        unresolved.append(v)
+                        continue
+                    r = self._resolve_silver_derived_source(v, pipeline_columns, per_source_names)
+                    if r is None:
+                        unresolved.append(v)
+                    else:
+                        resolved_list.append(r)
+                staged[key] = resolved_list
+            else:
+                if not val:
+                    unresolved.append(val)
+                    continue
+                r = self._resolve_silver_derived_source(val, pipeline_columns, per_source_names)
+                if r is None:
+                    unresolved.append(val)
+                else:
+                    staged[key] = r
+        if not unresolved:
+            for key, resolved in staged.items():
+                params[key] = resolved
+        if unresolved:
             logger.warning(
                 "Skipping silver derived-column '%s': missing source columns %s",
                 rec.target_column,
-                sorted(missing),
+                sorted(unresolved),
             )
             return False
         return True

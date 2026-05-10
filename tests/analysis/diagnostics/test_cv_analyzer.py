@@ -49,6 +49,50 @@ class TestCVVarianceAnalysis:
         assert len(critical_issues) == 0
 
 
+class TestV3VarianceThresholds:
+    """V3 8.5: STD_CRITICAL lowered from 0.15 to 0.10. cv_std > 0.10 must
+    now produce a CRITICAL CV check (and via _compute_verdict, an
+    'unstable' aggregate verdict). Motivated by spschurn-cd9565f9 LR
+    cv_std=0.196 ('UNSTABLE' verdict was correct only because cv_std
+    happened to exceed 0.15; a hypothetical cv_std=0.12 would have
+    silently produced 'solid' under pre-V3 thresholds)."""
+
+    def test_threshold_constants_match_v3_spec(self):
+        assert CVAnalyzer.STD_CRITICAL == 0.10
+        assert CVAnalyzer.STD_HIGH == 0.075
+        assert CVAnalyzer.STD_MEDIUM == 0.05
+
+    def test_cv_std_just_above_010_is_critical(self):
+        # Synthetic scores giving cv_std ~ 0.141 (in 0.10-0.15 band, was HIGH pre-V3)
+        scores = [0.40, 0.80, 0.50, 0.70, 0.60]
+        analyzer = CVAnalyzer()
+        result = analyzer.analyze_variance(scores)
+        assert 0.10 < result.cv_std < 0.15, f"setup error: cv_std={result.cv_std}"
+        critical = [c for c in result.checks if c.severity == Severity.CRITICAL]
+        assert len(critical) == 1, "cv_std > 0.10 should produce CRITICAL"
+        assert critical[0].check_id == "CV001"
+
+    def test_cv_std_between_075_and_010_is_high(self):
+        # Synthetic scores giving cv_std ~ 0.084 (between 0.075 and 0.10)
+        scores = [0.50, 0.70, 0.55, 0.70, 0.55]
+        analyzer = CVAnalyzer()
+        result = analyzer.analyze_variance(scores)
+        assert 0.075 < result.cv_std < 0.10, f"setup error: cv_std={result.cv_std}"
+        criticals = [c for c in result.checks if c.severity == Severity.CRITICAL]
+        highs = [c for c in result.checks if c.severity == Severity.HIGH]
+        assert len(criticals) == 0
+        assert len(highs) == 1
+        assert highs[0].check_id == "CV002"
+
+    def test_recommendation_message_quotes_threshold(self):
+        scores = [0.5, 0.9, 0.6, 0.85, 0.55]   # cv_std ~ 0.16
+        analyzer = CVAnalyzer()
+        result = analyzer.analyze_variance(scores)
+        rec = result.checks[0].recommendation
+        assert "0.10" in rec, f"recommendation should cite the V3 threshold: {rec}"
+        assert "Model is unstable" in rec
+
+
 class TestFoldByFoldAnalysis:
     def test_analyzes_each_fold(self):
         cv_scores = [0.75, 0.78, 0.72, 0.80, 0.76]

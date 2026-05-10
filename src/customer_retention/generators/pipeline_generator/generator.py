@@ -48,6 +48,7 @@ class PipelineGenerator(PipelineGeneratorBase):
         landing_filter_overrides: Optional[Dict[str, str]] = None,
         landing_drop_columns_overrides: Optional[Dict[str, Iterable[str]]] = None,
         strict_datetime_parity: bool = False,
+        feature_exclusion_prefix_overrides: Optional[Iterable[str]] = None,
     ):
         self._findings_dir = Path(findings_dir)
         self._output_dir = Path(output_dir)
@@ -71,6 +72,7 @@ class PipelineGenerator(PipelineGeneratorBase):
             landing_filter_overrides=landing_filter_overrides,
             landing_drop_columns_overrides=landing_drop_columns_overrides,
             strict_datetime_parity=strict_datetime_parity,
+            feature_exclusion_prefix_overrides=feature_exclusion_prefix_overrides,
         )
         self._renderer = CodeRenderer()
         self._harvest_result = (

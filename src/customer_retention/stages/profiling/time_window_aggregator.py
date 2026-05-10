@@ -719,10 +719,51 @@ def _extra_datetime_feature_names(datetime_columns: list[str]) -> list[str]:
     return names
 
 
+def _filter_label_columns(
+    datetime_columns: list[str], label_columns: Optional[list[str]],
+) -> list[str]:
+    """Drop label-derived columns from a datetime list with a loud warning.
+
+    Defense-in-depth complement to NB01's
+    ``detect_target_leaking_datetime_columns`` (correlation-based). Catches
+    direct passes of the label timestamp (``churn_date``) where the upstream
+    guard was bypassed. See module docstrings on
+    ``derive_extra_datetime_features`` and ``derive_entity_datetime_features``.
+    """
+    if not label_columns:
+        return list(datetime_columns)
+    label_set = set(label_columns)
+    skipped = [c for c in datetime_columns if c in label_set]
+    if skipped:
+        warnings.warn(
+            "Skipping datetime feature derivation for label-derived columns "
+            f"{sorted(skipped)}: their `is_missing_*` and related derivations "
+            "are deterministic functions of the target and produce AUC ~ 1.0 "
+            "leakage. If this is intentional, drop them from `label_columns`.",
+            category=UserWarning,
+            stacklevel=3,
+        )
+    return [c for c in datetime_columns if c not in label_set]
+
+
 def derive_extra_datetime_features(
     df: DataFrame, time_column: str, datetime_columns: list[str],
     mask_future_columns: Optional[list[str]] = None,
+    label_columns: Optional[list[str]] = None,
 ) -> tuple[DataFrame, list[str]]:
+    """Emit ``{col}_delta_hours``/``_hour``/``_dow``/``_is_weekend`` per column.
+
+    ``label_columns`` is a defense-in-depth filter: any column listed here is
+    silently removed from ``datetime_columns`` before any feature is derived,
+    with a warning. This guards against the operator accidentally feeding the
+    label timestamp (e.g. ``churn_date``) through datetime feature derivation
+    — the resulting ``{col}_*`` columns are deterministic functions of the
+    target and produce AUC ≈ 1.0 leakage. The pre-existing NB01 guard
+    ``detect_target_leaking_datetime_columns`` is the primary line of
+    defense; this parameter is the framework-level fallback when the
+    upstream guard is bypassed.
+    """
+    datetime_columns = _filter_label_columns(datetime_columns, label_columns)
     if not datetime_columns:
         return df, []
 
@@ -868,7 +909,33 @@ def derive_entity_datetime_features(
     df: DataFrame, time_column: str, datetime_columns: list[str],
     milestone_pairs: Optional[list[tuple[str, str]]] = None,
     mask_future_columns: Optional[list[str]] = None,
+    label_columns: Optional[list[str]] = None,
 ) -> tuple[DataFrame, list[str]]:
+    """Emit the 5 universal datetime features (``days_since``, ``days_until``,
+    ``log1p``, ``is_missing``, ``is_future``) per column plus milestone-pair
+    features.
+
+    ``label_columns`` is the defense-in-depth filter: columns listed here are
+    silently removed from ``datetime_columns`` and any ``milestone_pairs``
+    that reference them, before any feature is derived. The motivating case
+    is the label timestamp (``churn_date``) — its ``is_missing`` derivation
+    is exactly ``1 - target`` and produces AUC ≈ 1.0 leakage when it leaks
+    into the feature set. The pre-existing NB01 guard
+    ``detect_target_leaking_datetime_columns`` (in
+    ``core/utils/leakage.py``) catches null-pattern target correlation at
+    the source-finding step; this parameter is the framework-level fallback
+    when the operator passes columns through a path that bypasses the
+    upstream guard. See ``docs/sps_run_cd9565f9_findings.md`` for the
+    motivating run (spschurn-cd9565f9, RF Test AUC 0.9974 driven by
+    ``is_missing_churn_date``).
+    """
+    datetime_columns = _filter_label_columns(datetime_columns, label_columns)
+    if milestone_pairs and label_columns:
+        label_set = set(label_columns)
+        milestone_pairs = [
+            (s, e) for s, e in milestone_pairs
+            if s not in label_set and e not in label_set
+        ]
     if not datetime_columns:
         return df, []
 

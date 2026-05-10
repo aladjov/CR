@@ -1,4 +1,5 @@
 """Tests for TimeWindowAggregator - TDD approach."""
+import warnings
 from datetime import timedelta
 from unittest.mock import patch
 
@@ -1568,3 +1569,100 @@ class TestDatetimeDerivationUsesSafeToDatetime:
                 milestone_pairs=[("start_created", "start_closed")],
             )
         assert mock_safe.call_count == 5
+
+
+class TestLabelColumnsGuard:
+    """V3 8.1: defense-in-depth filter excluding label-derived columns from
+    datetime feature derivation. Defends against the cd9565f9-style
+    `is_missing_churn_date` direct target leakage."""
+
+    def _df(self):
+        return pd.DataFrame({
+            "entity_id": ["A", "B", "C"],
+            "feature_timestamp": pd.to_datetime(["2024-06-01"] * 3),
+            "signup_date": pd.to_datetime(["2024-01-01", "2024-02-01", None]),
+            "churn_date": pd.to_datetime([None, None, "2024-05-15"]),
+        })
+
+    def test_extra_label_columns_filtered(self):
+        df = self._df()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result, new_cols = derive_extra_datetime_features(
+                df, "feature_timestamp", ["signup_date", "churn_date"],
+                label_columns=["churn_date"],
+            )
+        assert "churn_date_delta_hours" not in result.columns
+        assert "churn_date_hour" not in result.columns
+        assert "signup_date_delta_hours" in result.columns
+        assert any("churn_date" in str(w.message) for w in caught), \
+            "warning should name the skipped label column"
+
+    def test_entity_label_columns_filtered(self):
+        df = self._df()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result, new_cols = derive_entity_datetime_features(
+                df, "feature_timestamp", ["signup_date", "churn_date"],
+                label_columns=["churn_date"],
+            )
+        assert "is_missing_churn_date" not in result.columns
+        assert "days_since_churn_date" not in result.columns
+        assert "is_future_churn_date" not in result.columns
+        assert "is_missing_signup_date" in result.columns
+        assert any("churn_date" in str(w.message) for w in caught)
+
+    def test_entity_label_columns_filter_milestone_pairs(self):
+        df = self._df()
+        result, new_cols = derive_entity_datetime_features(
+            df, "feature_timestamp",
+            ["signup_date", "churn_date"],
+            milestone_pairs=[("signup_date", "churn_date")],
+            label_columns=["churn_date"],
+        )
+        assert not any("milestone" in c and "churn_date" in c for c in new_cols)
+        assert not any("tenure_days_signup_date" in c for c in new_cols), \
+            "milestone tenure_days_signup_date depends on the dropped pair end"
+
+    def test_no_label_columns_unchanged_behavior(self):
+        df = self._df()
+        result_a, cols_a = derive_extra_datetime_features(
+            df, "feature_timestamp", ["signup_date"],
+        )
+        result_b, cols_b = derive_extra_datetime_features(
+            df, "feature_timestamp", ["signup_date"],
+            label_columns=None,
+        )
+        assert set(cols_a) == set(cols_b)
+        result_c, cols_c = derive_extra_datetime_features(
+            df, "feature_timestamp", ["signup_date"],
+            label_columns=[],
+        )
+        assert set(cols_a) == set(cols_c)
+
+    def test_empty_after_filtering_returns_input(self):
+        df = self._df()
+        result, new_cols = derive_extra_datetime_features(
+            df, "feature_timestamp", ["churn_date"],
+            label_columns=["churn_date"],
+        )
+        assert new_cols == []
+        assert "churn_date_delta_hours" not in result.columns
+
+    def test_entity_empty_after_filtering_returns_input(self):
+        df = self._df()
+        result, new_cols = derive_entity_datetime_features(
+            df, "feature_timestamp", ["churn_date"],
+            label_columns=["churn_date"],
+        )
+        assert new_cols == []
+        assert "is_missing_churn_date" not in result.columns
+
+    def test_label_columns_iterable_safe(self):
+        df = self._df()
+        # Tuple input should also work since we coerce via set()
+        _, new_cols = derive_entity_datetime_features(
+            df, "feature_timestamp", ["signup_date", "churn_date"],
+            label_columns=("churn_date",),
+        )
+        assert not any(c.endswith("churn_date") for c in new_cols)

@@ -30,8 +30,17 @@ class CVAnalysisResult:
 
 
 class CVAnalyzer:
-    STD_CRITICAL = 0.15
-    STD_HIGH = 0.10
+    # V3 8.5: thresholds tightened post spschurn-cd9565f9 critical analysis.
+    # Pre-V3: STD_CRITICAL=0.15, STD_HIGH=0.10. Run cd9565f9's LR cv_std=0.196
+    # was correctly CRITICAL but a hypothetical cv_std=0.12 would have been
+    # only HIGH and `_compute_verdict` returns "solid" for HIGH/CV — so a
+    # bimodal-fold pattern with cv_std=0.12-0.15 could silently proceed.
+    # Lowering STD_CRITICAL to 0.10 makes any cv_std > 0.10 a CRITICAL CV
+    # check, which `model_diagnostics_report._compute_verdict` then maps to
+    # the `unstable` verdict. STD_HIGH lowered to 0.075 to preserve a band
+    # for moderate-but-not-yet-critical instability.
+    STD_CRITICAL = 0.10
+    STD_HIGH = 0.075
     STD_MEDIUM = 0.05
     CV_TEST_HIGH = 0.10
     CV_TEST_MEDIUM = -0.10
@@ -62,9 +71,16 @@ class CVAnalyzer:
 
     def _variance_recommendation(self, cv_std: float) -> str:
         if cv_std > self.STD_CRITICAL:
-            return f"CRITICAL: CV std {cv_std:.3f} is very high. Model is unstable. Use more data or robust methods."
+            return (
+                f"CRITICAL: CV std {cv_std:.3f} > {self.STD_CRITICAL:.2f}. "
+                "Model is unstable. Investigate concept drift, leakage, or "
+                "feature non-stationarity before proceeding."
+            )
         if cv_std > self.STD_HIGH:
-            return f"HIGH: CV std {cv_std:.3f} is high. Consider ensemble methods or robust scaling."
+            return (
+                f"HIGH: CV std {cv_std:.3f} is elevated. Consider ensemble "
+                "methods or robust scaling."
+            )
         if cv_std > self.STD_MEDIUM:
             return f"MEDIUM: CV std {cv_std:.3f} is moderate. Monitor closely."
         return f"OK: CV std {cv_std:.3f} indicates stable model."
