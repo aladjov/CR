@@ -1,6 +1,7 @@
 version: 1
-source_fingerprint: sha256:3b34e887dafd289d476c836ce10a287c94f85e97cfeb5c8a69b7b1385a589dfc
+source_fingerprint: sha256:393cab44f4730cd9e6e09cc79afc761dc5ac3901e136455dd067358a1fc99035
 generated_from:
+- exploration_notebooks/-1_parity_contract.ipynb
 - exploration_notebooks/00_start_here.ipynb
 - exploration_notebooks/01_data_discovery.ipynb
 - exploration_notebooks/01a_a_temporal_text_deep_dive.ipynb
@@ -21,6 +22,10 @@ generated_from:
 - exploration_notebooks/11_scoring_validation.ipynb
 - exploration_notebooks/12_view_documentation.ipynb
 sections:
+  -1_parity_contract#parity_audit_intro:
+    stage: null
+    notebook: -1_parity_contract
+    source: unmappable
   00_start_here#0_10_intent_configuration:
     stage: landing_post
     notebook: 00_start_here

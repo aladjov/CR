@@ -33,6 +33,7 @@ NOTEBOOKS_DIR = REPO_ROOT / "exploration_notebooks"
 OUTPUT_PATH = REPO_ROOT / "framework" / "phase_map.yaml"
 
 KNOWN_NOTEBOOKS = {
+    "-1_parity_contract",
     "00_start_here",
     "01_data_discovery",
     "01a_a_temporal_text_deep_dive",
