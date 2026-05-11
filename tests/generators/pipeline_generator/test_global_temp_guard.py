@@ -173,4 +173,36 @@ class TestNB00RegistryAndOriginalDatasetsSeparation:
         assert cell is not None, "replay_registered_landing cell not found"
         src = "".join(cell["source"])
         assert "replay_registered_landing_steps" in src
+
+    def test_cr_extensions_preamble_cell_imports_runtime_and_seeds_registry(self):
+        """The `cr_extensions_preamble` framework cell (id=000190b0) is the
+        canonical place that imports `cr` and creates the `registry` symbol
+        used by `replay_registered_landing` and any downstream `@cr.register`
+        cells. It must run before the registered-landing replay cell.
+        """
+        import json
+        from pathlib import Path
+        nb_path = Path(__file__).resolve().parents[3] / "exploration_notebooks" / "00_start_here.ipynb"
+        nb = json.loads(nb_path.read_text())
+        cells = nb["cells"]
+        preamble_idx = next(
+            (i for i, c in enumerate(cells) if c.get("id") == "000190b0"), None
+        )
+        replay_idx = next(
+            (i for i, c in enumerate(cells) if c.get("id") == "e2c1f9a3"), None
+        )
+        assert preamble_idx is not None, "cr_extensions_preamble cell not found"
+        assert replay_idx is not None, "replay_registered_landing cell not found"
+        assert preamble_idx < replay_idx, (
+            "cr_extensions_preamble must run before replay_registered_landing"
+        )
+        src = "".join(cells[preamble_idx]["source"])
+        assert "# @cr:code name='cr_extensions_preamble' id=000190b0" in src
         assert "from customer_retention.runtime import cr" in src
+        assert (
+            "from customer_retention.analysis.auto_explorer import RecommendationRegistry"
+            in src
+        )
+        assert "registry = RecommendationRegistry()" in src
+        assert "registry.init_landing()" in src
+        assert "registry.save(_namespace.merged_recommendations_path)" in src
