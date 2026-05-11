@@ -42,6 +42,16 @@ from .schedule import (
     parse_inner_schedule,
     parse_outer_schedule,
 )
+from .trace import (
+    DEFAULT_TOLERANCE,
+    TOLERANCE_BY_KIND,
+    TraceRecord,
+    audit_trace,
+    clear_records,
+    flush_to_yaml,
+    get_records,
+    load_from_yaml,
+)
 
 __all__ = [
     "APPLY_REGISTRY",
@@ -61,8 +71,16 @@ __all__ = [
     "active_dataset_hint",
     "apply_context",
     "apply_op",
+    "DEFAULT_TOLERANCE",
+    "TOLERANCE_BY_KIND",
+    "TraceRecord",
     "audit_landing",
     "audit_pipeline",
+    "audit_trace",
+    "clear_records",
+    "flush_to_yaml",
+    "get_records",
+    "load_from_yaml",
     "diff_manifests",
     "fingerprint_kwargs",
     "infer_dataset_from_path",
