@@ -11,6 +11,7 @@ walker, schedule parser, and runtime tracer.
 """
 from __future__ import annotations
 
+from .audit import AuditOutcome, audit_landing, audit_pipeline
 from .decorator import (
     APPLY_REGISTRY,
     ApplyOpDescriptor,
@@ -34,24 +35,39 @@ from .production_scan import (
     scan_generated_pipeline,
     scan_production_source,
 )
+from .schedule import (
+    GeneratedStage,
+    JobSchedule,
+    ScheduledNotebook,
+    parse_inner_schedule,
+    parse_outer_schedule,
+)
 
 __all__ = [
     "APPLY_REGISTRY",
     "ApplyOpDescriptor",
     "ApplyOpKind",
+    "AuditOutcome",
     "AuditScope",
     "DYNAMIC",
     "GapKind",
+    "GeneratedStage",
+    "JobSchedule",
     "Manifest",
     "ManifestEntry",
     "ParityGap",
+    "ScheduledNotebook",
     "SourceLocation",
     "active_dataset_hint",
     "apply_context",
     "apply_op",
+    "audit_landing",
+    "audit_pipeline",
     "diff_manifests",
     "fingerprint_kwargs",
     "infer_dataset_from_path",
+    "parse_inner_schedule",
+    "parse_outer_schedule",
     "scan_exploration_manifest",
     "scan_generated_pipeline",
     "scan_production_source",
