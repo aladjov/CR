@@ -1302,12 +1302,30 @@ class FindingsParser:
         encodings = []
         scalings = []
         target_column = self._find_target_column(sources)
+        # Dedup encodings / scalings across datasets. Without this, every
+        # dataset that carries a column named `lifecycle_quadrant` or
+        # `recency_bucket` (silver-derived columns shared by all sources)
+        # produces its own EncodingStep — the rendered gold script then
+        # lists the same column N times in `_batch_one_hot_encode(...)`.
+        # Comparison is case-insensitive because Spark / Delta column
+        # resolution is case-insensitive at write time; one-hot output
+        # `COUNT_OF_OPEN_OPPS_1` will collide with a pre-existing
+        # `count_of_open_opps_1` and `saveAsTable` rejects the duplicate.
+        seen_encode_cols_lower: set[str] = set()
+        seen_scale_cols_lower: set[str] = set()
+        target_lower = target_column.lower() if target_column else None
         for findings in sources.values():
             for col_name, col_finding in findings.columns.items():
                 if col_name == target_column:
                     continue
+                col_lower = col_name.lower()
+                if target_lower is not None and col_lower == target_lower:
+                    continue
                 col_type = col_finding.inferred_type
                 if col_type in self._CATEGORICAL_TYPES:
+                    if col_lower in seen_encode_cols_lower:
+                        continue
+                    seen_encode_cols_lower.add(col_lower)
                     encodings.append(
                         TransformationStep(
                             type=PipelineTransformationType.ENCODE,
@@ -1317,6 +1335,9 @@ class FindingsParser:
                         )
                     )
                 elif col_type in self._NUMERIC_TYPES:
+                    if col_lower in seen_scale_cols_lower:
+                        continue
+                    seen_scale_cols_lower.add(col_lower)
                     scalings.append(
                         TransformationStep(
                             type=PipelineTransformationType.SCALE,

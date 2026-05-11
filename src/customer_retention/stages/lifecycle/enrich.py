@@ -35,12 +35,14 @@ from customer_retention.core.compat import (
     concat,
     safe_to_datetime,
 )
+from customer_retention.parity import ApplyOpKind, apply_op
 
 from .config import LifecycleEnrichmentConfig
 
 logger = logging.getLogger(__name__)
 
 
+@apply_op(kind=ApplyOpKind.LIFECYCLE_ENRICH)
 def enrich_lifecycle_dataset(
     raw_df: Any, config: LifecycleEnrichmentConfig
 ) -> Any:

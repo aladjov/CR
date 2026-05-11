@@ -23,6 +23,7 @@ from customer_retention.core.compat import (
     safe_to_datetime,
     spark_persist,
 )
+from customer_retention.parity import ApplyOpKind, apply_op
 
 if TYPE_CHECKING:
     from customer_retention.analysis.auto_explorer.project_context import IntentConfig
@@ -36,6 +37,7 @@ _LOOKBACK_MIN_RETAINED_ROWS = 100
 _LOOKBACK_MIN_RETENTION_RATIO = 0.001
 
 
+@apply_op(kind=ApplyOpKind.TEMPORAL_LOOKBACK, gate="intent.lookback_periods is not None")
 def apply_temporal_lookback(df: Any, time_col: str, intent: IntentConfig) -> Any:
     if intent.lookback_periods is None:
         return df
@@ -480,6 +482,7 @@ def _resolve_through_bridge(
     return SegmentEntitySelection.from_set(resolved_ids)
 
 
+@apply_op(kind=ApplyOpKind.SAMPLE_FILTER, dataset_kwarg="dataset_name")
 def apply_sample_filters(
     df: pd.DataFrame,
     dataset_name: str,
