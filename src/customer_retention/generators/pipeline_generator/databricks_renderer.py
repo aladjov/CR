@@ -1973,9 +1973,20 @@ def _encode_one_hot(df, col, max_categories=100):
     if len(categories) > max_categories:
         print(f"WARNING: column '{col}' has {len(categories)} categories (>{max_categories}), using label encoding instead")
         return _label_encode(df, col)
+    # Dedup raw categories whose sanitized safe_names collide (whitespace,
+    # punctuation, case variants in Salesforce string columns). Group all
+    # raw values that map to the same safe_name into a single `isin`
+    # indicator so we lose no information and emit one column per token.
+    safe_to_raw = {}
     for cat in sorted(categories):
         safe_name = f"{col}_{sanitize_column_token(cat)}"
-        df = df.withColumn(safe_name, F.when(F.col(col) == cat, 1).otherwise(0))
+        key = safe_name.lower()
+        safe_to_raw.setdefault(key, (safe_name, []))[1].append(cat)
+    for safe_name, group in safe_to_raw.values():
+        if len(group) == 1:
+            df = df.withColumn(safe_name, F.when(F.col(col) == group[0], 1).otherwise(0))
+        else:
+            df = df.withColumn(safe_name, F.when(F.col(col).isin(group), 1).otherwise(0))
     df = df.drop(col)
     return df
 
@@ -2182,11 +2193,25 @@ def _batch_one_hot_encode(df, cols, max_categories=100):
     if one_hot_plan:
         new_exprs = []
         for c, cats in one_hot_plan.items():
+            # Dedup by sanitized safe_name (case-insensitive). `collect_set`
+            # returns raw distinct values, but `sanitize_column_token`
+            # collapses whitespace-padded / punctuation-only / case-different
+            # variants to the same token. Without this, two raw values
+            # (`"1"` and `" 1"`) emit two encoded columns with the same
+            # alias and `saveAsTable` rejects them as case-insensitive
+            # duplicates with COLUMN_ALREADY_EXISTS. We coalesce all raw
+            # values mapping to the same safe_name into a single
+            # `isin`-based indicator so no information is dropped.
+            safe_to_raw = {}
             for cat in cats:
-                safe_name = f"{c}_{sanitize_column_token(cat)}"
-                new_exprs.append(
-                    F.when(F.col(c) == cat, 1).otherwise(0).alias(safe_name)
-                )
+                key = f"{c}_{sanitize_column_token(cat)}".lower()
+                safe_to_raw.setdefault(key, (f"{c}_{sanitize_column_token(cat)}", []))[1].append(cat)
+            for safe_name, group in safe_to_raw.values():
+                if len(group) == 1:
+                    expr = F.when(F.col(c) == group[0], 1).otherwise(0)
+                else:
+                    expr = F.when(F.col(c).isin(group), 1).otherwise(0)
+                new_exprs.append(expr.alias(safe_name))
         for chunk_start in range(0, len(new_exprs), _BATCH_CHUNK_SIZE):
             chunk = new_exprs[chunk_start:chunk_start + _BATCH_CHUNK_SIZE]
             df = df.select(*[F.col(c) for c in df.columns], *chunk)

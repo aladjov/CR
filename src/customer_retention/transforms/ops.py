@@ -139,16 +139,32 @@ def apply_cap_then_log(df: DataFrame, column: str, *, _precomputed_q99: float | 
 def apply_one_hot_encode(df: DataFrame, column: str) -> DataFrame:
     out = get_dummies(df, columns=[column], prefix=column)
     prefix = f"{column}_"
-    rename_map: dict[str, str] = {}
+    # Build the rename map and detect collisions in one pass. Two raw
+    # categories can sanitize to the same token (Salesforce strings often
+    # carry whitespace/punctuation variants); without merging those, the
+    # rename produces duplicate column names which pandas tolerates but
+    # the Databricks/Delta downstream rejects with COLUMN_ALREADY_EXISTS.
+    # Collisions are coalesced by summing the indicator columns and
+    # clipping to {0,1}, preserving "row matches any of these raw values".
+    grouped: dict[str, list] = {}
     for c in out.columns:
         if not (isinstance(c, str) and c.startswith(prefix)):
             continue
         token = c[len(prefix):]
         sanitized = sanitize_column_token(token)
-        if sanitized != token:
-            rename_map[c] = f"{prefix}{sanitized}"
-    if rename_map:
-        out = out.rename(columns=rename_map)
+        target = f"{prefix}{sanitized}"
+        grouped.setdefault(target, []).append(c)
+    drop_cols: list = []
+    for target, sources in grouped.items():
+        if len(sources) == 1:
+            if sources[0] != target:
+                out[target] = out[sources[0]]
+                drop_cols.append(sources[0])
+        else:
+            out[target] = out[sources].sum(axis=1).clip(upper=1).astype(int)
+            drop_cols.extend(s for s in sources if s != target)
+    if drop_cols:
+        out = out.drop(columns=list(set(drop_cols)))
     return out
 
 

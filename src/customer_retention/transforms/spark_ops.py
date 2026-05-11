@@ -93,9 +93,22 @@ def spark_one_hot_encode(df: SparkDataFrame, column: str) -> SparkDataFrame:
     if column not in df.columns:
         return df
     categories = [row[column] for row in df.select(column).distinct().collect() if row[column] is not None]
+    # Dedup categories whose sanitized safe_names collide (Salesforce
+    # whitespace padding, punctuation variants, case differences). Group
+    # raw values that map to the same safe_name and encode as a single
+    # `isin`-based indicator so two raw values ("1" and " 1") don't emit
+    # two columns aliased identically and trip Delta's case-insensitive
+    # duplicate detection at saveAsTable.
+    safe_to_raw = {}
     for cat in sorted(str(c) for c in categories):
         safe_name = f"{column}_{sanitize_column_token(cat)}"
-        df = df.withColumn(safe_name, F.when(F.col(column) == cat, 1).otherwise(0))
+        key = safe_name.lower()
+        safe_to_raw.setdefault(key, (safe_name, []))[1].append(cat)
+    for safe_name, group in safe_to_raw.values():
+        if len(group) == 1:
+            df = df.withColumn(safe_name, F.when(F.col(column) == group[0], 1).otherwise(0))
+        else:
+            df = df.withColumn(safe_name, F.when(F.col(column).isin(group), 1).otherwise(0))
     return df.drop(column)
 
 
