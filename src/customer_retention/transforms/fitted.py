@@ -16,6 +16,7 @@ from sklearn.preprocessing import (
 )
 
 from customer_retention.core.compat import DataFrame, _is_spark_pandas
+from customer_retention.parity import ApplyOpKind, apply_op
 
 
 class FittedScaler:
@@ -25,6 +26,7 @@ class FittedScaler:
         self.method = method
         self._scaler = StandardScaler() if method == "standard" else MinMaxScaler()
 
+    @apply_op(kind=ApplyOpKind.GOLD_TRANSFORMATION, capture_kwargs={"column"})
     def fit_transform(self, df: DataFrame, column: str, artifact_store) -> DataFrame:
         if column not in df.columns:
             return df
@@ -33,6 +35,7 @@ class FittedScaler:
         artifact_store.register("scaler", column, self._scaler)
         return df
 
+    @apply_op(kind=ApplyOpKind.GOLD_TRANSFORMATION, capture_kwargs={"column"})
     def transform(self, df: DataFrame, column: str, artifact_store) -> DataFrame:
         if column not in df.columns:
             return df
@@ -85,6 +88,7 @@ class FittedEncoder:
     def __init__(self):
         self._encoder = LabelEncoder()
 
+    @apply_op(kind=ApplyOpKind.GOLD_ENCODING, capture_kwargs={"column"})
     def fit_transform(self, df: DataFrame, column: str, artifact_store) -> DataFrame:
         if column not in df.columns:
             return df
@@ -96,6 +100,7 @@ class FittedEncoder:
         artifact_store.register("encoder", column, self._encoder)
         return df
 
+    @apply_op(kind=ApplyOpKind.GOLD_ENCODING, capture_kwargs={"column"})
     def transform(self, df: DataFrame, column: str, artifact_store) -> DataFrame:
         if column not in df.columns:
             return df
@@ -113,6 +118,7 @@ class FittedPowerTransform:
     def __init__(self):
         self._pt = PowerTransformer(method="yeo-johnson")
 
+    @apply_op(kind=ApplyOpKind.GOLD_TRANSFORMATION, capture_kwargs={"column"})
     def fit_transform(self, df: DataFrame, column: str, artifact_store) -> DataFrame:
         if column not in df.columns:
             return df
@@ -141,6 +147,7 @@ class FittedPowerTransform:
     def fit_from_local(self, pandas_series):
         self._pt.fit(pandas_series.to_numpy().reshape(-1, 1))
 
+    @apply_op(kind=ApplyOpKind.GOLD_TRANSFORMATION, capture_kwargs={"column"})
     def transform(self, df: DataFrame, column: str, artifact_store) -> DataFrame:
         if column not in df.columns:
             return df

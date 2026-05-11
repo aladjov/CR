@@ -17,10 +17,12 @@ from customer_retention.parity.kinds import ApplyOpKind
 
 
 @pytest.fixture(autouse=True)
-def _clear_registry():
+def _isolated_registry():
+    snapshot = dict(APPLY_REGISTRY)
     APPLY_REGISTRY.clear()
     yield
     APPLY_REGISTRY.clear()
+    APPLY_REGISTRY.update(snapshot)
 
 
 @pytest.fixture(autouse=True)

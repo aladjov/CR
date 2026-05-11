@@ -25,6 +25,7 @@ from customer_retention.core.compat import (
     timestamp_diff_seconds,
     to_pandas,
 )
+from customer_retention.parity import ApplyOpKind, apply_op
 
 # Cap on distinct values per value_counts column. Cardinality > this is
 # almost certainly a misconfigured override (e.g. value_counts on a free-
@@ -103,6 +104,7 @@ class TimeWindowAggregator:
         self.entity_column = entity_column
         self.time_column = time_column
 
+    @apply_op(kind=ApplyOpKind.BRONZE_AGGREGATE)
     def aggregate(
         self, df: DataFrame, windows: Optional[List[str]] = None,
         value_columns: Optional[List[str]] = None, agg_funcs: Optional[List[str]] = None,
@@ -746,6 +748,7 @@ def _filter_label_columns(
     return [c for c in datetime_columns if c not in label_set]
 
 
+@apply_op(kind=ApplyOpKind.DATETIME_DERIVE, capture_kwargs={"time_column", "datetime_columns", "mask_future_columns"})
 def derive_extra_datetime_features(
     df: DataFrame, time_column: str, datetime_columns: list[str],
     mask_future_columns: Optional[list[str]] = None,
@@ -905,6 +908,7 @@ def _entity_datetime_feature_names(
     return out
 
 
+@apply_op(kind=ApplyOpKind.DATETIME_DERIVE, capture_kwargs={"time_column", "datetime_columns", "milestone_pairs", "mask_future_columns"})
 def derive_entity_datetime_features(
     df: DataFrame, time_column: str, datetime_columns: list[str],
     milestone_pairs: Optional[list[tuple[str, str]]] = None,

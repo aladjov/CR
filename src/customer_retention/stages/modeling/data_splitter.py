@@ -16,6 +16,7 @@ from customer_retention.core.compat import (
     to_pandas,
 )
 from customer_retention.core.config.column_config import select_model_ready_columns
+from customer_retention.parity import ApplyOpKind, apply_op
 
 if TYPE_CHECKING:
     from customer_retention.analysis.auto_explorer.findings import FeatureAvailabilityMetadata
@@ -75,6 +76,7 @@ class DataSplitter:
         self.include_validation = include_validation
         self.purge_gap_days = purge_gap_days
 
+    @apply_op(kind=ApplyOpKind.TRAINING_SPLIT)
     def split(self, df: DataFrame, feature_availability: Optional["FeatureAvailabilityMetadata"] = None) -> SplitResult:
         if _is_spark_pandas(df):
             return self._split_spark(as_spark_df(df), feature_availability)

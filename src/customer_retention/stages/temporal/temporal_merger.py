@@ -6,6 +6,7 @@ from typing import Any
 
 from customer_retention.core.compat import Timedelta, as_tz_naive, native_pd, safe_drop_duplicates, to_datetime
 from customer_retention.core.config.column_config import DatasetGranularity
+from customer_retention.parity import ApplyOpKind, apply_op
 from customer_retention.stages.temporal.point_in_time_join import PointInTimeJoiner
 
 logger = logging.getLogger(__name__)
@@ -69,6 +70,7 @@ class TemporalMerger:
         )
         return idx.to_frame(index=False)
 
+    @apply_op(kind=ApplyOpKind.SILVER_TEMPORAL_MERGE)
     def merge_all(
         self,
         spine: Any,
@@ -214,8 +216,25 @@ class TemporalMerger:
         name: str,
         sep: str,
     ) -> dict[str, str]:
-        conflicts = (left_cols & right_cols) - join_keys
-        return {col: f"{name}{sep}{col}" for col in sorted(conflicts)}
+        # Case-insensitive collision detection. Python set intersection is
+        # case-sensitive; Spark / Delta column resolution at write time is
+        # case-insensitive. Without this, a right column `count_of_open_opps`
+        # against a left column `COUNT_OF_OPEN_OPPS` slips through dedup,
+        # both end up in the joined frame, and downstream gold encoding /
+        # saveAsTable rejects them as duplicates with COLUMN_ALREADY_EXISTS.
+        # Detection matches case-insensitively; rename target preserves the
+        # right column's original case so existing reads against the
+        # produced name continue to work.
+        left_lower = {c.lower() for c in left_cols}
+        join_lower = {c.lower() for c in join_keys}
+        rename: dict[str, str] = {}
+        for col in sorted(right_cols):
+            col_lower = col.lower()
+            if col_lower in join_lower:
+                continue
+            if col_lower in left_lower:
+                rename[col] = f"{name}{sep}{col}"
+        return rename
 
     @staticmethod
     def _apply_tolerance(

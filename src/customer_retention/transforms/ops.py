@@ -14,6 +14,7 @@ import numpy as np
 
 from customer_retention.core.compat import DataFrame, get_dummies
 from customer_retention.core.naming import sanitize_column_token
+from customer_retention.parity import ApplyOpKind, apply_op
 
 
 def _requires_column(fn):
@@ -25,6 +26,7 @@ def _requires_column(fn):
     return wrapper
 
 
+@apply_op(kind=ApplyOpKind.GOLD_TRANSFORMATION, capture_kwargs={"column", "value"})
 @_requires_column
 def apply_impute_null(df: DataFrame, column: str, *, value: Any = 0) -> DataFrame:
     if value == "median":
@@ -34,6 +36,7 @@ def apply_impute_null(df: DataFrame, column: str, *, value: Any = 0) -> DataFram
     return df
 
 
+@apply_op(kind=ApplyOpKind.GOLD_TRANSFORMATION, capture_kwargs={"column", "lower", "upper"})
 @_requires_column
 def apply_cap_outlier(
     df: DataFrame, column: str, *, lower: float = 0, upper: float = 1_000_000
@@ -42,6 +45,7 @@ def apply_cap_outlier(
     return df
 
 
+@apply_op(kind=ApplyOpKind.GOLD_TRANSFORMATION, capture_kwargs={"column", "dtype"})
 def apply_type_cast(df: DataFrame, column: str, *, dtype: str = "float") -> DataFrame:
     if column not in df.columns:
         return df
@@ -49,12 +53,14 @@ def apply_type_cast(df: DataFrame, column: str, *, dtype: str = "float") -> Data
     return df
 
 
+@apply_op(kind=ApplyOpKind.GOLD_TRANSFORMATION, capture_kwargs={"column"})
 def apply_drop_column(df: DataFrame, column: str) -> DataFrame:
     if column not in df.columns:
         return df
     return df.drop(columns=[column])
 
 
+@apply_op(kind=ApplyOpKind.GOLD_TRANSFORMATION, capture_kwargs={"column", "lower_bound", "upper_bound"})
 @_requires_column
 def apply_winsorize(
     df: DataFrame, column: str, *, lower_bound: float = 0, upper_bound: float = 1_000_000
@@ -63,6 +69,7 @@ def apply_winsorize(
     return df
 
 
+@apply_op(kind=ApplyOpKind.GOLD_TRANSFORMATION, capture_kwargs={"column", "n_segments"})
 def apply_segment_aware_cap(df: DataFrame, column: str, *, n_segments: int = 2) -> DataFrame:
     if column not in df.columns:
         return df
@@ -97,18 +104,21 @@ def apply_segment_aware_cap(df: DataFrame, column: str, *, n_segments: int = 2) 
     return df
 
 
+@apply_op(kind=ApplyOpKind.GOLD_TRANSFORMATION, capture_kwargs={"column"})
 @_requires_column
 def apply_log_transform(df: DataFrame, column: str) -> DataFrame:
     df[column] = np.log1p(df[column].clip(lower=0))
     return df
 
 
+@apply_op(kind=ApplyOpKind.GOLD_TRANSFORMATION, capture_kwargs={"column"})
 @_requires_column
 def apply_sqrt_transform(df: DataFrame, column: str) -> DataFrame:
     df[column] = np.sqrt(df[column].clip(lower=0))
     return df
 
 
+@apply_op(kind=ApplyOpKind.GOLD_TRANSFORMATION, capture_kwargs={"column"})
 @_requires_column
 def apply_zero_inflation_handling(df: DataFrame, column: str) -> DataFrame:
     df[f"{column}_is_zero"] = (df[column] == 0).astype(int)
@@ -116,6 +126,7 @@ def apply_zero_inflation_handling(df: DataFrame, column: str) -> DataFrame:
     return df
 
 
+@apply_op(kind=ApplyOpKind.GOLD_TRANSFORMATION, capture_kwargs={"column"})
 @_requires_column
 def apply_cap_then_log(df: DataFrame, column: str, *, _precomputed_q99: float | None = None) -> DataFrame:
     q99 = _precomputed_q99 if _precomputed_q99 is not None else df[column].quantile(0.99)
@@ -123,6 +134,7 @@ def apply_cap_then_log(df: DataFrame, column: str, *, _precomputed_q99: float | 
     return df
 
 
+@apply_op(kind=ApplyOpKind.GOLD_ENCODING, capture_kwargs={"column"})
 @_requires_column
 def apply_one_hot_encode(df: DataFrame, column: str) -> DataFrame:
     out = get_dummies(df, columns=[column], prefix=column)
@@ -140,12 +152,14 @@ def apply_one_hot_encode(df: DataFrame, column: str) -> DataFrame:
     return out
 
 
+@apply_op(kind=ApplyOpKind.GOLD_FEATURE_SPEC_GATE, capture_kwargs={"column"})
 def apply_feature_select(df: DataFrame, column: str) -> DataFrame:
     if column not in df.columns:
         return df
     return df.drop(columns=[column])
 
 
+@apply_op(kind=ApplyOpKind.SILVER_DERIVED_FEATURE, capture_kwargs={"column", "numerator", "denominator"})
 def apply_derived_ratio(
     df: DataFrame, column: str, *, numerator: str, denominator: str
 ) -> DataFrame:
@@ -164,6 +178,7 @@ def apply_derived_ratio(
     return df
 
 
+@apply_op(kind=ApplyOpKind.SILVER_DERIVED_FEATURE, capture_kwargs={"column", "col_a", "col_b"})
 def apply_derived_interaction(
     df: DataFrame, column: str, *, col_a: str, col_b: str
 ) -> DataFrame:
@@ -173,6 +188,7 @@ def apply_derived_interaction(
     return df
 
 
+@apply_op(kind=ApplyOpKind.SILVER_DERIVED_FEATURE, capture_kwargs={"column", "columns"})
 def apply_derived_composite(
     df: DataFrame, column: str, *, columns: list[str]
 ) -> DataFrame:
@@ -205,6 +221,7 @@ def _diff_days(anchor_series, source_series):
     return timedelta_to_days(anchor_series - source_series)
 
 
+@apply_op(kind=ApplyOpKind.SILVER_DERIVED_FEATURE, capture_kwargs={"column", "source", "anchor_column"})
 def apply_derived_recency(
     df: DataFrame, column: str, *, source: str, anchor_column: str = "as_of_date"
 ) -> DataFrame:
@@ -220,6 +237,7 @@ def apply_derived_recency(
     return df
 
 
+@apply_op(kind=ApplyOpKind.SILVER_DERIVED_FEATURE, capture_kwargs={"column", "col_a", "col_b"})
 def apply_derived_duration(
     df: DataFrame, column: str, *, col_a: str, col_b: str
 ) -> DataFrame:
@@ -232,6 +250,7 @@ def apply_derived_duration(
     return df
 
 
+@apply_op(kind=ApplyOpKind.SILVER_DERIVED_FEATURE, capture_kwargs={"column", "source"})
 def apply_derived_cyclical(
     df: DataFrame, column: str, *, source: str
 ) -> DataFrame:
@@ -247,6 +266,7 @@ def apply_derived_cyclical(
     return df
 
 
+@apply_op(kind=ApplyOpKind.SILVER_DERIVED_FEATURE, capture_kwargs={"column", "source", "anchor_column"})
 def apply_derived_tenure(
     df: DataFrame, column: str, *, source: str, anchor_column: str = "as_of_date"
 ) -> DataFrame:
@@ -258,6 +278,7 @@ def apply_derived_tenure(
     return df
 
 
+@apply_op(kind=ApplyOpKind.SILVER_DERIVED_FEATURE, capture_kwargs={"column", "source"})
 def apply_derived_extraction_is_weekend(
     df: DataFrame, column: str, *, source: str
 ) -> DataFrame:
@@ -277,6 +298,7 @@ def apply_derived_extraction_is_weekend(
 # ── Batch ops (multi-column vectorized) ───────────────────────────
 
 
+@apply_op(kind=ApplyOpKind.GOLD_TRANSFORMATION, capture_kwargs={"columns"})
 def apply_batch_log_transform(df: DataFrame, columns: list[str]) -> DataFrame:
     valid = [c for c in columns if c in df.columns]
     if valid:
@@ -284,6 +306,7 @@ def apply_batch_log_transform(df: DataFrame, columns: list[str]) -> DataFrame:
     return df
 
 
+@apply_op(kind=ApplyOpKind.GOLD_TRANSFORMATION, capture_kwargs={"columns"})
 def apply_batch_sqrt_transform(df: DataFrame, columns: list[str]) -> DataFrame:
     valid = [c for c in columns if c in df.columns]
     if valid:
@@ -291,6 +314,7 @@ def apply_batch_sqrt_transform(df: DataFrame, columns: list[str]) -> DataFrame:
     return df
 
 
+@apply_op(kind=ApplyOpKind.GOLD_TRANSFORMATION, capture_kwargs={"columns"})
 def apply_batch_zero_inflation(df: DataFrame, columns: list[str]) -> DataFrame:
     valid = [c for c in columns if c in df.columns]
     if not valid:
@@ -303,6 +327,7 @@ def apply_batch_zero_inflation(df: DataFrame, columns: list[str]) -> DataFrame:
     return df
 
 
+@apply_op(kind=ApplyOpKind.GOLD_TRANSFORMATION, capture_kwargs={"columns_q99"})
 def apply_batch_cap_then_log(df: DataFrame, columns_q99: list[tuple[str, float | None]]) -> DataFrame:
     valid = [(c, q) for c, q in columns_q99 if c in df.columns]
     if not valid:
@@ -331,6 +356,7 @@ def _apply_yj_column(series, lmbda: float, std_mean: float | None, std_scale: fl
     return result
 
 
+@apply_op(kind=ApplyOpKind.GOLD_TRANSFORMATION, capture_kwargs={"params_list"})
 def apply_batch_yeo_johnson(df: DataFrame, params_list: list[tuple[str, float, float | None, float | None, bool]]) -> DataFrame:
     for col, lmbda, std_mean, std_scale, standardize in params_list:
         if col in df.columns:

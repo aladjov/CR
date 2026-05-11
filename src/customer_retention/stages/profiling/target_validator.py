@@ -34,6 +34,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from customer_retention.parity import ApplyOpKind, apply_op
+
 logger = logging.getLogger(__name__)
 
 # Cap on observed distinct values surfaced in diagnostic output. Matches
@@ -364,6 +366,7 @@ def render_label_map_template(distinct_values: List[Any], indent: str = "    ") 
     return "\n".join(lines)
 
 
+@apply_op(kind=ApplyOpKind.SILVER_TARGET_LABEL_MAP, capture_kwargs={"target_column", "mapping"})
 def apply_target_encoding(df: Any, target_column: str, mapping: Dict[Any, int]) -> Any:
     """Apply ``mapping`` to ``df[target_column]`` returning the same df type.
 
