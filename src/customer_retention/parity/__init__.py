@@ -19,6 +19,7 @@ from .decorator import (
     apply_op,
     trace_active,
 )
+from .exploration_scan import DYNAMIC, scan_exploration_manifest
 from .gaps import GapKind, ParityGap, diff_manifests
 from .kinds import ApplyOpKind
 from .manifest import (
@@ -32,6 +33,7 @@ __all__ = [
     "APPLY_REGISTRY",
     "ApplyOpDescriptor",
     "ApplyOpKind",
+    "DYNAMIC",
     "GapKind",
     "Manifest",
     "ManifestEntry",
@@ -42,5 +44,6 @@ __all__ = [
     "apply_op",
     "diff_manifests",
     "fingerprint_kwargs",
+    "scan_exploration_manifest",
     "trace_active",
 ]
