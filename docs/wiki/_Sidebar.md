@@ -14,6 +14,8 @@
 - [[Feature Store]]
 - [[Notebook Sync]]
 - [[Team Workflow]]
+- [[Parity Audit|Parity-Audit]]
+- [[Adding a New Apply-Op|Adding-a-New-Apply-Op]]
 
 ### Execution Tracks
 - [[Local Track]]

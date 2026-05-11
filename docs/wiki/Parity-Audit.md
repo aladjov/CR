@@ -2,6 +2,8 @@
 
 This document specifies a framework subsystem that guarantees, **before any data flows**, that the production pipeline a job is about to run is a faithful replay of the exploration intent declared by the same job's notebooks. It exists to make a recurring class of bug — where production silently applies operations exploration would have skipped (or vice versa) — structurally impossible to ship.
 
+> **Implementation status (2026-05-11):** Phases 1–7 shipped. The subsystem lives at `customer_retention.parity`. Pre-flight notebook: `exploration_notebooks/-1_parity_contract.ipynb`. Contributor guide: [Adding a New Apply-Op](Adding-a-New-Apply-Op.md). The runtime tracer is opt-in via `CR_PARITY_TRACE=1`; with the flag unset the decorator wrapper is a single branch (zero overhead in normal production). 40 framework apply primitives are decorated and protected by a completeness gate. The history-window regression scenario from section 7 below is locked in by `tests/parity/test_renderer_contract.py`.
+
 ## 1. Purpose
 
 A medallion engagement runs as a single Databricks job whose tasks are the numbered notebooks `00 → 10` plus a parity pre-flight at `-1` (named for sort order: `-1_parity_contract.ipynb` always runs before `00_start_here.ipynb`). The first half (`00–09`) is exploration; `10` generates a production pipeline by translating the registry of recommendations exploration produced into deployable scripts. The two halves run on different code paths:
