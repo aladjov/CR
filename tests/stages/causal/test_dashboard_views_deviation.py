@@ -9,6 +9,8 @@ from __future__ import annotations
 import re
 from unittest.mock import MagicMock
 
+import pytest
+
 from customer_retention.stages.causal.dashboard_views import (
     DASHBOARD_DEVIATION_VIEW_NAMES,
     DASHBOARD_PROVENANCE_VIEW_NAMES,
@@ -164,6 +166,7 @@ def _spark_with_numeric_gold():
 
 
 def test_publish_with_composite_name_runs_extra_statements():
+    pytest.importorskip("pyspark")
     spark = _spark_with_numeric_gold()
     publish_dashboard_views(spark, "c", "s", composite_name="cn1")
     # MagicMock's tableExists returns truthy for every prereq, so the publisher
@@ -188,6 +191,7 @@ def test_publish_with_composite_name_runs_extra_statements():
 
 
 def test_publish_without_composite_name_keeps_original_count():
+    pytest.importorskip("pyspark")
     spark = MagicMock()
     publish_dashboard_views(spark, "c", "s")
     view_calls = [
@@ -203,6 +207,7 @@ def test_publish_skips_deviation_when_gold_has_no_numeric_columns():
     # would return an empty map. Publisher detects this and skips the
     # deviation block instead of emitting a view that silently produces 0
     # rows on every dashboard page-hit.
+    pytest.importorskip("pyspark")
     spark = MagicMock()
 
     class _F:
@@ -233,6 +238,7 @@ def test_publish_skips_deviation_when_population_stats_table_missing():
     # ``[TABLE_OR_VIEW_NOT_FOUND]`` at CREATE time. The publisher must
     # detect the missing prerequisite and silently skip just the deviation
     # block, leaving the rest of the dashboard publishable.
+    pytest.importorskip("pyspark")
     spark = MagicMock()
 
     def _exists(fqn):
@@ -257,6 +263,7 @@ def test_publish_skips_deviation_when_population_stats_table_missing():
 def test_publish_skips_deviation_when_gold_features_table_missing():
     # Same skip behaviour when the per-run gold table is absent (e.g.
     # composite_name was supplied but the gold step never ran).
+    pytest.importorskip("pyspark")
     spark = MagicMock()
 
     def _exists(fqn):

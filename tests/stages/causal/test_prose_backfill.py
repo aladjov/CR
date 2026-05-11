@@ -10,6 +10,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from customer_retention.stages.causal.interpretation.prose_backfill import (
     ProseBackfillResult,
     _safe_render,
@@ -78,6 +80,7 @@ class TestBackfillEligibilityProse:
 
     def test_rendered_rows_merged(self):
         """Rows whose JSON predicate compiles to non-empty prose are MERGEd back."""
+        pytest.importorskip("delta")
         spark = MagicMock()
         ns = SimpleNamespace(run_id="run-1")
         # Two candidate rows — dicts mirror Spark Row's __getitem__ semantics

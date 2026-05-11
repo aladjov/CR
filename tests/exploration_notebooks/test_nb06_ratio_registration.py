@@ -97,6 +97,11 @@ class TestExplorationNb06ContractRegistration:
                     )
 
 
+@pytest.mark.skipif(
+    not FLAWLESS_NB06.exists(),
+    reason="debug/flawless/06_feature_opportunities.ipynb is gitignored — "
+           "absent on CI runners (debug/ is in .gitignore).",
+)
 class TestFlawlessNb06Registration:
     """Flawless NB06 is the SPS engagement reference. It must register
     BOTH contract AND subscription terminate-to-start ratios via the

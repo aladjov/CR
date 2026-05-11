@@ -119,6 +119,7 @@ class TestComputeFeaturePopulationStats:
         assert _as_native_spark(_FakePysparkPandasDF()) == "native"
 
     def test_numeric_batched_agg_invocation(self):
+        pytest.importorskip("pyspark")
         train = MagicMock()
         head_row = {
             "cnt_0": 10, "avg_0": 5.0, "std_0": 1.5, "pct_0": [0.1, 0.3, 1, 5, 9, 9.9, 9.99],
@@ -139,6 +140,7 @@ class TestComputeFeaturePopulationStats:
         train.agg.assert_called_once()
 
     def test_numeric_batches_when_exceeding_batch_size(self, monkeypatch):
+        pytest.importorskip("pyspark")
         from customer_retention.stages.causal import population_stats as ps
 
         monkeypatch.setattr(ps, "_NUMERIC_BATCH_SIZE", 2)
@@ -161,6 +163,7 @@ class TestComputeFeaturePopulationStats:
         assert train.agg.call_count == 2  # two batches
 
     def test_categorical_top_k(self):
+        pytest.importorskip("pyspark")
         train = MagicMock()
         non_null = train.filter.return_value
         non_null.count.return_value = 1000
@@ -182,6 +185,7 @@ class TestComputeFeaturePopulationStats:
         assert rows[0].top_categories[1].share == pytest.approx(0.4)
 
     def test_categorical_share_uses_nonnull_denominator(self):
+        pytest.importorskip("pyspark")
         train = MagicMock()
         non_null = train.filter.return_value
         non_null.count.return_value = 500  # only 500 non-null even if train has more
@@ -194,6 +198,7 @@ class TestComputeFeaturePopulationStats:
         assert rows[0].top_categories[0].share == pytest.approx(1.0)
 
     def test_categorical_with_zero_nonnull_returns_empty_top(self):
+        pytest.importorskip("pyspark")
         train = MagicMock()
         non_null = train.filter.return_value
         non_null.count.return_value = 0
@@ -258,6 +263,7 @@ class TestMaterializePopulationStatsFromSidecar:
     """
 
     def test_missing_sidecar_returns_zero_without_write(self, tmp_path):
+        pytest.importorskip("delta")
         from customer_retention.stages.causal.population_stats import (
             materialize_population_stats_from_sidecar,
         )
@@ -270,6 +276,7 @@ class TestMaterializePopulationStatsFromSidecar:
         spark.sql.assert_not_called()
 
     def test_empty_rows_is_noop(self, tmp_path):
+        pytest.importorskip("delta")
         from customer_retention.stages.causal.population_stats import (
             materialize_population_stats_from_sidecar,
         )

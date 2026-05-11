@@ -335,6 +335,7 @@ class TestTableLoading:
         monkeypatch.setattr(DatasetFingerprinter, "_ensure_spark", staticmethod(lambda: mock_spark))
 
     def test_load_dispatches_to_spark_table(self, monkeypatch):
+        pytest.importorskip("pyspark")
         mock_spark = MagicMock()
         mock_df = pd.DataFrame({"a": [1, 2, 3]})
         mock_spark.table.return_value.limit.return_value.toPandas.return_value = mock_df
@@ -352,6 +353,7 @@ class TestTableLoading:
         assert result == 42
 
     def test_load_table_applies_nrows_limit(self, monkeypatch):
+        pytest.importorskip("pyspark")
         mock_spark = MagicMock()
         mock_spark.table.return_value.limit.return_value.toPandas.return_value = pd.DataFrame({"x": [1]})
         self._mock_spark(monkeypatch, mock_spark)
@@ -359,6 +361,7 @@ class TestTableLoading:
         mock_spark.table.return_value.limit.assert_called_once_with(500)
 
     def test_fingerprint_all_with_table_names(self, monkeypatch):
+        pytest.importorskip("pyspark")
         mock_spark = MagicMock()
         mock_df = pd.DataFrame({
             "customer_id": ["C001", "C002", "C003"],

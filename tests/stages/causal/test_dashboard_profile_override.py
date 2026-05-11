@@ -79,6 +79,7 @@ def _spark_mock_with_writer():
 
 
 def test_apply_passes_placeholders_through():
+    pytest.importorskip("pyspark")
     spark, _ = _spark_mock_with_writer()
     sql = "CREATE OR REPLACE VIEW {catalog}.{schema}.v AS SELECT * FROM delta.`{vol}/silver/silver_merged`;"
     apply_profile_override(
@@ -105,6 +106,7 @@ def test_render_profile_sql_leaves_placeholder_when_no_composite():
 
 
 def test_apply_publishes_each_statement_in_sql():
+    pytest.importorskip("pyspark")
     spark, _ = _spark_mock_with_writer()
     sql = (
         "CREATE OR REPLACE VIEW {catalog}.{schema}.v_account_profile AS SELECT 1;\n"
@@ -130,6 +132,7 @@ def test_apply_publishes_each_statement_in_sql():
 
 
 def test_apply_appends_html_row_to_uc_table():
+    pytest.importorskip("pyspark")
     spark, _ = _spark_mock_with_writer()
     html = "---\ndata: {}\n---\n<article>{{entity_id}}</article>\n"
     apply_profile_override(
@@ -150,6 +153,7 @@ def test_apply_appends_html_row_to_uc_table():
 
 
 def test_apply_passes_composite_name_through_to_sql():
+    pytest.importorskip("pyspark")
     spark, _ = _spark_mock_with_writer()
     sql = "CREATE OR REPLACE VIEW {catalog}.{schema}.v AS SELECT * FROM {catalog}.{schema}.gold_features_{composite_name};"
     apply_profile_override(
@@ -199,6 +203,7 @@ def test_apply_is_no_op_when_spark_is_none():
 
 
 def test_result_str_lists_views_and_uc_table():
+    pytest.importorskip("pyspark")
     spark, _ = _spark_mock_with_writer()
     res = apply_profile_override(
         spark, "c", "s",

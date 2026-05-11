@@ -132,6 +132,7 @@ class TestEnumValue:
 
 class TestSchemaToDdl:
     def test_contains_every_run_context_column(self):
+        pytest.importorskip("pyspark")
         ddl = _schema_to_ddl(run_context_schema())
         for required in (
             "scoring_run_id STRING",

@@ -114,6 +114,7 @@ class TestRendererGuard:
 
 class TestSparkEarlyRaise:
     def test_lagged_windows_spark_raises_valueerror_on_empty_value_cols(self):
+        pytest.importorskip("pyspark")
         from customer_retention.stages.profiling import spark_temporal_feature_engineer as mod
 
         class _Cfg:

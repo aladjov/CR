@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from customer_retention.stages.causal.dashboard_views import (
     DASHBOARD_PROVENANCE_VIEW_NAMES,
     DASHBOARD_VIEW_NAMES,
@@ -266,6 +268,7 @@ class TestSplitViewStatements:
 
 class TestPublishDashboardViews:
     def test_publishes_one_statement_per_named_view(self):
+        pytest.importorskip("pyspark")
         spark = MagicMock()
         statements = publish_dashboard_views(spark, "c", "s")
         # MagicMock's tableExists returns truthy for the provenance prereqs
@@ -301,12 +304,14 @@ class TestPublishDashboardViews:
         )
 
     def test_ensures_run_context_table_before_publishing_views(self):
+        pytest.importorskip("pyspark")
         spark = MagicMock()
         publish_dashboard_views(spark, "c", "s")
         first_sql = spark.sql.call_args_list[0].args[0]
         assert "CREATE TABLE IF NOT EXISTS c.s.run_context" in first_sql
 
     def test_substitutes_catalog_and_schema_into_sql(self):
+        pytest.importorskip("pyspark")
         spark = MagicMock()
         publish_dashboard_views(spark, "alpha", "beta")
         joined = "\n".join(call.args[0] for call in spark.sql.call_args_list)
