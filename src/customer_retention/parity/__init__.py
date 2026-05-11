@@ -28,11 +28,18 @@ from .manifest import (
     SourceLocation,
     fingerprint_kwargs,
 )
+from .production_scan import (
+    AuditScope,
+    infer_dataset_from_path,
+    scan_generated_pipeline,
+    scan_production_source,
+)
 
 __all__ = [
     "APPLY_REGISTRY",
     "ApplyOpDescriptor",
     "ApplyOpKind",
+    "AuditScope",
     "DYNAMIC",
     "GapKind",
     "Manifest",
@@ -44,6 +51,9 @@ __all__ = [
     "apply_op",
     "diff_manifests",
     "fingerprint_kwargs",
+    "infer_dataset_from_path",
     "scan_exploration_manifest",
+    "scan_generated_pipeline",
+    "scan_production_source",
     "trace_active",
 ]
