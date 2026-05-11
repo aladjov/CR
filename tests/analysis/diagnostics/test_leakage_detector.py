@@ -467,6 +467,130 @@ class TestWindowOverlapsHorizonLD062LD063:
         ld062 = [c for c in result.checks if c.check_id == "LD062"]
         assert len(ld062) == 0
 
+
+class TestDatetimeSaturationLD064:
+    """V4 LD064: `max` / `mean` over `_all_time` of a datetime-derivation
+    kind (`is_weekend`, `hour`, `dow`, `delta_hours`). These saturate into
+    tenure proxies as event count grows. Caught by the new
+    DATETIME_SATURATION_PATTERN, independent of label horizon.
+    Motivated by the spschurn-1dac64c6 V3 run where 5 of 6 final features
+    matched this shape."""
+
+    def _make_x(self, columns):
+        n = 50
+        rng = np.random.default_rng(0)
+        return pd.DataFrame({col: rng.standard_normal(n) for col in columns})
+
+    def test_is_weekend_max_all_time_is_high_ld064(self):
+        X = self._make_x(["ACTIVATED_DATE_is_weekend_max_all_time"])
+        detector = LeakageDetector(label_horizon_days=30)
+        result = detector.check_window_overlaps_horizon(X)
+        ld064 = [c for c in result.checks if c.check_id == "LD064"]
+        assert len(ld064) == 1
+        assert ld064[0].feature == "ACTIVATED_DATE_is_weekend_max_all_time"
+        assert ld064[0].severity == Severity.HIGH
+
+    def test_hour_max_all_time_is_high_ld064(self):
+        X = self._make_x(["ACTIVATED_DATE_hour_max_all_time"])
+        detector = LeakageDetector(label_horizon_days=30)
+        result = detector.check_window_overlaps_horizon(X)
+        ld064 = [c for c in result.checks if c.check_id == "LD064"]
+        assert len(ld064) == 1
+
+    def test_dow_max_all_time_is_high_ld064(self):
+        X = self._make_x(["SUBMITTED_DATE_dow_max_all_time"])
+        detector = LeakageDetector(label_horizon_days=30)
+        result = detector.check_window_overlaps_horizon(X)
+        ld064 = [c for c in result.checks if c.check_id == "LD064"]
+        assert len(ld064) == 1
+
+    def test_delta_hours_max_all_time_is_high_ld064(self):
+        X = self._make_x(["ESTIMATED_CLOSE_DATE_delta_hours_max_all_time"])
+        detector = LeakageDetector(label_horizon_days=30)
+        result = detector.check_window_overlaps_horizon(X)
+        ld064 = [c for c in result.checks if c.check_id == "LD064"]
+        assert len(ld064) == 1
+
+    def test_mean_all_time_on_kinds_also_flagged(self):
+        X = self._make_x([
+            "ACTIVATED_DATE_is_weekend_mean_all_time",
+            "SUBMITTED_DATE_hour_mean_all_time",
+        ])
+        detector = LeakageDetector(label_horizon_days=30)
+        result = detector.check_window_overlaps_horizon(X)
+        ld064 = [c for c in result.checks if c.check_id == "LD064"]
+        assert len(ld064) == 2
+
+    def test_ld064_independent_of_label_horizon(self):
+        # LD064 fires whether or not a horizon was set; the saturation
+        # argument doesn't depend on horizon vs window comparison.
+        X = self._make_x(["ACTIVATED_DATE_is_weekend_max_all_time"])
+        detector_no_horizon = LeakageDetector()
+        result = detector_no_horizon.check_window_overlaps_horizon(X)
+        ld064 = [c for c in result.checks if c.check_id == "LD064"]
+        assert len(ld064) == 1
+
+    def test_max_bounded_window_not_ld064(self):
+        # _max_180d, _max_365d, etc. on the same kinds remain modal-habit
+        # features and are NOT flagged.
+        X = self._make_x([
+            "ACTIVATED_DATE_is_weekend_max_180d",
+            "SUBMITTED_DATE_hour_max_365d",
+            "REOPENED_DATE_TIME_dow_max_90d",
+        ])
+        detector = LeakageDetector(label_horizon_days=30)
+        result = detector.check_window_overlaps_horizon(X)
+        ld064 = [c for c in result.checks if c.check_id == "LD064"]
+        assert len(ld064) == 0
+
+    def test_count_sum_all_time_on_kind_is_ld063_not_ld064(self):
+        # Existing LD063 still catches these (count/sum continues through
+        # WINDOW_FEATURE_PATTERN). Confirms no double-flagging.
+        X = self._make_x(["EVENT_DATE_is_weekend_sum_all_time"])
+        detector = LeakageDetector(label_horizon_days=30)
+        result = detector.check_window_overlaps_horizon(X)
+        ld063 = [c for c in result.checks if c.check_id == "LD063"]
+        ld064 = [c for c in result.checks if c.check_id == "LD064"]
+        assert len(ld063) == 1
+        assert len(ld064) == 0
+
+    def test_min_std_not_flagged_by_ld064(self):
+        # LD064 pattern is narrow: only `max` and `mean`. `min`, `std`,
+        # `var` on the same kinds are not yet considered leak shapes.
+        X = self._make_x([
+            "ACTIVATED_DATE_is_weekend_min_all_time",
+            "ACTIVATED_DATE_hour_std_all_time",
+        ])
+        detector = LeakageDetector(label_horizon_days=30)
+        result = detector.check_window_overlaps_horizon(X)
+        ld064 = [c for c in result.checks if c.check_id == "LD064"]
+        assert len(ld064) == 0
+
+    def test_non_kind_all_time_not_flagged_by_ld064(self):
+        # `ESTIMATED_CLOSE_DATE_value_max_all_time` doesn't match — `value`
+        # isn't one of the four derivation kinds.
+        X = self._make_x(["NET_PRICE_max_all_time", "NET_PRICE_mean_all_time"])
+        detector = LeakageDetector(label_horizon_days=30)
+        result = detector.check_window_overlaps_horizon(X)
+        ld064 = [c for c in result.checks if c.check_id == "LD064"]
+        assert len(ld064) == 0
+
+    def test_v3_run_survivors_all_caught(self):
+        # Concrete regression test: the 5 leak features that survived
+        # V3's structural rule in spschurn-1dac64c6 must all fire LD064.
+        survivors = [
+            "ACTIVATED_DATE_hour_max_all_time",
+            "ACTIVATED_DATE_is_weekend_max_all_time",
+            "SUBMITTED_DATE_dow_max_all_time",
+            "SUBMITTED_DATE_is_weekend_max_all_time",
+            "ESTIMATED_CLOSE_DATE_delta_hours_max_all_time",
+        ]
+        X = self._make_x(survivors)
+        detector = LeakageDetector(label_horizon_days=30)
+        result = detector.check_window_overlaps_horizon(X)
+        ld064 = {c.feature for c in result.checks if c.check_id == "LD064"}
+        assert ld064 == set(survivors)
+
     def test_temporal_metadata_columns_are_excluded(self):
         # Even if the column name happened to match the pattern, temporal
         # metadata should be filtered before parsing.

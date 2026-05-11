@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Union
+from typing import Any, Optional, Union
 
 import pandas as _pandas
 
@@ -1343,10 +1343,34 @@ _AGG_BATCH_SIZE = 500
 _CORR_SAMPLE_ROWS = 50_000
 
 
-def bulk_variance(df: Any, columns: list[str]) -> _pandas.Series:
-    """Compute variance per column. Batched Spark SQL on Databricks."""
+def bulk_variance(
+    df: Any,
+    columns: list[str],
+    time_column: Optional[str] = None,
+    time_value: Optional[Any] = None,
+) -> _pandas.Series:
+    """Compute variance per column. Batched Spark SQL on Databricks.
+
+    When ``time_column`` is set, variance is computed on a single snapshot
+    of the panel rather than the pooled rows. This avoids the
+    cross-snapshot drift inflation: features that grow monotonically per
+    entity across snapshots (e.g. ``*_delta_hours_max_all_time`` tenure
+    proxies, accumulating count features) appear high-variance under
+    pooled estimation because the same entity contributes N drifted
+    values, not because of useful between-entity variation. Restricting
+    to one slice (default: the latest ``time_column`` value, or
+    ``time_value`` if given) yields the cross-entity variance the
+    downstream selection actually wants to rank features by.
+
+    The kwarg is opt-in: callers that don't pass ``time_column`` get the
+    pre-V4 pooled behavior unchanged.
+    """
     if not columns:
         return _pandas.Series(dtype=float)
+    if time_column is not None and time_column in df.columns:
+        if time_value is None:
+            time_value = df[time_column].max()
+        df = df[df[time_column] == time_value]
     if not _is_spark_pandas(df):
         return df[columns].var()
     import pyspark.sql.functions as F  # noqa: N812

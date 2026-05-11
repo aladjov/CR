@@ -89,6 +89,24 @@ class LeakageDetector:
         r"(?P<flag>_is_zero|_log)?$",
         re.IGNORECASE,
     )
+    # LD064 (V4): parses datetime-derivation-saturation feature names
+    # like "ACTIVATED_DATE_is_weekend_max_all_time",
+    # "SUBMITTED_DATE_hour_mean_all_time",
+    # "ESTIMATED_CLOSE_DATE_delta_hours_max_all_time". MAX / MEAN over
+    # all_time on event-derived binary, modular, or duration kinds
+    # saturate into tenure proxies as event count grows (binary in {0,1}
+    # saturates at 1 with ~7 events; modular `hour`/`dow` saturate at
+    # their modular max; `delta_hours` is literal age of oldest event).
+    # `_dow_count_all_time` / `_is_weekend_sum_all_time` are already
+    # caught by LD063 via WINDOW_FEATURE_PATTERN, so LD064 narrows to
+    # the MAX / MEAN aggregations that LD063 deliberately omits.
+    DATETIME_SATURATION_PATTERN = re.compile(
+        r"^(?P<base>.+?)"
+        r"_(?P<kind>is_weekend|hour|dow|delta_hours)"
+        r"_(?P<func>max|mean)"
+        r"_all_time$",
+        re.IGNORECASE,
+    )
     WINDOW_UNIT_DAYS = {
         "h": 1.0 / 24.0,
         "d": 1.0,
@@ -456,62 +474,93 @@ class LeakageDetector:
         return magnitude * cls.WINDOW_UNIT_DAYS[unit]
 
     def check_window_overlaps_horizon(self, X: DataFrame) -> LeakageResult:
-        """LD062 / LD063: aggregation windows that span the label horizon.
+        """LD062 / LD063 / LD064: aggregation-window leakage classes.
 
-        When the aggregation window N is greater than or equal to the label
-        horizon H, the feature can encode "did anything happen in a span at
-        least as long as the period the label is asking about" — which, for
-        churn-style targets, is a near-perfect proxy. The `_is_zero` flag on
-        such a window collapses to a single bit that *is* the answer
-        ("entity inactive in N days") and is treated as CRITICAL (LD062).
-        Continuous `count` / `sum` aggregations on the same window are HIGH
-        (LD063) because they carry the same signal in a denser form. Other
-        aggregation funcs (`mean`, `max`, etc.) are deliberately not flagged:
-        they describe the *shape* of activity, not its presence/absence.
+        - LD062 (CRITICAL): zero-inflation flag on a window >= label horizon.
+          Encodes "entity inactive over a span at least as long as the
+          prediction window" — isomorphic to the target for activity-driven
+          labels.
+        - LD063 (HIGH): `count` / `sum` aggregation over a window >= label
+          horizon. Carries the same signal as LD062 in a denser form.
+        - LD064 (HIGH, V4): `max` / `mean` over `_all_time` of a
+          datetime-derivation kind (`is_weekend`, `hour`, `dow`,
+          `delta_hours`). These saturate into tenure proxies as event count
+          grows (binary derivation reaches 1; modular derivation reaches
+          its modular max; duration derivation literally measures the
+          oldest event's age). Caught here because the LD063 rule
+          deliberately excludes `max` / `mean` for windowed aggregations,
+          but `_all_time` MAX / MEAN on these specific kinds bypasses that
+          assumption — they describe activity *volume*, not shape.
 
-        No-op when ``label_horizon_days`` was not set on the detector.
+        LD062 / LD063 are no-ops when ``label_horizon_days`` was not set.
+        LD064 fires unconditionally (the saturation argument doesn't
+        depend on the label horizon, only on the `_all_time` window).
         """
         checks: List[LeakageCheck] = []
         horizon = self.label_horizon_days
-        if horizon is None:
-            return self._build_result(checks)
 
         for col in self._get_analyzable_columns(X):
-            parsed = self._parse_window_feature(col)
-            if parsed is None:
-                continue
-            window_days = self._window_to_days(parsed["window"])
-            if math.isnan(window_days) or window_days < horizon:
-                continue
+            # LD062 / LD063 — windowed count/sum where window >= horizon
+            if horizon is not None:
+                parsed = self._parse_window_feature(col)
+                if parsed is not None:
+                    window_days = self._window_to_days(parsed["window"])
+                    if not math.isnan(window_days) and window_days >= horizon:
+                        window_label = parsed["window"]
+                        window_display = (
+                            "all_time"
+                            if window_label == "all_time"
+                            else f"{window_label} ({int(window_days)}d)"
+                        )
+                        if parsed["flag"] == "_is_zero":
+                            checks.append(LeakageCheck(
+                                check_id="LD062",
+                                feature=col,
+                                severity=Severity.CRITICAL,
+                                recommendation=(
+                                    f"REMOVE {col}: zero-inflation flag on aggregation window "
+                                    f"{window_display} >= label horizon ({horizon}d). Encodes "
+                                    f"'entity inactive over a span at least as long as the "
+                                    f"prediction window' — isomorphic to the target for "
+                                    f"activity-driven labels."
+                                ),
+                            ))
+                            continue
+                        if parsed["func"] in ("count", "sum"):
+                            checks.append(LeakageCheck(
+                                check_id="LD063",
+                                feature=col,
+                                severity=Severity.HIGH,
+                                recommendation=(
+                                    f"INVESTIGATE {col}: aggregation '{parsed['func']}' over "
+                                    f"window {window_display} >= label horizon ({horizon}d). "
+                                    f"Often a near-perfect proxy for the target when the "
+                                    f"underlying column tracks entity activity."
+                                ),
+                            ))
+                            continue
 
-            window_label = parsed["window"]
-            window_display = (
-                "all_time" if window_label == "all_time" else f"{window_label} ({int(window_days)}d)"
-            )
-
-            if parsed["flag"] == "_is_zero":
+            # LD064 — datetime-derivation saturation on _all_time MAX/MEAN.
+            # Independent of label horizon; relies on the saturation
+            # mechanic, which applies whenever event count is large.
+            sat = self.DATETIME_SATURATION_PATTERN.match(col)
+            if sat is not None:
+                kind = sat.group("kind").lower()
+                func = sat.group("func").lower()
+                base = sat.group("base")
                 checks.append(LeakageCheck(
-                    check_id="LD062",
-                    feature=col,
-                    severity=Severity.CRITICAL,
-                    recommendation=(
-                        f"REMOVE {col}: zero-inflation flag on aggregation window "
-                        f"{window_display} >= label horizon ({horizon}d). Encodes "
-                        f"'entity inactive over a span at least as long as the "
-                        f"prediction window' — isomorphic to the target for "
-                        f"activity-driven labels."
-                    ),
-                ))
-            elif parsed["func"] in ("count", "sum"):
-                checks.append(LeakageCheck(
-                    check_id="LD063",
+                    check_id="LD064",
                     feature=col,
                     severity=Severity.HIGH,
                     recommendation=(
-                        f"INVESTIGATE {col}: aggregation '{parsed['func']}' over "
-                        f"window {window_display} >= label horizon ({horizon}d). "
-                        f"Often a near-perfect proxy for the target when the "
-                        f"underlying column tracks entity activity."
+                        f"INVESTIGATE {col}: '{func}' over `_all_time` of the "
+                        f"'{kind}' derivation of {base!r}. Saturating shapes "
+                        f"(binary `is_weekend` in {{0,1}}, modular `hour`/"
+                        f"`dow`, cumulative `delta_hours`) approach a tenure "
+                        f"proxy as event count grows. Tenure correlates with "
+                        f"churn by construction. Bounded-window MAX/MEAN "
+                        f"(_30d, _90d, _180d, _365d) on the same kinds "
+                        f"remain available as modal-habit features."
                     ),
                 ))
 
