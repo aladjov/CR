@@ -3475,7 +3475,23 @@ class FindingsParser:
             fallback_window_days=observation_days,
         )
 
-    def _build_history_window_config(self, time_column: str) -> Optional[HistoryWindowConfig]:
+    def _build_history_window_config(
+        self,
+        time_column: str,
+        should_apply_lookback: bool = True,
+    ) -> Optional[HistoryWindowConfig]:
+        # Parity with exploration: `analysis.auto_explorer.sampling.apply_temporal_lookback`
+        # is gated on `RawTimeColumnRole.should_apply_lookback`, which returns
+        # False for INTERVAL_START_TIME datasets (contracts, subscriptions —
+        # whose time column is the start of an interval, not a point event).
+        # Production landing must mirror that gate; otherwise it applies
+        # `apply_history_window` on the post-lifecycle frame, where a single
+        # future-dated start-event sentinel in the data anchors `upper` to
+        # that sentinel and collapses the cohort. Caller passes
+        # `should_apply_lookback=False` derived from the dataset's
+        # `raw_time_column_role` in `project_context.datasets[name]`.
+        if not should_apply_lookback:
+            return None
         if self._intent is None:
             return None
         if self._intent.history_upper_limit is None and self._intent.lookback_periods is None:
@@ -3493,6 +3509,7 @@ class FindingsParser:
         self, config: PipelineConfig, multi: MultiDatasetFindings, sources: Dict[str, ExplorationFindings]
     ) -> None:
         ctx_key_resolutions: Dict[str, list] = {}
+        ctx_lookback_skip: set[str] = set()
         if self._namespace:
             ctx_path = self._namespace.project_context_path
             if ctx_path.exists():
@@ -3502,6 +3519,9 @@ class FindingsParser:
                 for ds_name, ds_entry in ctx.datasets.items():
                     if ds_entry.key_resolution:
                         ctx_key_resolutions[ds_name] = ds_entry.key_resolution
+                    if (ds_entry.raw_time_column_role is not None
+                            and not ds_entry.raw_time_column_role.should_apply_lookback):
+                        ctx_lookback_skip.add(ds_name)
 
         for event_name in multi.event_datasets:
             dataset_info = multi.datasets.get(event_name)
@@ -3554,7 +3574,10 @@ class FindingsParser:
                     "feature_timestamp",
                     mask_future=True,
                 ),
-                history_window=self._build_history_window_config(time_col),
+                history_window=self._build_history_window_config(
+                    time_col,
+                    should_apply_lookback=event_name not in ctx_lookback_skip,
+                ),
                 key_resolution_steps=key_steps,
             )
 
@@ -4133,6 +4156,20 @@ class FindingsParser:
     ) -> None:
         from customer_retention.core.config.column_config import DatasetGranularity
 
+        # Same lookback-skip set as _build_landing_configs: parity with
+        # exploration's RawTimeColumnRole.should_apply_lookback gate.
+        ctx_lookback_skip: set[str] = set()
+        if self._namespace:
+            ctx_path = self._namespace.project_context_path
+            if ctx_path.exists():
+                from customer_retention.analysis.auto_explorer.project_context import ProjectContext
+
+                ctx = ProjectContext.load(ctx_path)
+                for ds_name, ds_entry in ctx.datasets.items():
+                    if (ds_entry.raw_time_column_role is not None
+                            and not ds_entry.raw_time_column_role.should_apply_lookback):
+                        ctx_lookback_skip.add(ds_name)
+
         for agg_name, preagg in discovered.items():
             if agg_name in config.landing:
                 continue
@@ -4168,7 +4205,10 @@ class FindingsParser:
                     "feature_timestamp",
                     mask_future=True,
                 ),
-                history_window=self._build_history_window_config(time_col),
+                history_window=self._build_history_window_config(
+                    time_col,
+                    should_apply_lookback=agg_name not in ctx_lookback_skip,
+                ),
             )
 
     @staticmethod
