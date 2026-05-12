@@ -372,6 +372,10 @@ class FindingsParser:
         multi_dataset = self._load_multi_dataset_findings()
         selected_sources = list(multi_dataset.datasets.keys())
         source_findings = self._load_source_findings(selected_sources, self._findings_dir, multi_dataset)
+        self._datasets_with_disabled_datetime_derivations: Set[str] = {
+            ds for ds, f in source_findings.items()
+            if getattr(f, "disable_datetime_derivations", False)
+        }
         discovered_events = self._discover_event_sources(source_findings)
         self._index_raw_source_columns(source_findings)
         self._index_raw_source_columns(discovered_events)
@@ -2701,6 +2705,9 @@ class FindingsParser:
         proposed_landing, proposed_event, unresolved = (
             self._walk_datetime_feature_candidates(config, spec.selected_features)
         )
+        self._raise_if_disabled_dataset_proposed(
+            proposed_landing, proposed_event, "FeatureSpec",
+        )
         # `getattr` default mirrors the constructor default (PA-4: lenient).
         # Tests that explicitly want strict mode set `_strict_datetime_parity
         # = True` after `FindingsParser.__new__(...)` (skipping __init__).
@@ -2771,10 +2778,44 @@ class FindingsParser:
         proposed_landing, proposed_event, _unresolved = (
             self._walk_datetime_feature_candidates(config, candidates)
         )
+        self._raise_if_disabled_dataset_proposed(
+            proposed_landing, proposed_event, "silver-derived recs",
+        )
         if not (proposed_landing or proposed_event):
             return
         self._apply_datetime_derivation_extensions(
             config, proposed_landing, proposed_event, "silver-derived recs",
+        )
+
+    def _raise_if_disabled_dataset_proposed(
+        self,
+        proposed_landing: Dict[str, Set[str]],
+        proposed_event: Dict[str, Set[str]],
+        driver_label: str,
+    ) -> None:
+        """When ``ExplorationFindings.disable_datetime_derivations`` is set on
+        a dataset, no datetime-derived feature may attach to it at codegen.
+        Fail-fast with the offending features so the operator either flips
+        the knob off in NB01 or removes the recommendation from the spec.
+        """
+        disabled = getattr(self, "_datasets_with_disabled_datetime_derivations", set())
+        if not disabled:
+            return
+        offenders: List[Tuple[str, str]] = []
+        for ds, sources in proposed_landing.items():
+            if ds in disabled:
+                offenders.extend((f"<landing[{ds}]>", b) for b in sorted(sources))
+        for ds, sources in proposed_event.items():
+            if ds in disabled:
+                offenders.extend((f"<bronze_event[{ds}]>", b) for b in sorted(sources))
+        if not offenders:
+            return
+        details = ", ".join(f"{f} source={b!r}" for f, b in offenders)
+        raise ValueError(
+            f"{driver_label} references datetime-derived columns for datasets "
+            f"with DISABLE_DATETIME_DERIVATIONS=True ({sorted(disabled)}): "
+            f"{details}. Either flip the knob off in NB01 for those datasets, "
+            f"or remove the offending features/recs."
         )
 
     @staticmethod
@@ -3472,6 +3513,8 @@ class FindingsParser:
         reference_column: str,
         mask_future: bool,
     ) -> Optional[DatetimeDerivationConfig]:
+        if getattr(findings, "disable_datetime_derivations", False):
+            return None
         if not findings.datetime_derivation_sources:
             return None
         allow_future = set(getattr(findings, "datetime_allow_future_columns", []))
@@ -3651,11 +3694,16 @@ class FindingsParser:
                 categorical_columns.append(col_name)
             elif col_type in self._CATEGORICAL_TYPES:
                 categorical_columns.append(col_name)
-        for src in getattr(schema_source, "datetime_derivation_sources", []):
-            for suffix in ("_delta_hours", "_hour", "_dow", "_is_weekend"):
-                derived = f"{src}{suffix}"
-                if derived not in value_columns:
-                    value_columns.append(derived)
+        _dt_disabled = (
+            getattr(schema_source, "disable_datetime_derivations", False)
+            or getattr(findings, "disable_datetime_derivations", False)
+        )
+        if not _dt_disabled:
+            for src in getattr(schema_source, "datetime_derivation_sources", []):
+                for suffix in ("_delta_hours", "_hour", "_dow", "_is_weekend"):
+                    derived = f"{src}{suffix}"
+                    if derived not in value_columns:
+                        value_columns.append(derived)
 
         dataset_info = multi.datasets.get(dataset_name) if dataset_name else None
         exclusions = dataset_info.feature_exclusions if dataset_info else []

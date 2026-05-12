@@ -250,6 +250,7 @@ class ExplorationFindings:
     datetime_ordering: List[str] = field(default_factory=list)
     datetime_derivation_sources: List[str] = field(default_factory=list)
     datetime_allow_future_columns: List[str] = field(default_factory=list)
+    disable_datetime_derivations: bool = False
     excluded_leaking_features: List[LeakageExclusion] = field(default_factory=list)
     zero_inflation_opt_in: List[str] = field(default_factory=list)
     field_availability_audit: Optional[Dict[str, Any]] = None
