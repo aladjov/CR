@@ -29,6 +29,7 @@ from customer_retention.parity import APPLY_REGISTRY
 from customer_retention.parity.kinds import ApplyOpKind
 
 _FRAMEWORK_MODULES = (
+    "customer_retention.analysis.auto_explorer.key_resolver",
     "customer_retention.analysis.auto_explorer.sampling",
     "customer_retention.stages.lifecycle.enrich",
     "customer_retention.stages.profiling.target_validator",
@@ -42,6 +43,7 @@ _FRAMEWORK_MODULES = (
 
 _EXPECTED = {
     # Landing
+    "customer_retention.analysis.auto_explorer.key_resolver.resolve_single_dataset_keys": ApplyOpKind.KEY_RESOLUTION,
     "customer_retention.analysis.auto_explorer.sampling.apply_temporal_lookback": ApplyOpKind.TEMPORAL_LOOKBACK,
     "customer_retention.analysis.auto_explorer.sampling.apply_sample_filters": ApplyOpKind.SAMPLE_FILTER,
     "customer_retention.stages.lifecycle.enrich.enrich_lifecycle_dataset": ApplyOpKind.LIFECYCLE_ENRICH,

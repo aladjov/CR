@@ -62,14 +62,29 @@ class ParityGap:
         )
 
 
+_UNKNOWN_DATASET = "<unknown>"
+
+
 def diff_manifests(
     exploration: Manifest,
     production: Manifest,
 ) -> List[ParityGap]:
     gaps: List[ParityGap] = []
     datasets = exploration.datasets() | production.datasets()
+    # Kinds exploration recorded under `<unknown>` (no apply_context block
+    # wrapping the call site) act as a wildcard: they cover the same kind
+    # for any production dataset, so a PRODUCTION_ONLY gap on dataset D is
+    # only emitted when exploration neither has the kind for D nor for the
+    # unknown bucket. Without this rule, every cell in NB01 that calls
+    # `derive_extra_datetime_features` without an `apply_context(dataset=...)`
+    # wrapper produces N false-positive `PRODUCTION_ONLY` gaps (one per
+    # dataset). The trade-off is losing per-dataset attribution for those
+    # ops, which most engagements treat as uniform across datasets anyway.
+    wildcard_exp_kinds = {e.kind for e in exploration.by_dataset(_UNKNOWN_DATASET)}
     for dataset in sorted(datasets):
-        gaps.extend(_diff_for_dataset(dataset, exploration, production))
+        if dataset == _UNKNOWN_DATASET:
+            continue
+        gaps.extend(_diff_for_dataset(dataset, exploration, production, wildcard_exp_kinds))
     return gaps
 
 
@@ -77,11 +92,12 @@ def _diff_for_dataset(
     dataset: str,
     exploration: Manifest,
     production: Manifest,
+    wildcard_exp_kinds,
 ) -> List[ParityGap]:
     exp_entries = exploration.by_dataset(dataset)
     prod_entries = production.by_dataset(dataset)
     gaps: List[ParityGap] = []
-    gaps.extend(_gaps_for_missing_kinds(dataset, exp_entries, prod_entries))
+    gaps.extend(_gaps_for_missing_kinds(dataset, exp_entries, prod_entries, wildcard_exp_kinds))
     gaps.extend(_gaps_for_kwargs_mismatch(dataset, exp_entries, prod_entries))
     gaps.extend(_gaps_for_order_mismatch(dataset, exp_entries, prod_entries))
     return gaps
@@ -91,11 +107,17 @@ def _gaps_for_missing_kinds(
     dataset: str,
     exp_entries: tuple,
     prod_entries: tuple,
+    wildcard_exp_kinds=frozenset(),
 ) -> List[ParityGap]:
-    exp_kinds = {e.kind for e in exp_entries}
+    dataset_exp_kinds = {e.kind for e in exp_entries}
+    # Wildcards only suppress PRODUCTION_ONLY (exploration applied the op at
+    # an unknown dataset hint). For EXPLORATION_ONLY we still want strict
+    # dataset-scoped comparison so a real "exploration applies, production
+    # skips" stays detectable.
+    exp_kinds_for_prod_check = dataset_exp_kinds | set(wildcard_exp_kinds)
     prod_kinds = {e.kind for e in prod_entries}
     gaps: List[ParityGap] = []
-    for kind in prod_kinds - exp_kinds:
+    for kind in prod_kinds - exp_kinds_for_prod_check:
         prod_entry = next(e for e in prod_entries if e.kind is kind)
         gaps.append(
             ParityGap(
@@ -110,7 +132,7 @@ def _gaps_for_missing_kinds(
                 ),
             )
         )
-    for kind in exp_kinds - prod_kinds:
+    for kind in dataset_exp_kinds - prod_kinds:
         exp_entry = next(e for e in exp_entries if e.kind is kind)
         gaps.append(
             ParityGap(

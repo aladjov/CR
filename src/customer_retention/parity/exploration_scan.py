@@ -205,8 +205,9 @@ class _CellWalker:
 
     def _handle_call(self, node: ast.Call, frame: _Frame, depth: int) -> None:
         qualname = self._resolve_call_qualname(node)
-        if qualname and qualname in APPLY_REGISTRY:
-            self._record_apply_op(node, frame, APPLY_REGISTRY[qualname])
+        descriptor = _lookup_in_registry(qualname)
+        if descriptor is not None:
+            self._record_apply_op(node, frame, descriptor)
             return
         # Local helper fallback — walk into the helper body if known
         local_name = _call_root_name(node)
@@ -301,6 +302,42 @@ def _read_code_cells(path: Path) -> list[_Cell]:
         cell_id = extract_embedded_id(source_lines) or cell.get("id")
         out.append(_Cell(cell_id=cell_id, source=source_text, lineno_offset=0))
     return out
+
+
+def _lookup_in_registry(qualname: Optional[str]) -> Optional[ApplyOpDescriptor]:
+    """Resolve a notebook-side qualname to an `ApplyOpDescriptor`.
+
+    Strategy:
+
+    1. Exact match against `APPLY_REGISTRY` keys.
+    2. Re-export match: when the notebook imports `derive_X` from a parent
+       package (e.g. `customer_retention.stages.profiling`) but the
+       framework decorates it inside a submodule (`...profiling.time_window_aggregator`),
+       the resolved qualname is `.profiling.derive_X` while the registered
+       key is `.profiling.time_window_aggregator.derive_X`. We match when
+       the registered prefix is a *deeper* path that shares the same
+       package prefix as the resolved qualname.
+
+    Returns `None` if no unique match is found (ambiguous matches are also
+    None — better silence than false-positive).
+    """
+    if not qualname:
+        return None
+    descriptor = APPLY_REGISTRY.get(qualname)
+    if descriptor is not None:
+        return descriptor
+    last_segment = qualname.rsplit(".", 1)[-1]
+    notebook_prefix = qualname.rsplit(".", 1)[0] if "." in qualname else ""
+    candidates: list[ApplyOpDescriptor] = []
+    for key, desc in APPLY_REGISTRY.items():
+        if not key.endswith("." + last_segment):
+            continue
+        registered_prefix = key.rsplit(".", 1)[0]
+        if registered_prefix == notebook_prefix or registered_prefix.startswith(notebook_prefix + "."):
+            candidates.append(desc)
+    if len(candidates) == 1:
+        return candidates[0]
+    return None
 
 
 def _qualname_for_callable(

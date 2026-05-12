@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Optional
 
 from customer_retention.analysis.auto_explorer.project_context import KeyResolutionStep
 from customer_retention.core.compat import head_as_list, pd, resolve_column_name, unique_overlap_counts
+from customer_retention.parity import ApplyOpKind, apply_op
 
 if TYPE_CHECKING:
     from customer_retention.analysis.auto_explorer.project_context import ProjectContext
@@ -106,6 +107,7 @@ def _apply_resolution_step(
     return merged
 
 
+@apply_op(kind=ApplyOpKind.KEY_RESOLUTION)
 def resolve_single_dataset_keys(
     df: pd.DataFrame,
     steps: list[KeyResolutionStep],
