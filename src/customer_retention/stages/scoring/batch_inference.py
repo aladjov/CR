@@ -504,7 +504,7 @@ def _score_with_feature_store(
     ]
     try:
         return fe.score_batch(df=entity_df, model_uri=model_uri, result_type="double")
-    except (AttributeError, NotImplementedError, TypeError) as exc:
+    except (AttributeError, NotImplementedError, TypeError, ValueError) as exc:
         logger.warning("fe.score_batch unavailable (%s); falling back to manual feature retrieval", exc)
     import mlflow
 
