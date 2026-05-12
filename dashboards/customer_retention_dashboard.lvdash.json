@@ -1,6 +1,153 @@
 {
   "datasets": [
     {
+      "name": "ds_run_context",
+      "displayName": "Run context (masthead)",
+      "queryLines": [
+        "SELECT model_name, model_version, model_type, horizon_days, primary_objective, temporal_posture, scoring_run_id, as_of_date, project_name, project_run_id FROM IDENTIFIER(concat(:catalog, '.', :schema, '.v_run_context')) ORDER BY as_of_date DESC LIMIT 1"
+      ],
+      "parameters": [
+        {
+          "displayName": "catalog",
+          "keyword": "catalog",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "churnkit"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "schema",
+          "keyword": "schema",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "analysis"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "ds_account_drivers",
+      "displayName": "Top SHAP drivers (L4 \u2014 why surfaced)",
+      "queryLines": [
+        "WITH src AS (  SELECT entity_id, account_top_shap_features   FROM IDENTIFIER(concat(:catalog, '.', :schema, '.v_account_explanation'))   WHERE (COALESCE(:selected_entity, '') IN ('', 'None') OR entity_id = :selected_entity)) SELECT entity_id,        d.feature AS feature,        d.shap_contribution AS contribution,        d.value AS feature_value,        d.direction AS direction,        ABS(d.shap_contribution) AS abs_contribution FROM src LATERAL VIEW EXPLODE(account_top_shap_features) AS d WHERE d.feature IS NOT NULL ORDER BY abs_contribution DESC"
+      ],
+      "parameters": [
+        {
+          "displayName": "catalog",
+          "keyword": "catalog",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "churnkit"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "schema",
+          "keyword": "schema",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "analysis"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "selected_entity",
+          "keyword": "selected_entity",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": ""
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "ds_eligibility_rules",
+      "displayName": "Eligibility rules (L4 \u2014 why this playbook)",
+      "queryLines": [
+        "SELECT playbook_id, playbook_name,        eligibility_rules_prose AS rule,        eligibility_rules_sql AS rule_sql,        expected_uplift_pct,        rationale FROM IDENTIFIER(concat(:catalog, '.', :schema, '.v_playbook_eligibility_rules')) WHERE (COALESCE(:selected_playbook, '') IN ('', 'None') OR playbook_name = :selected_playbook) ORDER BY playbook_name"
+      ],
+      "parameters": [
+        {
+          "displayName": "catalog",
+          "keyword": "catalog",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "churnkit"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "schema",
+          "keyword": "schema",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "analysis"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "selected_playbook",
+          "keyword": "selected_playbook",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": ""
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "ds_portfolio_matrix",
       "displayName": "Portfolio risk matrix (L1)",
       "queryLines": [
@@ -718,6 +865,117 @@
       "layout": [
         {
           "widget": {
+            "name": "h0_masthead",
+            "textbox_spec": "## Customer Retention \u2014 CSM Triage\nCurrent scoring run \u00b7 model context"
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "w_run_context_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_run_context",
+                  "fields": [
+                    {
+                      "name": "model_name",
+                      "expression": "`model_name`"
+                    },
+                    {
+                      "name": "model_version",
+                      "expression": "`model_version`"
+                    },
+                    {
+                      "name": "horizon_days",
+                      "expression": "`horizon_days`"
+                    },
+                    {
+                      "name": "primary_objective",
+                      "expression": "`primary_objective`"
+                    },
+                    {
+                      "name": "temporal_posture",
+                      "expression": "`temporal_posture`"
+                    },
+                    {
+                      "name": "model_type",
+                      "expression": "`model_type`"
+                    },
+                    {
+                      "name": "as_of_date",
+                      "expression": "`as_of_date`"
+                    },
+                    {
+                      "name": "project_name",
+                      "expression": "`project_name`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "model_name",
+                    "displayName": "Model"
+                  },
+                  {
+                    "fieldName": "model_version",
+                    "displayName": "Version"
+                  },
+                  {
+                    "fieldName": "horizon_days",
+                    "displayName": "Horizon (days)"
+                  },
+                  {
+                    "fieldName": "primary_objective",
+                    "displayName": "Primary objective"
+                  },
+                  {
+                    "fieldName": "temporal_posture",
+                    "displayName": "Temporal posture"
+                  },
+                  {
+                    "fieldName": "model_type",
+                    "displayName": "Model type"
+                  },
+                  {
+                    "fieldName": "as_of_date",
+                    "displayName": "As-of date"
+                  },
+                  {
+                    "fieldName": "project_name",
+                    "displayName": "Project"
+                  }
+                ]
+              },
+              "frame": {
+                "title": "Run context",
+                "showTitle": false
+              },
+              "rowsPerPage": 25
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 1,
+            "width": 12,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
             "name": "w_scope_indicator",
             "queries": [
               {
@@ -752,7 +1010,7 @@
           },
           "position": {
             "x": 0,
-            "y": 0,
+            "y": 4,
             "width": 12,
             "height": 1
           }
@@ -772,7 +1030,7 @@
           },
           "position": {
             "x": 0,
-            "y": 1,
+            "y": 5,
             "width": 12,
             "height": 1
           }
@@ -821,7 +1079,7 @@
           },
           "position": {
             "x": 0,
-            "y": 2,
+            "y": 6,
             "width": 3,
             "height": 2
           }
@@ -870,7 +1128,7 @@
           },
           "position": {
             "x": 3,
-            "y": 2,
+            "y": 6,
             "width": 3,
             "height": 2
           }
@@ -920,7 +1178,7 @@
           },
           "position": {
             "x": 6,
-            "y": 2,
+            "y": 6,
             "width": 3,
             "height": 2
           }
@@ -961,7 +1219,7 @@
           },
           "position": {
             "x": 9,
-            "y": 2,
+            "y": 6,
             "width": 3,
             "height": 2
           }
@@ -1023,7 +1281,7 @@
           },
           "position": {
             "x": 0,
-            "y": 4,
+            "y": 8,
             "width": 6,
             "height": 7
           }
@@ -1085,7 +1343,7 @@
           },
           "position": {
             "x": 6,
-            "y": 4,
+            "y": 8,
             "width": 6,
             "height": 7
           }
@@ -1176,7 +1434,7 @@
           },
           "position": {
             "x": 0,
-            "y": 11,
+            "y": 15,
             "width": 12,
             "height": 5
           }
@@ -1196,7 +1454,7 @@
           },
           "position": {
             "x": 0,
-            "y": 16,
+            "y": 20,
             "width": 12,
             "height": 1
           }
@@ -1259,7 +1517,7 @@
           },
           "position": {
             "x": 0,
-            "y": 17,
+            "y": 21,
             "width": 6,
             "height": 1
           }
@@ -1322,7 +1580,7 @@
           },
           "position": {
             "x": 6,
-            "y": 17,
+            "y": 21,
             "width": 6,
             "height": 1
           }
@@ -1342,7 +1600,7 @@
           },
           "position": {
             "x": 0,
-            "y": 18,
+            "y": 22,
             "width": 12,
             "height": 1
           }
@@ -1404,7 +1662,7 @@
           },
           "position": {
             "x": 0,
-            "y": 19,
+            "y": 23,
             "width": 6,
             "height": 7
           }
@@ -1495,7 +1753,7 @@
           },
           "position": {
             "x": 6,
-            "y": 19,
+            "y": 23,
             "width": 6,
             "height": 7
           }
@@ -1558,7 +1816,7 @@
           },
           "position": {
             "x": 0,
-            "y": 26,
+            "y": 30,
             "width": 12,
             "height": 1
           }
@@ -1578,7 +1836,7 @@
           },
           "position": {
             "x": 0,
-            "y": 27,
+            "y": 31,
             "width": 12,
             "height": 1
           }
@@ -1709,7 +1967,7 @@
           },
           "position": {
             "x": 0,
-            "y": 28,
+            "y": 32,
             "width": 12,
             "height": 10
           }
@@ -1729,7 +1987,7 @@
           },
           "position": {
             "x": 0,
-            "y": 52,
+            "y": 56,
             "width": 12,
             "height": 1
           }
@@ -1836,7 +2094,7 @@
           },
           "position": {
             "x": 0,
-            "y": 53,
+            "y": 57,
             "width": 12,
             "height": 5
           }
@@ -1856,7 +2114,7 @@
           },
           "position": {
             "x": 0,
-            "y": 38,
+            "y": 42,
             "width": 12,
             "height": 1
           }
@@ -1919,7 +2177,7 @@
           },
           "position": {
             "x": 0,
-            "y": 39,
+            "y": 43,
             "width": 12,
             "height": 1
           }
@@ -1960,7 +2218,7 @@
           },
           "position": {
             "x": 0,
-            "y": 40,
+            "y": 44,
             "width": 3,
             "height": 2
           }
@@ -2009,7 +2267,7 @@
           },
           "position": {
             "x": 3,
-            "y": 40,
+            "y": 44,
             "width": 3,
             "height": 2
           }
@@ -2059,7 +2317,7 @@
           },
           "position": {
             "x": 6,
-            "y": 40,
+            "y": 44,
             "width": 3,
             "height": 2
           }
@@ -2100,7 +2358,7 @@
           },
           "position": {
             "x": 9,
-            "y": 40,
+            "y": 44,
             "width": 3,
             "height": 2
           }
@@ -2148,7 +2406,7 @@
           },
           "position": {
             "x": 0,
-            "y": 42,
+            "y": 46,
             "width": 3,
             "height": 2
           }
@@ -2196,7 +2454,7 @@
           },
           "position": {
             "x": 3,
-            "y": 42,
+            "y": 46,
             "width": 3,
             "height": 2
           }
@@ -2237,7 +2495,7 @@
           },
           "position": {
             "x": 6,
-            "y": 42,
+            "y": 46,
             "width": 3,
             "height": 2
           }
@@ -2278,7 +2536,7 @@
           },
           "position": {
             "x": 9,
-            "y": 42,
+            "y": 46,
             "width": 3,
             "height": 2
           }
@@ -2319,7 +2577,7 @@
           },
           "position": {
             "x": 0,
-            "y": 44,
+            "y": 48,
             "width": 6,
             "height": 2
           }
@@ -2360,7 +2618,7 @@
           },
           "position": {
             "x": 6,
-            "y": 44,
+            "y": 48,
             "width": 6,
             "height": 2
           }
@@ -2410,7 +2668,7 @@
           },
           "position": {
             "x": 0,
-            "y": 46,
+            "y": 50,
             "width": 6,
             "height": 2
           }
@@ -2459,7 +2717,7 @@
           },
           "position": {
             "x": 6,
-            "y": 46,
+            "y": 50,
             "width": 6,
             "height": 2
           }
@@ -2510,9 +2768,188 @@
           },
           "position": {
             "x": 0,
-            "y": 48,
+            "y": 52,
             "width": 12,
             "height": 12
+          }
+        },
+        {
+          "widget": {
+            "name": "h_l4_drivers",
+            "textbox_spec": "### Why surfaced \u2014 top SHAP drivers\nPer-feature contribution for the selected entity. Positive contribution pushes the model toward predicting churn; negative pushes away."
+          },
+          "position": {
+            "x": 0,
+            "y": 64,
+            "width": 12,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "w_shap_drivers",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_account_drivers",
+                  "fields": [
+                    {
+                      "name": "feature",
+                      "expression": "`feature`"
+                    },
+                    {
+                      "name": "contribution",
+                      "expression": "`contribution`"
+                    },
+                    {
+                      "name": "direction",
+                      "expression": "`direction`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "frame": {
+                "title": "Why surfaced \u2014 SHAP contribution per feature",
+                "showTitle": true
+              },
+              "encodings": {
+                "y": {
+                  "fieldName": "feature",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "axis": {
+                    "title": "Feature"
+                  }
+                },
+                "x": {
+                  "fieldName": "contribution",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "axis": {
+                    "title": "SHAP contribution (signed)"
+                  }
+                },
+                "color": {
+                  "fieldName": "direction",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 65,
+            "width": 12,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "h_l4_deviation_note",
+            "textbox_spec": "### Population comparison \u2014 not available for this run\nThe dashboard view `v_account_feature_deviation_topn` requires the `feature_population_stats` table. c05 skipped publishing it because the upstream table doesn't exist in this engagement's schema. Populate `feature_population_stats` (from a gold-materialization step that emits per-feature mean/stddev/quantiles) and re-run c05's `publish_dashboard_views` cell to enable a per-account z-score chart alongside the SHAP plot above."
+          },
+          "position": {
+            "x": 0,
+            "y": 71,
+            "width": 12,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "h_l4_rules",
+            "textbox_spec": "### Eligibility rules \u2014 why this playbook\nThe rules the selected playbook applies. Filter via the Playbook control above."
+          },
+          "position": {
+            "x": 0,
+            "y": 73,
+            "width": 12,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "w_eligibility_rules",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_eligibility_rules",
+                  "fields": [
+                    {
+                      "name": "playbook_name",
+                      "expression": "`playbook_name`"
+                    },
+                    {
+                      "name": "rule",
+                      "expression": "`rule`"
+                    },
+                    {
+                      "name": "rule_sql",
+                      "expression": "`rule_sql`"
+                    },
+                    {
+                      "name": "expected_uplift_pct",
+                      "expression": "`expected_uplift_pct`"
+                    },
+                    {
+                      "name": "rationale",
+                      "expression": "`rationale`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "playbook_name",
+                    "displayName": "playbook_name"
+                  },
+                  {
+                    "fieldName": "rule",
+                    "displayName": "rule"
+                  },
+                  {
+                    "fieldName": "rule_sql",
+                    "displayName": "rule_sql"
+                  },
+                  {
+                    "fieldName": "expected_uplift_pct",
+                    "displayName": "expected_uplift_pct"
+                  },
+                  {
+                    "fieldName": "rationale",
+                    "displayName": "rationale"
+                  }
+                ]
+              },
+              "frame": {
+                "title": "Eligibility rules for the selected playbook",
+                "showTitle": true
+              },
+              "rowsPerPage": 25
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 74,
+            "width": 12,
+            "height": 5
           }
         }
       ]
