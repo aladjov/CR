@@ -147,6 +147,54 @@ def _preload_yj_params(steps: list, artifact_store) -> None:
                 }
 
 
+def _preload_scaler_params(steps: list, artifact_store) -> None:
+    # Mirror `_preload_yj_params` so the Spark batch-scale dispatch can
+    # fold every SCALE step into one select(*) in non-fit (scoring) mode.
+    # In fit mode, `_batch_fit_scalers` already populates `_spark_fitted`.
+    from sklearn.preprocessing import StandardScaler
+    for s in steps:
+        if s.type != PipelineTransformationType.SCALE:
+            continue
+        if "_spark_fitted" in s.parameters:
+            continue
+        aid = f"{s.column}_scaler"
+        if not artifact_store.has(aid):
+            continue
+        scaler = artifact_store.load(aid)
+        if isinstance(scaler, StandardScaler):
+            s.parameters["_spark_fitted"] = {
+                "kind": "standard",
+                "mean": float(scaler.mean_[0]),
+                "scale": float(scaler.scale_[0]) if scaler.scale_[0] else 1.0,
+            }
+        else:
+            s.parameters["_spark_fitted"] = {
+                "kind": "minmax",
+                "scale": float(scaler.scale_[0]),
+                "offset": float(scaler.min_[0]),
+            }
+
+
+def _spark_batch_scale_dispatch(df, steps):
+    from . import spark_ops
+    standard_items = []
+    minmax_items = []
+    for s in steps:
+        params = s.parameters.get("_spark_fitted")
+        if not params:
+            continue
+        kind = params.get("kind")
+        if kind == "standard":
+            standard_items.append((s.column, params["mean"], params["scale"]))
+        elif kind == "minmax":
+            minmax_items.append((s.column, params["scale"], params["offset"]))
+    if standard_items:
+        df = spark_ops.spark_batch_standard_scale(df, standard_items)
+    if minmax_items:
+        df = spark_ops.spark_batch_minmax_scale(df, minmax_items)
+    return df
+
+
 def _resolve_batch_reporter(on_step_done, on_batch_done):
     if on_batch_done is not None:
         return on_batch_done
@@ -222,6 +270,7 @@ class TransformExecutor:
             self._prefit_distributed(spark_df, steps, artifact_store)
         elif not fit_mode and artifact_store:
             _preload_yj_params(steps, artifact_store)
+            _preload_scaler_params(steps, artifact_store)
         batch_reporter = _resolve_batch_reporter(on_step_done, on_batch_done)
         roundtrip_count = 0
         since_checkpoint = 0
@@ -528,13 +577,14 @@ def _make_spark_dispatch():
 
 
 def _make_spark_batch_dispatch():
-    from . import spark_ops
+    from . import spark_ops  # noqa: F401  -- imported for ImportError gating
     return {
         PipelineTransformationType.LOG_TRANSFORM: lambda df, steps: spark_ops.spark_batch_log_transform(df, [s.column for s in steps]),
         PipelineTransformationType.SQRT_TRANSFORM: lambda df, steps: spark_ops.spark_batch_sqrt_transform(df, [s.column for s in steps]),
         PipelineTransformationType.ZERO_INFLATION_HANDLING: lambda df, steps: spark_ops.spark_batch_zero_inflation(df, [s.column for s in steps]),
         PipelineTransformationType.CAP_THEN_LOG: lambda df, steps: spark_ops.spark_batch_cap_then_log(df, [(s.column, s.parameters.get("_precomputed_q99")) for s in steps]),
         PipelineTransformationType.YEO_JOHNSON: lambda df, steps: spark_ops.spark_batch_yeo_johnson(df, _yj_params_from_steps(steps)),
+        PipelineTransformationType.SCALE: _spark_batch_scale_dispatch,
     }
 
 

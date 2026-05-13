@@ -231,3 +231,28 @@ def spark_batch_yeo_johnson(df: SparkDataFrame, params_list: list[tuple[str, flo
         _spark_yj_expr(c, *param_map[c]) if c in param_map else F.col(c)
         for c in df.columns
     ])
+
+
+def spark_batch_standard_scale(df: SparkDataFrame, items: list[tuple[str, float, float]]) -> SparkDataFrame:
+    # Collapse N standard-scale steps into one select(*). The per-column
+    # equivalent is `df.withColumn(c, (col(c)-mean)/scale)` chained N
+    # times, which at ~3000 SCALE steps produces a plan deep enough that
+    # `localCheckpoint(eager=True)` over Spark Connect SIGSEGVs inside
+    # plan canonicalisation. One projection has constant plan depth.
+    by_col = {col: (mean, scale) for col, mean, scale in items if col in df.columns}
+    if not by_col:
+        return df
+    return df.select(*[
+        ((F.col(c) - by_col[c][0]) / by_col[c][1]).alias(c) if c in by_col else F.col(c)
+        for c in df.columns
+    ])
+
+
+def spark_batch_minmax_scale(df: SparkDataFrame, items: list[tuple[str, float, float]]) -> SparkDataFrame:
+    by_col = {col: (scale, offset) for col, scale, offset in items if col in df.columns}
+    if not by_col:
+        return df
+    return df.select(*[
+        (F.col(c) * by_col[c][0] + by_col[c][1]).alias(c) if c in by_col else F.col(c)
+        for c in df.columns
+    ])

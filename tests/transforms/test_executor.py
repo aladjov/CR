@@ -1386,6 +1386,75 @@ class TestSparkBatchDispatch:
         assert args[1][0][0] == "a"
         assert args[1][0][1] == 0.5
 
+    def test_spark_batch_dispatch_scale_splits_standard_and_minmax(self, mock_spark_ops):
+        from customer_retention.transforms.executor import _make_spark_batch_dispatch
+        dispatch = _make_spark_batch_dispatch()
+        mock_df = MagicMock()
+        steps = [
+            _step(PipelineTransformationType.SCALE, "a", _spark_fitted={"kind": "standard", "mean": 1.0, "scale": 2.0}),
+            _step(PipelineTransformationType.SCALE, "b", _spark_fitted={"kind": "standard", "mean": 0.0, "scale": 1.0}),
+            _step(PipelineTransformationType.SCALE, "c", _spark_fitted={"kind": "minmax", "scale": 0.5, "offset": -1.0}),
+        ]
+        mock_spark_ops.spark_batch_standard_scale.return_value = mock_df
+        mock_spark_ops.spark_batch_minmax_scale.return_value = mock_df
+        dispatch[PipelineTransformationType.SCALE](mock_df, steps)
+        mock_spark_ops.spark_batch_standard_scale.assert_called_once_with(mock_df, [("a", 1.0, 2.0), ("b", 0.0, 1.0)])
+        mock_spark_ops.spark_batch_minmax_scale.assert_called_once_with(mock_df, [("c", 0.5, -1.0)])
+
+    def test_spark_batch_dispatch_scale_skips_steps_without_fitted(self, mock_spark_ops):
+        from customer_retention.transforms.executor import _make_spark_batch_dispatch
+        dispatch = _make_spark_batch_dispatch()
+        mock_df = MagicMock()
+        steps = [_step(PipelineTransformationType.SCALE, "a")]
+        result = dispatch[PipelineTransformationType.SCALE](mock_df, steps)
+        assert result is mock_df
+        mock_spark_ops.spark_batch_standard_scale.assert_not_called()
+        mock_spark_ops.spark_batch_minmax_scale.assert_not_called()
+
+
+class TestPreloadScalerParams:
+    def test_loads_standard_scaler_from_artifact(self, artifact_store):
+        from customer_retention.transforms.executor import _preload_scaler_params
+        from customer_retention.transforms.fitted import FittedScaler
+        df = pd.DataFrame({"v": [1.0, 2.0, 3.0, 4.0, 5.0]})
+        scaler = FittedScaler("standard")
+        scaler.fit_transform(df.copy(), "v", artifact_store)
+        steps = [_step(PipelineTransformationType.SCALE, "v")]
+        _preload_scaler_params(steps, artifact_store)
+        assert steps[0].parameters["_spark_fitted"]["kind"] == "standard"
+        assert "mean" in steps[0].parameters["_spark_fitted"]
+        assert "scale" in steps[0].parameters["_spark_fitted"]
+
+    def test_loads_minmax_scaler_from_artifact(self, artifact_store):
+        from customer_retention.transforms.executor import _preload_scaler_params
+        from customer_retention.transforms.fitted import FittedScaler
+        df = pd.DataFrame({"v": [1.0, 2.0, 3.0, 4.0, 5.0]})
+        scaler = FittedScaler("minmax")
+        scaler.fit_transform(df.copy(), "v", artifact_store)
+        steps = [_step(PipelineTransformationType.SCALE, "v")]
+        _preload_scaler_params(steps, artifact_store)
+        assert steps[0].parameters["_spark_fitted"]["kind"] == "minmax"
+
+    def test_skips_when_already_loaded(self, artifact_store):
+        from customer_retention.transforms.executor import _preload_scaler_params
+        steps = [_step(PipelineTransformationType.SCALE, "v", _spark_fitted={"kind": "standard", "mean": 7.0, "scale": 3.0})]
+        _preload_scaler_params(steps, artifact_store)
+        assert steps[0].parameters["_spark_fitted"]["mean"] == 7.0
+
+    def test_skips_non_scale_steps(self, artifact_store):
+        from customer_retention.transforms.executor import _preload_scaler_params
+        steps = [_step(PipelineTransformationType.LOG_TRANSFORM, "v")]
+        _preload_scaler_params(steps, artifact_store)
+        assert "_spark_fitted" not in steps[0].parameters
+
+    def test_skips_when_artifact_not_found(self):
+        from customer_retention.transforms.executor import _preload_scaler_params
+        mock_store = MagicMock()
+        mock_store.has.return_value = False
+        steps = [_step(PipelineTransformationType.SCALE, "v")]
+        _preload_scaler_params(steps, mock_store)
+        assert "_spark_fitted" not in steps[0].parameters
+
 
 class TestPreloadYjParams:
     def test_loads_params_from_artifact_store(self, artifact_store):
