@@ -3452,18 +3452,33 @@ class FindingsParser:
     def find_leakage_excluded_columns(columns, prefixes: List[str]) -> List[str]:
         """Return column names matching leakage exclusion prefixes (including lag/velocity variants).
 
-        Pure matching logic shared by NB08, local and Databricks gold templates.
+        A column matches when it equals the bare base (the prefix with any
+        trailing ``_`` stripped), starts with ``base_``, or — after stripping
+        a leading ``lag{N}_``/``velocity_`` token — equals the bare base or
+        starts with ``base_``. The bare-base case catches datetime-derived
+        leakers like ``is_missing_churn_date`` whose name *is* the exclusion
+        target itself rather than a prefix of further derivations.
+
+        Pure matching logic shared by NB08, local and Databricks gold templates;
+        mirrors :func:`_matches_any_prefix`.
         """
         if not prefixes:
             return []
-        import re
-        lag_re = re.compile(r"^(?:lag\d+|velocity)_")
+        bare = {p.rstrip("_") for p in prefixes}
+        normalized = [p if p.endswith("_") else f"{p}_" for p in prefixes]
 
         def matches(col: str) -> bool:
-            if any(col.startswith(p) for p in prefixes):
+            if col in bare:
                 return True
-            m = lag_re.match(col)
-            return bool(m and any(col[m.end():].startswith(p) for p in prefixes))
+            if any(col.startswith(p) for p in normalized):
+                return True
+            m = _LAG_VELOCITY_RE.match(col)
+            if not m:
+                return False
+            tail = col[m.end():]
+            if tail in bare:
+                return True
+            return any(tail.startswith(p) for p in normalized)
 
         return [c for c in columns if matches(c)]
 

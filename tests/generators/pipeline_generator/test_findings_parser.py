@@ -6929,6 +6929,26 @@ class TestFindLeakageExcludedColumns:
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
         assert FindingsParser.find_leakage_excluded_columns(["col_a", "col_b"], []) == []
 
+    def test_matches_bare_base_column(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        columns = ["is_missing_churn_date", "is_missing_churn_date_lag1",
+                   "velocity_is_missing_churn_date", "lag2_is_missing_churn_date_mean",
+                   "safe_col"]
+        result = FindingsParser.find_leakage_excluded_columns(columns, ["is_missing_churn_date"])
+        assert "is_missing_churn_date" in result
+        assert "is_missing_churn_date_lag1" in result
+        assert "velocity_is_missing_churn_date" in result
+        assert "lag2_is_missing_churn_date_mean" in result
+        assert "safe_col" not in result
+
+    def test_matches_bare_base_with_trailing_underscore_prefix(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        columns = ["is_missing_churn_date", "is_missing_churn_date_lag1", "other_col"]
+        result = FindingsParser.find_leakage_excluded_columns(columns, ["is_missing_churn_date_"])
+        assert "is_missing_churn_date" in result
+        assert "is_missing_churn_date_lag1" in result
+        assert "other_col" not in result
+
 
 class TestAggregationWindowsPriority:
 
