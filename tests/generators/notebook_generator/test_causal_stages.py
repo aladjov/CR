@@ -273,6 +273,49 @@ class TestPerStageContent:
         # c05 must point operators to c04, not the old s10-only wording
         assert "run c04_batch_inference first" in code
 
+    def test_c05_materializes_provenance_prereqs_before_publish(self):
+        """The provenance prereq materializer (5.3.5) must precede 5.4
+        publish so v_feature_provenance gets its feature_meta +
+        column_descriptions UC tables in place; otherwise
+        publish_dashboard_views silently skips the provenance view and
+        the dashboard's per-row lineage disclosure goes dark.
+
+        The materializer pins the namespace via ENGAGEMENT_RUN_ID +
+        ENGAGEMENT_EXPERIMENTS_DIR rather than RunNamespace.from_env_or_latest()
+        because the latter resolves by mtime and drifts on clusters with
+        multiple runs sharing an experiments dir (the regression that
+        motivated v3 §U on setup_and_resolve_model).
+        """
+        gen = LocalNotebookGenerator(NotebookConfig(), None)
+        nb = gen.generate_stage(NotebookStage.SNAPSHOT_AND_DASHBOARD)
+        code = _all_code(nb)
+        # The materialize step is present and emits the [mt4r] trace prefix.
+        assert "[mt4r] feature_meta" in code
+        assert "[mt4r] column_descriptions" in code
+        assert "[mt4r] feature_population_stats" in code
+        # It pins the namespace explicitly via the ENGAGEMENT constants
+        # (the v3 §U pattern). ``from_env_or_latest`` is fine elsewhere in
+        # c05 -- e.g. in ``write_run_context`` -- but the materialize cell
+        # itself must not rely on it; the surrounding assert string is
+        # specific enough that drift back to ``from_env_or_latest`` for the
+        # provenance loaders would fail this assertion.
+        assert "RunNamespace(root=Path(ENGAGEMENT_EXPERIMENTS_DIR)" in code
+        assert "RunNamespace(root=Path(_ENG_CD_ROOT)" in code
+        # column_descriptions is root-scoped -- the override knob is honored.
+        assert "ENGAGEMENT_COLUMN_DESCRIPTIONS_ROOT" in code
+        # Idempotency guard: skip when UC table already exists.
+        assert "spark.catalog.tableExists(_fm_fqn)" in code
+        # Order check: materialize must come BEFORE publish_dashboard_views
+        # so the framework's _provenance_prerequisites_present() check at
+        # publish time finds the UC tables already in place.
+        idx_materialize = code.find("[mt4r] feature_meta")
+        idx_publish     = code.find("publish_dashboard_views(spark, CATALOG, SCHEMA)")
+        assert idx_materialize > 0
+        assert idx_publish > 0
+        assert idx_materialize < idx_publish, (
+            "materialize_provenance_prereqs must precede publish_dashboard_views"
+        )
+
 
 class TestSetupBlockSeparation:
     def test_c01_setup_does_not_load_model(self):
