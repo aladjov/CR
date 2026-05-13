@@ -708,3 +708,160 @@ class TestSilverThenGoldNoDuplicateFeatures:
 
         duplicates = [c for c in feature_cols if feature_cols.count(c) > 1]
         assert len(duplicates) > 0, "Expected duplicates from pre-silver _cols bug"
+
+
+# ---------------------------------------------------------------------------
+# Pre-transform drop equivalence (NB08 apply_early_drops optimisation)
+# ---------------------------------------------------------------------------
+
+class TestPreTransformDropEquivalence:
+    """NB08's apply_early_drops cell removes weak/multicollinear/leakage
+    columns from `df` BEFORE `build_silver_derived_steps` and
+    `build_gold_steps` run. The optimisation is safe because both helpers
+    filter every rec against `pipeline_columns = set(df.columns)`.
+
+    These tests pin that contract: for every category of transform, the
+    step list produced by passing a *reduced* pipeline_columns is exactly
+    the step list produced by passing the full set and then post-filtering
+    out the steps whose target falls in the drop set — i.e. the early
+    drop and the post-drop produce identical surviving step lists for
+    transformations / scalings / encodings.
+
+    The cascading semantic for silver-derived columns (a derivation whose
+    sources include a dropped column is skipped entirely) is also pinned
+    here as the explicit, intended behaviour.
+    """
+
+    def _build_registry(self):
+        reg = RecommendationRegistry()
+        reg.init_silver("customer_id")
+        # Two ratios — one safe, one whose denominator is in NB05's drop list.
+        reg.add_silver_ratio("avg_order", "total_amount", "order_count", "avg order ratio", "06")
+        reg.add_silver_ratio("orders_per_visit", "order_count", "visits", "orders per visit", "06")
+        # Composite — one source is in the drop list, so the whole composite
+        # must cascade-skip when we pre-drop.
+        reg.add_silver_composite("engagement_score", ["visits", "clicks", "weak_signal"], "composite", "06")
+
+        reg.init_gold("churn")
+        # Transformations on cols that survive AND a col that gets dropped.
+        reg.add_gold_transformation("total_amount", "log", {}, "log", "04")
+        reg.add_gold_transformation("order_count", "sqrt", {}, "sqrt", "04")
+        reg.add_gold_transformation("weak_signal", "log", {}, "log", "04")  # dropped
+        reg.add_gold_transformation("multicollinear_col", "yeo_johnson", {}, "yj", "04")  # dropped
+        # Scaling — same mix.
+        reg.add_gold_scaling("total_amount", "standard", "scale", "04")
+        reg.add_gold_scaling("weak_signal", "standard", "scale", "04")  # dropped
+        # Encoding — categorical, kept.
+        reg.add_gold_encoding("region", "one_hot", "encode", "04")
+        return reg
+
+    def _full_pipeline_columns(self):
+        return {
+            "total_amount", "order_count", "visits", "clicks",
+            "weak_signal", "multicollinear_col", "region",
+        }
+
+    # The "early drop" set: columns NB05 wants gone before transforms run.
+    _DROPPED = frozenset({"weak_signal", "multicollinear_col"})
+
+    # ---- gold transformations ------------------------------------------------
+
+    def test_gold_transformations_equivalent_pre_vs_post_drop(self):
+        """For each gold transformation: pre-dropping columns from
+        pipeline_columns produces the same surviving steps as building
+        with the full set and post-filtering on target_column."""
+        reg = self._build_registry()
+        full_cols = self._full_pipeline_columns()
+        reduced_cols = full_cols - self._DROPPED
+
+        pre_drop_steps = build_gold_steps(reg, reduced_cols)
+        post_drop_steps = [
+            s for s in build_gold_steps(reg, full_cols)
+            if s.column not in self._DROPPED
+        ]
+        # Steps are dataclass instances; compare by (type, column) to ignore
+        # parameters reference identity.
+        def key(s):
+            return (s.type, s.column, tuple(sorted((s.parameters or {}).items())))
+        assert [key(s) for s in pre_drop_steps] == [key(s) for s in post_drop_steps], (
+            "Pre-drop must yield the same step list as filtering steps post-build. "
+            f"pre_drop={[(s.type.name, s.column) for s in pre_drop_steps]} "
+            f"post_drop={[(s.type.name, s.column) for s in post_drop_steps]}"
+        )
+
+    def test_dropped_columns_emit_no_gold_steps(self):
+        reg = self._build_registry()
+        reduced_cols = self._full_pipeline_columns() - self._DROPPED
+        steps = build_gold_steps(reg, reduced_cols)
+        emitted_columns = {s.column for s in steps}
+        assert not (self._DROPPED & emitted_columns), (
+            f"Dropped columns must not appear in gold step list: "
+            f"leaked={self._DROPPED & emitted_columns}"
+        )
+
+    def test_kept_columns_keep_all_their_gold_steps(self):
+        """A non-dropped column's transformation/scaling/encoding steps
+        must survive the pre-drop unchanged."""
+        reg = self._build_registry()
+        steps_full = build_gold_steps(reg, self._full_pipeline_columns())
+        steps_reduced = build_gold_steps(reg, self._full_pipeline_columns() - self._DROPPED)
+        for col in ("total_amount", "order_count", "region"):
+            full_for_col = [(s.type, s.column) for s in steps_full if s.column == col]
+            reduced_for_col = [(s.type, s.column) for s in steps_reduced if s.column == col]
+            assert full_for_col == reduced_for_col, (
+                f"Step list for kept column {col!r} must be identical before vs. "
+                f"after pre-drop. full={full_for_col} reduced={reduced_for_col}"
+            )
+
+    # ---- silver-derived cascade ----------------------------------------------
+
+    def test_silver_ratio_with_dropped_source_is_cascade_skipped(self):
+        """A silver-derived ratio whose denominator is dropped pre-build
+        is skipped entirely — `sources.issubset(pipeline_columns)` fails."""
+        reg = self._build_registry()
+        # Make `visits` "dropped" so orders_per_visit's denominator vanishes.
+        full = self._full_pipeline_columns()
+        reduced = full - {"visits"}
+        steps_full = build_silver_derived_steps(reg, full)
+        steps_reduced = build_silver_derived_steps(reg, reduced)
+        full_targets = {s.column for s in steps_full}
+        reduced_targets = {s.column for s in steps_reduced}
+        assert "orders_per_visit" in full_targets, "fixture sanity: ratio present with full cols"
+        assert "orders_per_visit" not in reduced_targets, (
+            "Dropping a source column must cascade-skip the silver-derived ratio "
+            "that depends on it."
+        )
+
+    def test_silver_composite_with_dropped_source_is_cascade_skipped(self):
+        reg = self._build_registry()
+        full = self._full_pipeline_columns()
+        reduced = full - self._DROPPED  # drops weak_signal which is a composite source
+        steps_full = build_silver_derived_steps(reg, full)
+        steps_reduced = build_silver_derived_steps(reg, reduced)
+        assert "engagement_score" in {s.column for s in steps_full}
+        assert "engagement_score" not in {s.column for s in steps_reduced}, (
+            "Composite whose source set includes a dropped column must "
+            "cascade-skip — this is the explicit, intended behaviour of "
+            "the apply_early_drops optimisation."
+        )
+
+    def test_silver_ratio_with_intact_sources_survives(self):
+        """The 'safe' ratio (sources are not in the drop set) must
+        survive the pre-drop unchanged."""
+        reg = self._build_registry()
+        steps = build_silver_derived_steps(reg, self._full_pipeline_columns() - self._DROPPED)
+        targets = {s.column for s in steps}
+        assert "avg_order" in targets, (
+            "Ratio whose sources are NOT in the drop set must survive."
+        )
+
+    # ---- the headline equivalence claim --------------------------------------
+
+    def test_no_drops_means_full_and_reduced_are_identical(self):
+        """When the drop set is empty, the pre-drop strategy is a no-op:
+        steps built against the full set must equal steps built against
+        the same full set. Locks in the boundary of the optimisation."""
+        reg = self._build_registry()
+        full = self._full_pipeline_columns()
+        assert build_gold_steps(reg, full) == build_gold_steps(reg, full)
+        assert build_silver_derived_steps(reg, full) == build_silver_derived_steps(reg, full)

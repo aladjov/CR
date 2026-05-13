@@ -1,5 +1,5 @@
 version: 1
-source_fingerprint: sha256:393cab44f4730cd9e6e09cc79afc761dc5ac3901e136455dd067358a1fc99035
+source_fingerprint: sha256:ab2b6226cd55880bbd01c54d8005581077d327cffef6d2126f2975863845c5a9
 generated_from:
 - exploration_notebooks/-1_parity_contract.ipynb
 - exploration_notebooks/00_start_here.ipynb
