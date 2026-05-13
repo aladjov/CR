@@ -277,6 +277,38 @@ class TransformExecutor:
         t0 = time.perf_counter()
         step_idx = 0
         for batch in _group_batchable_runs(steps, _SPARK_BATCHABLE_TYPES):
+            # Fast-path the one_hot subset of any ENCODE batch before the
+            # generic dispatch lookup. One `distinct().collect()` per
+            # categorical column is sequential and dominates the wall
+            # clock at >20 columns; `spark_batch_one_hot_encode` collapses
+            # the whole subset into one `collect_set` agg plus one
+            # chunked select. Non-one-hot methods (target, label, binary)
+            # stay on the per-step path so their pandas roundtrip and
+            # artifact registration are preserved.
+            if batch[0].type == PipelineTransformationType.ENCODE and len(batch) > 1:
+                one_hot_steps = [s for s in batch if s.parameters.get("method", "one_hot") in ("one_hot", "onehot")]
+                if len(one_hot_steps) >= 2:
+                    from . import spark_ops as _so
+                    t_batch = time.perf_counter()
+                    spark_df = _so.spark_batch_one_hot_encode(spark_df, [s.column for s in one_hot_steps])
+                    since_checkpoint += 1
+                    now = time.perf_counter()
+                    if batch_reporter:
+                        batch_reporter(step_idx, step_idx + len(one_hot_steps) - 1, len(steps), batch[0].type, now - t_batch, now - t0)
+                    elif on_step_done:
+                        on_step_done(step_idx + len(one_hot_steps) - 1, len(steps), one_hot_steps[-1], now - t_batch, now - t0)
+                    step_idx += len(one_hot_steps)
+                    one_hot_ids = {id(s) for s in one_hot_steps}
+                    batch = [s for s in batch if id(s) not in one_hot_ids]
+                    if not batch:
+                        needs_checkpoint = (
+                            (roundtrip_count > 0 and roundtrip_count % _CHECKPOINT_INTERVAL == 0)
+                            or since_checkpoint >= _PLAN_TRUNCATION_INTERVAL
+                        )
+                        if needs_checkpoint and step_idx < len(steps):
+                            spark_df = spark_df.localCheckpoint(eager=True)
+                            since_checkpoint = 0
+                        continue
             batch_handler = _SPARK_BATCH_DISPATCH.get(batch[0].type) if len(batch) > 1 else None
             if batch_handler:
                 t_batch = time.perf_counter()
@@ -610,7 +642,12 @@ def _apply_yj_from_artifact(spark_df, step, artifact_store):
 try:
     _SPARK_DISPATCH = _make_spark_dispatch()
     _SPARK_BATCH_DISPATCH = _make_spark_batch_dispatch()
-    _SPARK_BATCHABLE_TYPES = frozenset(_SPARK_BATCH_DISPATCH)
+    # ENCODE is grouped for batching even though it has no entry in
+    # _SPARK_BATCH_DISPATCH: the one_hot fast path in
+    # `_apply_all_distributed` intercepts contiguous one_hot steps before
+    # the dispatch lookup, while non-one-hot ENCODE methods fall through
+    # to the per-step pandas roundtrip path with no batch handler.
+    _SPARK_BATCHABLE_TYPES = frozenset(_SPARK_BATCH_DISPATCH) | {PipelineTransformationType.ENCODE}
 except ImportError:
     _SPARK_DISPATCH = {}
     _SPARK_BATCH_DISPATCH = {}

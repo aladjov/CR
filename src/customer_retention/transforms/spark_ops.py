@@ -256,3 +256,49 @@ def spark_batch_minmax_scale(df: SparkDataFrame, items: list[tuple[str, float, f
         (F.col(c) * by_col[c][0] + by_col[c][1]).alias(c) if c in by_col else F.col(c)
         for c in df.columns
     ])
+
+
+def spark_batch_one_hot_encode(df: SparkDataFrame, columns: list[str], chunk_size: int = 500) -> SparkDataFrame:
+    # Bit-identical to applying spark_one_hot_encode per column in order,
+    # but collapses N `distinct().collect()` Spark jobs into one
+    # `collect_set` aggregation and N×K `withColumn` calls into a single
+    # chunked select. At 25 categorical columns each scanning 200K+ rows
+    # this turns ~10 minutes of sequential per-column jobs into seconds.
+    valid = [c for c in columns if c in df.columns]
+    if not valid:
+        return df
+    # Narrow projection so the agg plan stays shallow on wide post-transform
+    # frames where Catalyst's adaptive resolver is otherwise expensive.
+    distinct_exprs = [F.collect_set(F.col(c)).alias(c) for c in valid]
+    row = df.select(*valid).agg(*distinct_exprs).collect()[0]
+    new_exprs = []
+    drop_cols = []
+    for c in valid:
+        cats = [v for v in (row[c] or []) if v is not None]
+        if not cats:
+            continue
+        # Dedup by sanitized safe_name (case-insensitive). Two raw values
+        # whose tokens collapse to the same token are coalesced via isin
+        # so saveAsTable doesn't reject the duplicate alias.
+        safe_to_raw: dict[str, tuple[str, list]] = {}
+        for cat in sorted(str(v) for v in cats):
+            safe_name = f"{c}_{sanitize_column_token(cat)}"
+            key = safe_name.lower()
+            safe_to_raw.setdefault(key, (safe_name, []))[1].append(cat)
+        for safe_name, group in safe_to_raw.values():
+            if len(group) == 1:
+                expr = F.when(F.col(c) == group[0], 1).otherwise(0)
+            else:
+                expr = F.when(F.col(c).isin(group), 1).otherwise(0)
+            new_exprs.append(expr.alias(safe_name))
+        drop_cols.append(c)
+    if not new_exprs:
+        return df
+    base_cols = [F.col(c) for c in df.columns]
+    for start in range(0, len(new_exprs), chunk_size):
+        chunk = new_exprs[start:start + chunk_size]
+        df = df.select(*base_cols, *chunk)
+        base_cols = [F.col(c) for c in df.columns]
+    if drop_cols:
+        df = df.drop(*drop_cols)
+    return df

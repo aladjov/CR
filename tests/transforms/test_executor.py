@@ -1412,6 +1412,80 @@ class TestSparkBatchDispatch:
         mock_spark_ops.spark_batch_minmax_scale.assert_not_called()
 
 
+class TestSparkBatchEncodeFastPath:
+    def test_one_hot_batch_calls_spark_batch_one_hot_encode(self, executor, mock_spark_ops):
+        mock_spark_df = MagicMock()
+        mock_spark_ops.spark_batch_one_hot_encode.return_value = mock_spark_df
+        steps = [
+            _step(PipelineTransformationType.ENCODE, "a", method="one_hot"),
+            _step(PipelineTransformationType.ENCODE, "b", method="one_hot"),
+            _step(PipelineTransformationType.ENCODE, "c", method="onehot"),
+        ]
+        with patch(f"{_MOD}._is_spark_pandas", return_value=True), \
+             patch(f"{_MOD}.as_spark_df", return_value=mock_spark_df), \
+             patch(f"{_MOD}._as_pandas_api", return_value=MagicMock()), \
+             patch.object(executor, "_precompute_quantiles_distributed"):
+            executor._apply_all_distributed(MagicMock(), steps)
+        mock_spark_ops.spark_batch_one_hot_encode.assert_called_once_with(mock_spark_df, ["a", "b", "c"])
+
+    def test_mixed_encode_batches_only_one_hot_subset(self, executor, mock_spark_ops):
+        mock_spark_df = MagicMock()
+        mock_spark_ops.spark_batch_one_hot_encode.return_value = mock_spark_df
+        steps = [
+            _step(PipelineTransformationType.ENCODE, "a", method="one_hot"),
+            _step(PipelineTransformationType.ENCODE, "b", method="one_hot"),
+            _step(PipelineTransformationType.ENCODE, "c", method="target"),
+        ]
+        per_step_seen = []
+        def _track_apply(_df, step, **kw):
+            per_step_seen.append(step.column)
+            return MagicMock()
+        with patch(f"{_MOD}._is_spark_pandas", return_value=True), \
+             patch(f"{_MOD}.as_spark_df", return_value=mock_spark_df), \
+             patch(f"{_MOD}._as_pandas_api", return_value=MagicMock()), \
+             patch(f"{_MOD}._SPARK_DISPATCH", {}), \
+             patch.object(executor, "apply", side_effect=_track_apply), \
+             patch.object(executor, "_apply_fitted_spark", return_value=None), \
+             patch.object(executor, "_precompute_quantiles_distributed"):
+            executor._apply_all_distributed(MagicMock(), steps)
+        mock_spark_ops.spark_batch_one_hot_encode.assert_called_once_with(mock_spark_df, ["a", "b"])
+        assert per_step_seen == ["c"]
+
+    def test_solo_one_hot_step_does_not_trigger_batch_helper(self, executor, mock_spark_ops):
+        mock_spark_df = MagicMock()
+        mock_per_step_handler = MagicMock(return_value=mock_spark_df)
+        steps = [_step(PipelineTransformationType.ENCODE, "a", method="one_hot")]
+        with patch(f"{_MOD}._is_spark_pandas", return_value=True), \
+             patch(f"{_MOD}.as_spark_df", return_value=mock_spark_df), \
+             patch(f"{_MOD}._as_pandas_api", return_value=MagicMock()), \
+             patch(f"{_MOD}._SPARK_DISPATCH", {PipelineTransformationType.ENCODE: mock_per_step_handler}), \
+             patch.object(executor, "_precompute_quantiles_distributed"):
+            executor._apply_all_distributed(MagicMock(), steps)
+        mock_spark_ops.spark_batch_one_hot_encode.assert_not_called()
+        mock_per_step_handler.assert_called_once()
+
+    def test_batch_reporter_fires_for_one_hot_batch(self, executor, mock_spark_ops):
+        mock_spark_df = MagicMock()
+        mock_spark_ops.spark_batch_one_hot_encode.return_value = mock_spark_df
+        steps = [
+            _step(PipelineTransformationType.ENCODE, "a", method="one_hot"),
+            _step(PipelineTransformationType.ENCODE, "b", method="one_hot"),
+        ]
+        batch_calls = []
+        with patch(f"{_MOD}._is_spark_pandas", return_value=True), \
+             patch(f"{_MOD}.as_spark_df", return_value=mock_spark_df), \
+             patch(f"{_MOD}._as_pandas_api", return_value=MagicMock()), \
+             patch.object(executor, "_precompute_quantiles_distributed"):
+            executor._apply_all_distributed(
+                MagicMock(), steps,
+                on_batch_done=lambda *a: batch_calls.append(a),
+            )
+        assert len(batch_calls) == 1
+        start, end, total, op_kind, *_ = batch_calls[0]
+        assert (start, end, total) == (0, 1, 2)
+        assert op_kind == PipelineTransformationType.ENCODE
+
+
 class TestPreloadScalerParams:
     def test_loads_standard_scaler_from_artifact(self, artifact_store):
         from customer_retention.transforms.executor import _preload_scaler_params
