@@ -351,8 +351,24 @@ def _run_databricks(config: BatchInferenceConfig) -> BatchInferenceResult:
     t_prep = time.perf_counter()
     df_customers = spark.table(customer_table)
     if config.filter_expression:
-        df_customers = df_customers.filter(config.filter_expression)
-        logger.info("Applied scope filter: %s", config.filter_expression)
+        # NB00's `sample_filter` predicate is stored in pandas/Python
+        # syntax (`column in ['a', 'b']`) because exploration filters via
+        # `df.query()`. Spark `df.filter()` needs SQL-tuple syntax
+        # (`column IN ('a', 'b')`). The same translator landing applies
+        # before its `df.filter(...)` call (see `findings_parser`
+        # invocation of `_spark_safe_query_expr`) — apply it here so the
+        # same predicate string drives both stages without operator
+        # intervention.
+        from customer_retention.core.compat import _spark_safe_query_expr
+        _sql_filter = _spark_safe_query_expr(config.filter_expression)
+        df_customers = df_customers.filter(_sql_filter)
+        if _sql_filter != config.filter_expression:
+            logger.info(
+                "Applied scope filter (pandas->SQL translated): %s",
+                _sql_filter,
+            )
+        else:
+            logger.info("Applied scope filter: %s", config.filter_expression)
     entity_df = df_customers.select("entity_id").distinct().withColumn(
         config.timestamp_column,
         lit(inference_ts).cast(TimestampType()),

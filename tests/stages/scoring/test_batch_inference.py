@@ -354,6 +354,78 @@ class TestScopeFilterApplication:
             _run_databricks(cfg)
         assert filter_calls == ["plan_type == 'enterprise'"]
 
+    def test_databricks_path_translates_pandas_in_to_sql_tuple(self, monkeypatch):
+        """NB00's ``sample_filter`` predicate is stored in pandas/Python syntax
+        (``column in ['a', 'b']``) because exploration filters via ``df.query()``.
+        Spark ``df.filter()`` needs SQL-tuple syntax (``column IN ('a', 'b')``);
+        without translation it raises ``[PARSE_SYNTAX_ERROR] Syntax error at or
+        near '['``. The same translator the landing-script generator already
+        applies (``_spark_safe_query_expr``) must also fire at scoring time so
+        one predicate string drives both stages."""
+        pytest.importorskip("pyspark", reason="PySpark required")
+        from unittest.mock import MagicMock
+
+        from customer_retention.stages.scoring import batch_inference
+        from customer_retention.stages.scoring.batch_inference import (
+            BatchInferenceConfig,
+            _run_databricks,
+        )
+
+        filter_calls: list[str] = []
+
+        class _FakeSparkDF:
+            def filter(self, expr):
+                filter_calls.append(expr)
+                return self
+
+            def select(self, *_a, **_kw): return self
+            def distinct(self): return self
+            def count(self): return 100
+            def withColumn(self, *_a, **_kw): return self  # noqa: N802
+
+            def agg(self, *_a, **_kw):
+                r = MagicMock()
+                r.collect.return_value = [{"total": 0, "churners": 0, "avg_prob": 0.0}]
+                return r
+
+            def groupBy(self, *_a, **_kw):  # noqa: N802
+                r = MagicMock()
+                cnt = MagicMock()
+                cnt.collect.return_value = []
+                r.count.return_value = cnt
+                return r
+
+            def write(self, *_a, **_kw): return MagicMock()
+
+        class _Boom2Error(RuntimeError):
+            pass
+
+        def stub_score(spark, entity_df, feature_table, model_uri, **_kw):  # noqa: ARG001
+            raise _Boom2Error("stop after filter")
+
+        monkeypatch.setattr(batch_inference, "_score_with_feature_store", stub_score)
+        fake_spark = MagicMock()
+        fake_spark.table.return_value = _FakeSparkDF()
+        monkeypatch.setattr(batch_inference, "_get_spark", lambda: fake_spark)
+
+        cfg = BatchInferenceConfig(
+            catalog="c", schema="s", model_name="m",
+            filter_expression=(
+                "REVENUE_MARKET_SEGMENT in ['Emerging', 'Small'] and "
+                "ACCOUNT_ID in (select ACCOUNT_ID from contract where event_type = 'start')"
+            ),
+        )
+        with pytest.raises(_Boom2Error):
+            _run_databricks(cfg)
+        assert filter_calls == [
+            "REVENUE_MARKET_SEGMENT in ('Emerging', 'Small') and "
+            "ACCOUNT_ID in (select ACCOUNT_ID from contract where event_type = 'start')"
+        ], (
+            "Pandas-style 'in [..]' must be translated to SQL-style 'in (..)' "
+            "before df.filter(); the embedded SQL subquery '(select ... from ...)' "
+            "must pass through verbatim."
+        )
+
     def test_databricks_path_reads_config_customer_table_and_dedups(self, monkeypatch):
         """Regression: the default ``gold_customers`` table doesn't exist in
         projects that use composite-name-qualified gold tables (``gold_features_{CN}``).
