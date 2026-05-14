@@ -140,7 +140,22 @@ def cluster_kmeans(
         )
         .transform(shap_df)
     )
-    assembled.cache()
+    # Best-effort cache for the k-sweep below: KMeans.fit re-reads
+    # ``assembled`` once per k value (~4-8 iterations under default
+    # KMEANS_K_RANGE). Caching avoids re-running the VectorAssembler each
+    # pass. On Spark Connect (every DBR 14+ shared cluster + serverless),
+    # ``df.cache()`` can be rejected with
+    # ``[NOT_SUPPORTED_WITH_SERVERLESS] PERSIST/CACHE TABLE is not supported``
+    # depending on the access-mode policy. When that happens we skip the
+    # cache — KMeans still works, just slower because each iteration
+    # re-evaluates the lazy plan.
+    try:
+        assembled.cache()
+    except Exception as exc:  # noqa: BLE001 — best-effort across cluster types
+        logger.debug(
+            "cluster_kmeans assembled.cache() skipped (%s: %s)",
+            type(exc).__name__, exc,
+        )
 
     try:
         k_low, k_high = k_range
@@ -193,10 +208,12 @@ def cluster_kmeans(
     finally:
         try:
             assembled.unpersist()
-        except (AttributeError, RuntimeError) as exc:
+        except Exception as exc:  # noqa: BLE001 — paired with the cache() above; both are best-effort
             # AttributeError: unit-test mocks may not implement unpersist().
             # RuntimeError: Spark connection already closed by the time the
             # finally block runs (rare during interpreter shutdown).
+            # SparkConnectGrpcException + friends: cluster access-mode
+            # policy rejection (same family as the cache() failure above).
             logger.debug("cluster_kmeans unpersist failed (non-fatal): %s", exc)
 
 

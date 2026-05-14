@@ -108,8 +108,21 @@ def compute_shap_attribution(
     scored = (
         pipeline_model.transform(filled.limit(sample_size))
         .select(*feature_list, _PREDICTION_COL)
-        .cache()
     )
+    # Best-effort cache: the batched-correlation loop below re-reads
+    # `scored` once per `_CORR_BATCH` feature group. Caching avoids
+    # re-evaluating pipeline_model.transform every batch. On Spark
+    # Connect (every DBR 14+ shared cluster + serverless), `df.cache()`
+    # can be rejected with `[NOT_SUPPORTED_WITH_SERVERLESS] CACHE TABLE
+    # is not supported` depending on the access-mode policy. Skip on
+    # failure — the correlation results are unchanged, just slower.
+    try:
+        scored = scored.cache()
+    except Exception as exc:  # noqa: BLE001 — best-effort across cluster types
+        logger.debug(
+            "compute_shap_attribution scored.cache() skipped (%s: %s)",
+            type(exc).__name__, exc,
+        )
     try:
         materialized = scored.count()
 

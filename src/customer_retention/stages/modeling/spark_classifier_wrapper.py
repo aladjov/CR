@@ -186,8 +186,23 @@ class SparkClassifierWrapper:
         n_rows = spark_df.count()
         target = SparkClassifierWrapper._target_partitions(n_rows)
         spark_df = spark_df.repartition(target)
-        spark_df.cache()
-        spark_df.count()
+        # Best-effort cache: L-BFGS / KMeans iteratively re-reads the
+        # training dataframe each pass; caching avoids re-evaluating the
+        # upstream plan. On Spark Connect (every DBR 14+ shared cluster
+        # + serverless), `df.cache()` can be rejected with
+        # `[NOT_SUPPORTED_WITH_SERVERLESS] CACHE TABLE is not supported`
+        # depending on the access-mode policy. Skip on failure — training
+        # still converges, just slower because each iteration replays the
+        # repartition + upstream lazy plan.
+        try:
+            spark_df.cache()
+            spark_df.count()
+        except Exception as exc:  # noqa: BLE001 — best-effort across cluster types
+            import logging
+            logging.getLogger(__name__).debug(
+                "SparkClassifierWrapper training-data cache skipped (%s: %s)",
+                type(exc).__name__, exc,
+            )
         return spark_df
 
     @staticmethod
