@@ -63,12 +63,41 @@ class TestReleaseStageMemory:
 
     @patch("customer_retention.core.compat.is_databricks", return_value=True)
     @patch("customer_retention.core.compat.get_spark_session")
-    def test_clear_cache_failure_propagates(self, mock_get_session, _):
+    def test_clear_cache_runtime_failure_is_swallowed(self, mock_get_session, _):
+        """``release_stage_memory`` is best-effort memory hygiene — it must
+        NOT fail the cell when ``catalog.clearCache()`` is rejected. Spark
+        Connect on DBR 14+ shared clusters reuses the
+        ``[NOT_SUPPORTED_WITH_SERVERLESS] CLEAR CACHE is not supported``
+        error code whenever the access-mode policy is in the serverless-
+        compatibility subset; that exception used to propagate and kill
+        the c05 release cell. The function now catches broadly so the
+        Python GC + tracked-object unpersist above still produce the
+        cleanup win even when the cluster rejects a full cache clear."""
         mock_session = MagicMock()
-        mock_session.catalog.clearCache.side_effect = RuntimeError("cluster gone")
+        mock_session.catalog.clearCache.side_effect = RuntimeError(
+            "[NOT_SUPPORTED_WITH_SERVERLESS] CLEAR CACHE is not supported"
+        )
         mock_get_session.return_value = mock_session
-        with pytest.raises(RuntimeError, match="cluster gone"):
-            release_stage_memory()
+        release_stage_memory()
+        mock_session.catalog.clearCache.assert_called_once()
+
+    @patch("customer_retention.core.compat.is_databricks", return_value=True)
+    @patch("customer_retention.core.compat.get_spark_session")
+    def test_clear_cache_spark_connect_grpc_failure_is_swallowed(self, mock_get_session, _):
+        """Same contract, but with a generic ``Exception`` subclass modelling
+        the real ``SparkConnectGrpcException`` the cluster raises. Confirms
+        the catch is broad enough to handle the actual Spark Connect
+        exception class, not just ``RuntimeError`` / ``OSError``."""
+        class _FakeGrpcError(Exception):
+            pass
+
+        mock_session = MagicMock()
+        mock_session.catalog.clearCache.side_effect = _FakeGrpcError(
+            "[NOT_SUPPORTED_WITH_SERVERLESS] CLEAR CACHE is not supported"
+        )
+        mock_get_session.return_value = mock_session
+        release_stage_memory()
+        mock_session.catalog.clearCache.assert_called_once()
 
     @patch("customer_retention.core.compat.get_spark_session", return_value=None)
     def test_unpersist_spark_dataframe(self, _):

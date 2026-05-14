@@ -2524,7 +2524,24 @@ def _try_unpersist(obj: Any) -> None:
 
 
 def release_stage_memory() -> None:
-    """Unpersist tracked objects, run GC, and clear Spark cache."""
+    """Unpersist tracked objects, run GC, and clear Spark cache.
+
+    The final ``session.catalog.clearCache()`` is an optimization — it
+    frees executor memory after a wide stage. On Spark Connect (every
+    DBR 14+ shared cluster + serverless), the call dispatches to a
+    server-side ``CLEAR CACHE`` SQL statement which the cluster access-
+    mode policy can reject with
+    ``[NOT_SUPPORTED_WITH_SERVERLESS] CLEAR CACHE is not supported``.
+    That error is a ``SparkConnectGrpcException`` (subclass of
+    ``Exception``, not ``RuntimeError``/``OSError``), so the previous
+    narrow catch let it propagate and killed the release cell.
+
+    Catch broadly here: if the cluster won't clear cache, the worst-case
+    outcome is the cached state lingers until the kernel detaches — a
+    memory tradeoff, not a correctness issue. The Python GC + tracked-
+    object unpersist above still run, so most reclaimable memory is
+    freed regardless.
+    """
     for obj in _stage_objects:
         try:
             _try_unpersist(obj)
@@ -2541,7 +2558,15 @@ def release_stage_memory() -> None:
     session = get_spark_session()
     if session is None:
         return
-    session.catalog.clearCache()
+    try:
+        session.catalog.clearCache()
+    except Exception as exc:  # noqa: BLE001 — see docstring; best-effort across cluster types
+        import logging
+
+        logging.getLogger(__name__).debug(
+            "release_stage_memory: clearCache() skipped (%s: %s)",
+            type(exc).__name__, exc,
+        )
 
 
 __all__ = [
