@@ -94,6 +94,17 @@ class BatchInferenceConfig:
     # — a single narrow projection, no shuffle, no extra Spark jobs.
     filter_expression: Optional[str] = None
 
+    # When set, ``filter_expression`` is applied against ``filter_via_table``
+    # (typically ``{cat}.{sch}.landing_<target_dataset>``) instead of
+    # ``customer_table``, and the customer table is inner-joined to the
+    # surviving entity_id set. This routing is needed when the cohort filter
+    # references raw landing columns that no longer exist in the gold
+    # customer_table — e.g. a string categorical like ``REVENUE_MARKET_SEGMENT``
+    # that gold expands into one-hot columns ``REVENUE_MARKET_SEGMENT_<value>``.
+    # Leave ``None`` to apply the filter directly to ``customer_table`` (the
+    # original behaviour; works when every filter column is present in gold).
+    filter_via_table: Optional[str] = None
+
 
 @dataclass
 class BatchInferenceResult:
@@ -361,14 +372,35 @@ def _run_databricks(config: BatchInferenceConfig) -> BatchInferenceResult:
         # intervention.
         from customer_retention.core.compat import _spark_safe_query_expr
         _sql_filter = _spark_safe_query_expr(config.filter_expression)
-        df_customers = df_customers.filter(_sql_filter)
-        if _sql_filter != config.filter_expression:
+        if config.filter_via_table:
+            # Route the filter through the source landing table whose
+            # raw columns survive transforms-untouched. The customer
+            # table (typically gold) has the categoricals one-hot encoded
+            # so direct `df.filter()` against it raises [UNRESOLVED_COLUMN]
+            # on every raw-column reference. Project entity_id from the
+            # filtered landing table and inner-join the customer table
+            # to that set — a narrow shuffle on entity_id keys, no
+            # cross-product, no double application of the predicate.
+            df_filtered_ids = (
+                spark.table(config.filter_via_table)
+                .filter(_sql_filter)
+                .select("entity_id")
+                .distinct()
+            )
+            df_customers = df_customers.join(df_filtered_ids, on="entity_id", how="inner")
             logger.info(
-                "Applied scope filter (pandas->SQL translated): %s",
-                _sql_filter,
+                "Applied scope filter via %s (entity_id join): %s",
+                config.filter_via_table, _sql_filter,
             )
         else:
-            logger.info("Applied scope filter: %s", config.filter_expression)
+            df_customers = df_customers.filter(_sql_filter)
+            if _sql_filter != config.filter_expression:
+                logger.info(
+                    "Applied scope filter (pandas->SQL translated): %s",
+                    _sql_filter,
+                )
+            else:
+                logger.info("Applied scope filter: %s", config.filter_expression)
     entity_df = df_customers.select("entity_id").distinct().withColumn(
         config.timestamp_column,
         lit(inference_ts).cast(TimestampType()),

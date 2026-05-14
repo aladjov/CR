@@ -426,6 +426,100 @@ class TestScopeFilterApplication:
             "must pass through verbatim."
         )
 
+    def test_databricks_path_routes_filter_via_landing_table(self, monkeypatch):
+        """When the scope filter references a raw landing column that has been
+        one-hot encoded in gold (typical for a string categorical like
+        ``REVENUE_MARKET_SEGMENT``), Spark raises [UNRESOLVED_COLUMN] on direct
+        ``df.filter()`` against the customer table. ``filter_via_table`` routes
+        the filter through the source landing table and inner-joins the
+        surviving entity_id set with the customer table."""
+        pytest.importorskip("pyspark", reason="PySpark required")
+        from unittest.mock import MagicMock
+
+        from customer_retention.stages.scoring import batch_inference
+        from customer_retention.stages.scoring.batch_inference import (
+            BatchInferenceConfig,
+            _run_databricks,
+        )
+
+        table_calls: list[str] = []
+        filter_calls: list[str] = []
+        join_calls: list[tuple] = []
+
+        class _FakeSparkDF:
+            def __init__(self, label="root"):
+                self._label = label
+
+            def filter(self, expr):
+                filter_calls.append((self._label, expr))
+                return _FakeSparkDF(label=f"{self._label}.filter")
+
+            def select(self, *_a, **_kw):
+                return _FakeSparkDF(label=f"{self._label}.select")
+
+            def distinct(self):
+                return _FakeSparkDF(label=f"{self._label}.distinct")
+
+            def join(self, other, on=None, how=None):
+                join_calls.append((self._label, getattr(other, "_label", "?"), on, how))
+                return _FakeSparkDF(label=f"{self._label}.join")
+
+            def count(self): return 100
+            def withColumn(self, *_a, **_kw): return self  # noqa: N802
+
+            def agg(self, *_a, **_kw):
+                r = MagicMock()
+                r.collect.return_value = [{"total": 0, "churners": 0, "avg_prob": 0.0}]
+                return r
+
+            def groupBy(self, *_a, **_kw):  # noqa: N802
+                r = MagicMock()
+                cnt = MagicMock()
+                cnt.collect.return_value = []
+                r.count.return_value = cnt
+                return r
+
+            def write(self, *_a, **_kw): return MagicMock()
+
+        class _BoomError(RuntimeError):
+            pass
+
+        def stub_score(spark, entity_df, feature_table, model_uri, **_kw):  # noqa: ARG001
+            raise _BoomError("stop after filter+join")
+
+        monkeypatch.setattr(batch_inference, "_score_with_feature_store", stub_score)
+
+        fake_spark = MagicMock()
+        def _fake_table(name):
+            table_calls.append(name)
+            return _FakeSparkDF(label=name)
+        fake_spark.table.side_effect = _fake_table
+        monkeypatch.setattr(batch_inference, "_get_spark", lambda: fake_spark)
+
+        cfg = BatchInferenceConfig(
+            catalog="c", schema="s", model_name="m",
+            customer_table="c.s.gold_features_X",
+            filter_expression="REVENUE_MARKET_SEGMENT in ['Emerging', 'Small']",
+            filter_via_table="c.s.landing_account",
+        )
+        with pytest.raises(_BoomError):
+            _run_databricks(cfg)
+
+        # The customer table AND the landing table must both be read.
+        assert "c.s.gold_features_X" in table_calls
+        assert "c.s.landing_account" in table_calls
+        # The filter is applied to landing, NOT to gold directly.
+        assert filter_calls == [
+            ("c.s.landing_account", "REVENUE_MARKET_SEGMENT in ('Emerging', 'Small')")
+        ], filter_calls
+        # The customer table is inner-joined to the filtered entity_id set.
+        assert len(join_calls) == 1
+        left_label, right_label, on, how = join_calls[0]
+        assert left_label == "c.s.gold_features_X"
+        assert "landing_account" in right_label
+        assert on == "entity_id"
+        assert how == "inner"
+
     def test_databricks_path_reads_config_customer_table_and_dedups(self, monkeypatch):
         """Regression: the default ``gold_customers`` table doesn't exist in
         projects that use composite-name-qualified gold tables (``gold_features_{CN}``).
