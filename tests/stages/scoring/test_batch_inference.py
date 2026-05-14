@@ -557,12 +557,22 @@ class TestScopeFilterApplication:
         )
 
         join_targets: list[str] = []
+        select_calls: list[tuple] = []
+
+        class _FakeField:
+            def __init__(self, name): self.name = name
+        class _FakeSchema:
+            def __init__(self, cols): self.fields = [_FakeField(c) for c in cols]
 
         class _FakeSparkDF:
-            def __init__(self, label="root"):
+            def __init__(self, label="root", cols=("entity_id",)):
                 self._label = label
+                self.schema = _FakeSchema(cols)
             def filter(self, _expr): return self
-            def select(self, *_a, **_kw): return self
+            def select(self, *args, **_kw):
+                # Capture so the assertion can verify the raw key got aliased.
+                select_calls.append((self._label, tuple(str(a) for a in args)))
+                return self
             def distinct(self): return self
             def join(self, other, on=None, how=None):  # noqa: ARG002
                 join_targets.append(getattr(other, "_label", "?"))
@@ -592,18 +602,29 @@ class TestScopeFilterApplication:
 
         monkeypatch.setattr(batch_inference, "_score_with_feature_store", stub_score)
 
+        # Landing table has ACCOUNT_ID (the raw key), gold has entity_id —
+        # this is the schema mismatch the framework must handle by
+        # aliasing ACCOUNT_ID → entity_id before the join.
+        def _fake_table(name):
+            if name == "c.s.landing_account":
+                return _FakeSparkDF(label=name, cols=("ACCOUNT_ID", "REVENUE_MARKET_SEGMENT"))
+            return _FakeSparkDF(label=name, cols=("entity_id",))
+
         fake_spark = MagicMock()
-        fake_spark.table.side_effect = lambda name: _FakeSparkDF(label=name)
+        fake_spark.table.side_effect = _fake_table
         fake_spark.catalog.tableExists.side_effect = lambda fqn: fqn == "c.s.landing_account"
         monkeypatch.setattr(batch_inference, "_get_spark", lambda: fake_spark)
 
         # Stub project_context discovery: declares account as the target
-        # dataset with a non-empty sample_filters entry.
+        # dataset with a non-empty sample_filters entry AND the raw entity
+        # column (ACCOUNT_ID) so the resolver knows what to alias.
         class _FakeDataset:
             role = "target"
+            entity_column = "ACCOUNT_ID"
         class _FakeCtx:
             datasets = {"account": _FakeDataset()}
             sample_filters = {"account": "REVENUE_MARKET_SEGMENT in ('Emerging','Small')"}
+            target_dataset = "account"
 
         class _FakeNs:
             class _Path:
@@ -630,6 +651,13 @@ class TestScopeFilterApplication:
 
         # The join target must be the auto-discovered landing_account table.
         assert join_targets == ["c.s.landing_account"], join_targets
+        # The select projecting from landing must alias the raw key to
+        # entity_id — this is the fix for the [UNRESOLVED_COLUMN] bug.
+        landing_selects = [args for (label, args) in select_calls if label == "c.s.landing_account"]
+        assert any(
+            any("ACCOUNT_ID" in a and "entity_id" in a for a in select_args)
+            for select_args in landing_selects
+        ), f"expected ACCOUNT_ID-aliased-to-entity_id projection, got {landing_selects}"
 
     def test_databricks_path_routes_filter_via_landing_table(self, monkeypatch):
         """When the scope filter references a raw landing column that has been
@@ -651,23 +679,29 @@ class TestScopeFilterApplication:
         filter_calls: list[str] = []
         join_calls: list[tuple] = []
 
+        class _FakeField:
+            def __init__(self, name): self.name = name
+        class _FakeSchema:
+            def __init__(self, cols): self.fields = [_FakeField(c) for c in cols]
+
         class _FakeSparkDF:
-            def __init__(self, label="root"):
+            def __init__(self, label="root", cols=("entity_id",)):
                 self._label = label
+                self.schema = _FakeSchema(cols)
 
             def filter(self, expr):
                 filter_calls.append((self._label, expr))
-                return _FakeSparkDF(label=f"{self._label}.filter")
+                return _FakeSparkDF(label=f"{self._label}.filter", cols=tuple(f.name for f in self.schema.fields))
 
             def select(self, *_a, **_kw):
-                return _FakeSparkDF(label=f"{self._label}.select")
+                return _FakeSparkDF(label=f"{self._label}.select", cols=("entity_id",))
 
             def distinct(self):
-                return _FakeSparkDF(label=f"{self._label}.distinct")
+                return _FakeSparkDF(label=f"{self._label}.distinct", cols=("entity_id",))
 
             def join(self, other, on=None, how=None):
                 join_calls.append((self._label, getattr(other, "_label", "?"), on, how))
-                return _FakeSparkDF(label=f"{self._label}.join")
+                return _FakeSparkDF(label=f"{self._label}.join", cols=("entity_id",))
 
             def count(self): return 100
             def withColumn(self, *_a, **_kw): return self  # noqa: N802
@@ -697,7 +731,10 @@ class TestScopeFilterApplication:
         fake_spark = MagicMock()
         def _fake_table(name):
             table_calls.append(name)
-            return _FakeSparkDF(label=name)
+            # The explicit-override test still uses the legacy assumption
+            # that the landing table exposes entity_id directly (operator
+            # passed filter_via_table without filter_via_table_entity_key).
+            return _FakeSparkDF(label=name, cols=("entity_id",))
         fake_spark.table.side_effect = _fake_table
         monkeypatch.setattr(batch_inference, "_get_spark", lambda: fake_spark)
 
