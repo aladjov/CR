@@ -73,6 +73,56 @@ def _register_sibling_temp_views(spark, filter_expr: str, catalog: str, schema: 
     return registered
 
 
+def _auto_resolve_filter_via_table(spark, catalog: str, schema: str) -> Optional[str]:
+    """Discover ``{catalog}.{schema}.landing_<target_dataset>`` from the active
+    run's ``project_context`` so a caller passing only ``filter_expression``
+    (no explicit ``filter_via_table``) still gets the routing through landing
+    when needed. Returns the FQN of the landing table if all of:
+
+      1. A run namespace resolves via ``RunNamespace.from_env_or_latest()``.
+      2. ``project_context.yaml`` exists in that namespace.
+      3. The context declares a target dataset (``role == "target"`` or a
+         single-dataset project) AND that dataset has a non-empty
+         ``sample_filters`` entry — the routing is only meaningful when a
+         cohort filter exists in the first place.
+      4. The candidate ``landing_<target>`` table actually exists in UC.
+
+    Returns ``None`` if any tier fails — the caller falls back to direct
+    ``df.filter()`` against the customer table, which is correct when the
+    filter references columns that exist in gold (e.g. a numeric range).
+    """
+    try:
+        from customer_retention.analysis.auto_explorer.project_context import ProjectContext
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+    except ImportError:
+        return None
+    ns = RunNamespace.from_env_or_latest()
+    if ns is None or not ns.project_context_path.exists():
+        return None
+    try:
+        ctx = ProjectContext.load(ns.project_context_path)
+    except Exception:  # pragma: no cover — defensive
+        return None
+    filters = getattr(ctx, "sample_filters", None) or {}
+    if not filters:
+        return None
+    target_name = next(
+        (n for n, d in ctx.datasets.items() if getattr(d, "role", None) == "target"),
+        None,
+    )
+    if target_name is None and len(ctx.datasets) == 1:
+        target_name = next(iter(ctx.datasets))
+    if target_name is None or not filters.get(target_name):
+        return None
+    candidate = f"{catalog}.{schema}.landing_{target_name}"
+    try:
+        if spark.catalog.tableExists(candidate):
+            return candidate
+    except Exception:  # pragma: no cover — defensive
+        return None
+    return None
+
+
 if TYPE_CHECKING:  # pragma: no cover
     from pyspark.sql import DataFrame, SparkSession
 
@@ -429,7 +479,16 @@ def _run_databricks(config: BatchInferenceConfig) -> BatchInferenceResult:
                 "Registered sibling temp views for scope-filter subqueries: %s",
                 _sibling_views,
             )
-        if config.filter_via_table:
+        # Auto-resolve `landing_<target>` from project_context when the
+        # caller didn't supply an explicit `filter_via_table`. This keeps
+        # old c04 cells (passing only `filter_expression`) working without
+        # operator-side changes: when the cohort filter references a raw
+        # categorical that gold has one-hot encoded, the framework still
+        # routes via landing instead of raising [UNRESOLVED_COLUMN] mid-run.
+        _via_table = config.filter_via_table or _auto_resolve_filter_via_table(
+            spark, config.catalog, config.schema,
+        )
+        if _via_table:
             # Route the filter through the source landing table whose
             # raw columns survive transforms-untouched. The customer
             # table (typically gold) has the categoricals one-hot encoded
@@ -439,7 +498,7 @@ def _run_databricks(config: BatchInferenceConfig) -> BatchInferenceResult:
             # to that set — a narrow shuffle on entity_id keys, no
             # cross-product, no double application of the predicate.
             df_filtered_ids = (
-                spark.table(config.filter_via_table)
+                spark.table(_via_table)
                 .filter(_sql_filter)
                 .select("entity_id")
                 .distinct()
@@ -447,7 +506,7 @@ def _run_databricks(config: BatchInferenceConfig) -> BatchInferenceResult:
             df_customers = df_customers.join(df_filtered_ids, on="entity_id", how="inner")
             logger.info(
                 "Applied scope filter via %s (entity_id join): %s",
-                config.filter_via_table, _sql_filter,
+                _via_table, _sql_filter,
             )
         else:
             df_customers = df_customers.filter(_sql_filter)

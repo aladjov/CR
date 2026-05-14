@@ -540,6 +540,97 @@ class TestScopeFilterApplication:
         assert result == []
         assert registrations == []
 
+    def test_databricks_path_auto_resolves_landing_target_from_project_context(self, monkeypatch):
+        """Old c04 cells that pass only `filter_expression` (no explicit
+        `filter_via_table`) must still route via landing when the cohort
+        filter references a raw categorical that gold has one-hot encoded.
+        The framework auto-discovers `landing_<target>` from the active
+        run's project_context.sample_filters so callers don't need to
+        change to pick up the routing."""
+        pytest.importorskip("pyspark", reason="PySpark required")
+        from unittest.mock import MagicMock
+
+        from customer_retention.stages.scoring import batch_inference
+        from customer_retention.stages.scoring.batch_inference import (
+            BatchInferenceConfig,
+            _run_databricks,
+        )
+
+        join_targets: list[str] = []
+
+        class _FakeSparkDF:
+            def __init__(self, label="root"):
+                self._label = label
+            def filter(self, _expr): return self
+            def select(self, *_a, **_kw): return self
+            def distinct(self): return self
+            def join(self, other, on=None, how=None):  # noqa: ARG002
+                join_targets.append(getattr(other, "_label", "?"))
+                return self
+            def count(self): return 100
+            def withColumn(self, *_a, **_kw): return self  # noqa: N802
+
+            def agg(self, *_a, **_kw):
+                r = MagicMock()
+                r.collect.return_value = [{"total": 0, "churners": 0, "avg_prob": 0.0}]
+                return r
+
+            def groupBy(self, *_a, **_kw):  # noqa: N802
+                r = MagicMock()
+                cnt = MagicMock()
+                cnt.collect.return_value = []
+                r.count.return_value = cnt
+                return r
+
+            def write(self, *_a, **_kw): return MagicMock()
+
+        class _BoomError(RuntimeError):
+            pass
+
+        def stub_score(spark, entity_df, feature_table, model_uri, **_kw):  # noqa: ARG001
+            raise _BoomError("stop after filter")
+
+        monkeypatch.setattr(batch_inference, "_score_with_feature_store", stub_score)
+
+        fake_spark = MagicMock()
+        fake_spark.table.side_effect = lambda name: _FakeSparkDF(label=name)
+        fake_spark.catalog.tableExists.side_effect = lambda fqn: fqn == "c.s.landing_account"
+        monkeypatch.setattr(batch_inference, "_get_spark", lambda: fake_spark)
+
+        # Stub project_context discovery: declares account as the target
+        # dataset with a non-empty sample_filters entry.
+        class _FakeDataset:
+            role = "target"
+        class _FakeCtx:
+            datasets = {"account": _FakeDataset()}
+            sample_filters = {"account": "REVENUE_MARKET_SEGMENT in ('Emerging','Small')"}
+
+        class _FakeNs:
+            class _Path:
+                def exists(self): return True
+            project_context_path = _Path()
+
+        monkeypatch.setattr(
+            "customer_retention.analysis.auto_explorer.run_namespace.RunNamespace.from_env_or_latest",
+            classmethod(lambda cls, root=None: _FakeNs()),
+        )
+        monkeypatch.setattr(
+            "customer_retention.analysis.auto_explorer.project_context.ProjectContext.load",
+            classmethod(lambda cls, path: _FakeCtx()),
+        )
+
+        cfg = BatchInferenceConfig(
+            catalog="c", schema="s", model_name="m",
+            customer_table="c.s.gold_features_X",
+            filter_expression="REVENUE_MARKET_SEGMENT in ['Emerging', 'Small']",
+            # Note: NO filter_via_table — framework must auto-resolve.
+        )
+        with pytest.raises(_BoomError):
+            _run_databricks(cfg)
+
+        # The join target must be the auto-discovered landing_account table.
+        assert join_targets == ["c.s.landing_account"], join_targets
+
     def test_databricks_path_routes_filter_via_landing_table(self, monkeypatch):
         """When the scope filter references a raw landing column that has been
         one-hot encoded in gold (typical for a string categorical like
