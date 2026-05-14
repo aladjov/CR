@@ -214,6 +214,60 @@ class TestFromEnv:
         assert ns.run_id == "my-run-abc12345"
 
 
+class TestResolveWithOverrides:
+    """Operator-supplied overrides on RunNamespace.resolve must short-circuit
+    the auto-discovery chain. The diagnostic string the resolver returns
+    alongside the namespace is the audit trail the causal-track setup cells
+    print so an operator can see which tier won at a glance."""
+
+    def test_both_overrides_returns_pinned_namespace(self, tmp_path):
+        (tmp_path / "runs" / "pinned-run-id").mkdir(parents=True)
+        ns, source = RunNamespace.resolve(
+            run_id="pinned-run-id", experiments_dir=str(tmp_path),
+        )
+        assert ns is not None
+        assert ns.run_id == "pinned-run-id"
+        assert ns.root == tmp_path
+        assert "override" in source
+        assert "pinned-run-id" in source
+
+    def test_both_overrides_missing_run_dir_returns_none(self, tmp_path):
+        ns, source = RunNamespace.resolve(
+            run_id="nonexistent", experiments_dir=str(tmp_path),
+        )
+        assert ns is None
+        assert "run_dir does not exist" in source
+
+    def test_run_id_alone_uses_default_experiments_dir(self, tmp_path, monkeypatch):
+        from customer_retention.core.config import experiments
+
+        monkeypatch.setattr(experiments, "get_experiments_dir", lambda: tmp_path)
+        (tmp_path / "runs" / "solo-run-id").mkdir(parents=True)
+        ns, source = RunNamespace.resolve(run_id="solo-run-id")
+        assert ns is not None
+        assert ns.run_id == "solo-run-id"
+        assert "override" in source
+        assert "default" in source
+
+    def test_no_overrides_falls_back_to_auto_discovery(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
+        monkeypatch.delenv("CR_EXPERIMENTS_DIR", raising=False)
+        run_dir = tmp_path / "runs" / "discovered-run"
+        run_dir.mkdir(parents=True)
+        (run_dir / "project_context.yaml").write_text("name: x\n")
+        ns, source = RunNamespace.resolve(experiments_dir=str(tmp_path))
+        assert ns is not None
+        assert ns.run_id == "discovered-run"
+        assert "from_env_or_latest" in source
+        assert "resolved" in source
+
+    def test_no_overrides_no_runs_returns_none_with_source(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
+        ns, source = RunNamespace.resolve(experiments_dir=str(tmp_path))
+        assert ns is None
+        assert "no run found" in source
+
+
 class TestMergedFindingsPath:
     def test_merged_findings_path(self, tmp_path):
         ns = RunNamespace(root=tmp_path, run_id="proj-abc")

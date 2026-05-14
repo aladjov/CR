@@ -342,3 +342,77 @@ class TestArtifactPathContract:
         with patch("customer_retention.stages.scoring.config._discover_namespace", return_value=ns):
             config = ScoringConfig.from_databricks()
         assert config.artifacts_path == ns.artifacts_dir("")
+
+
+class TestResolveScoringContext:
+    """``resolve_scoring_context`` is the single entry point causal-track / scoring
+    notebooks call: namespace-resolution + ScoringConfig + MLflow alias lookup
+    bundled with a diagnostic ``source`` string."""
+
+    def test_local_resolution_returns_none_model_uri(self, local_pipeline_dir, monkeypatch):
+        from customer_retention.stages.scoring import config as _cfg
+        from customer_retention.stages.scoring import resolve_scoring_context
+
+        monkeypatch.setattr(_cfg, "get_experiments_dir", lambda: local_pipeline_dir)
+
+        result = resolve_scoring_context(is_databricks=False)
+        assert result.scoring_config.pipeline_name == "customer_churn"
+        assert result.model_uri is None
+        assert "from_env_or_latest" in result.source
+
+    def test_local_model_uri_override_is_passed_through(self, local_pipeline_dir, monkeypatch):
+        from customer_retention.stages.scoring import config as _cfg
+        from customer_retention.stages.scoring import resolve_scoring_context
+
+        monkeypatch.setattr(_cfg, "get_experiments_dir", lambda: local_pipeline_dir)
+
+        result = resolve_scoring_context(
+            is_databricks=False,
+            model_uri="models:/my_model@staging",
+        )
+        assert result.model_uri == "models:/my_model@staging"
+
+    def test_databricks_resolves_model_uri_from_alias(self, databricks_ns):
+        from unittest.mock import MagicMock
+
+        from customer_retention.stages.scoring import resolve_scoring_context
+
+        with patch(
+            "customer_retention.analysis.auto_explorer.run_namespace.RunNamespace.resolve",
+            return_value=(databricks_ns, "from_env_or_latest() → resolved"),
+        ), patch("mlflow.tracking.MlflowClient") as MockClient:
+            instance = MockClient.return_value
+            instance.get_model_version_by_alias.return_value = MagicMock(version="7")
+            result = resolve_scoring_context(is_databricks=True)
+
+        assert result.model_uri == (
+            "models:/analytics.churn.model_cust_emails_prof__a1b2c3d@production"
+        )
+        assert result.model_version == "7"
+        assert result.model_name == "analytics.churn.model_cust_emails_prof__a1b2c3d"
+
+    def test_databricks_override_short_circuits_mlflow(self, databricks_ns):
+        from customer_retention.stages.scoring import resolve_scoring_context
+
+        with patch(
+            "customer_retention.analysis.auto_explorer.run_namespace.RunNamespace.resolve",
+            return_value=(databricks_ns, "override"),
+        ), patch("mlflow.tracking.MlflowClient") as MockClient:
+            result = resolve_scoring_context(
+                is_databricks=True,
+                model_uri="models:/my_pinned_model/3",
+            )
+            MockClient.assert_not_called()
+
+        assert result.model_uri == "models:/my_pinned_model/3"
+        assert result.model_version == "override"
+
+    def test_databricks_no_namespace_raises(self, databricks_env):
+        from customer_retention.stages.scoring import resolve_scoring_context
+
+        with patch(
+            "customer_retention.analysis.auto_explorer.run_namespace.RunNamespace.resolve",
+            return_value=(None, "from_env_or_latest() → no run found"),
+        ):
+            with pytest.raises(ValueError, match="no run namespace resolved"):
+                resolve_scoring_context(is_databricks=True)

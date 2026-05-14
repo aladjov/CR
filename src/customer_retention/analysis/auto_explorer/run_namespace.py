@@ -405,3 +405,57 @@ class RunNamespace:
                 return ns
             return cls.from_latest()
         return None
+
+    @classmethod
+    def resolve(
+        cls,
+        *,
+        run_id: Optional[str] = None,
+        experiments_dir: Optional[Path | str] = None,
+    ) -> tuple[Optional[RunNamespace], str]:
+        """Resolve the active run with operator-supplied overrides honoured first.
+
+        Returns ``(namespace, source)`` where ``source`` is a one-line
+        diagnostic naming which tier produced the namespace. Designed for
+        causal-track / scoring notebooks that want a single call yielding
+        both the namespace and an audit-quality stdout line.
+
+        Tier order:
+          1. ``run_id`` + ``experiments_dir`` both provided → pinned namespace
+             (no discovery; the operator knows exactly which run to use).
+          2. ``run_id`` alone → pinned against ``get_experiments_dir()``.
+          3. ``experiments_dir`` alone → root passed into ``from_env_or_latest``.
+          4. Neither → ``from_env_or_latest()`` with no root.
+
+        The returned namespace is None only when no override was given AND
+        every discovery tier failed; ``source`` then explains why.
+        """
+        if run_id and experiments_dir:
+            root = make_path(str(experiments_dir))
+            ns = cls(root=root, run_id=run_id)
+            if not ns.run_dir.is_dir():
+                return None, (
+                    f"override (run_id={run_id!r}, experiments_dir="
+                    f"{experiments_dir!r}) — run_dir does not exist"
+                )
+            return ns, f"override (run_id={run_id!r}, experiments_dir={experiments_dir!r})"
+        if run_id:
+            from customer_retention.core.config.experiments import get_experiments_dir
+
+            root = get_experiments_dir()
+            ns = cls(root=root, run_id=run_id)
+            if not ns.run_dir.is_dir():
+                return None, (
+                    f"override (run_id={run_id!r}, experiments_dir=<default {root}>) — "
+                    "run_dir does not exist"
+                )
+            return ns, f"override (run_id={run_id!r}, experiments_dir=<default {root}>)"
+        if experiments_dir:
+            root = make_path(str(experiments_dir))
+            ns = cls.from_env_or_latest(root=root)
+            return ns, (
+                f"from_env_or_latest(root={experiments_dir!r}) → "
+                f"{'resolved' if ns else 'no run found'}"
+            )
+        ns = cls.from_env_or_latest()
+        return ns, f"from_env_or_latest() → {'resolved' if ns else 'no run found'}"
