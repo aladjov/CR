@@ -32,6 +32,47 @@ from typing import TYPE_CHECKING, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+_SIBLING_VIEW_PATTERN = None
+
+
+def _register_sibling_temp_views(spark, filter_expr: str, catalog: str, schema: str) -> list[str]:
+    """Scan ``filter_expr`` for bare-name table references inside SQL subqueries
+    (``... in (select X from contract where ...)``) and register each as a
+    temp view backed by ``{catalog}.{schema}.landing_<name>``. Mirrors the
+    sibling-temp-view bootstrap the renderer emits at the top of every
+    ``landing_<ds>.py`` so the same predicate string runs unchanged in
+    scoring without operator setup.
+
+    Returns the list of names actually registered (for diagnostic logging).
+    Silently skips any name whose ``landing_<name>`` table is not present
+    in Unity Catalog — the filter would have failed anyway in that case
+    and the downstream ``df.filter(...)`` call surfaces the cleaner
+    [UNRESOLVED_COLUMN] / [TABLE_OR_VIEW_NOT_FOUND] message.
+    """
+    import re
+
+    global _SIBLING_VIEW_PATTERN
+    if _SIBLING_VIEW_PATTERN is None:
+        _SIBLING_VIEW_PATTERN = re.compile(
+            r"\b(?:from|join)\s+([A-Za-z_][A-Za-z0-9_]*)\b",
+            re.IGNORECASE,
+        )
+
+    names = set(_SIBLING_VIEW_PATTERN.findall(filter_expr))
+    registered: list[str] = []
+    for name in sorted(names):
+        uc_fqn = f"{catalog}.{schema}.landing_{name}"
+        try:
+            exists = spark.catalog.tableExists(uc_fqn)
+        except Exception:  # pragma: no cover — Spark catalog probe is best-effort
+            exists = False
+        if not exists:
+            continue
+        spark.read.format("delta").table(uc_fqn).createOrReplaceTempView(name)
+        registered.append(name)
+    return registered
+
+
 if TYPE_CHECKING:  # pragma: no cover
     from pyspark.sql import DataFrame, SparkSession
 
@@ -372,6 +413,22 @@ def _run_databricks(config: BatchInferenceConfig) -> BatchInferenceResult:
         # intervention.
         from customer_retention.core.compat import _spark_safe_query_expr
         _sql_filter = _spark_safe_query_expr(config.filter_expression)
+        # Register sibling-temp-views for any bare-name table references
+        # inside the filter's SQL subqueries (e.g. `... in (select X from
+        # contract where ...)`). Without this, Spark resolves the bare
+        # name against `current_schema()` rather than the run's catalog/
+        # schema and raises [TABLE_OR_VIEW_NOT_FOUND]. Mirrors the
+        # bootstrap the renderer already emits at the top of every
+        # `landing_<ds>.py`, so the same predicate runs unchanged across
+        # landing and scoring.
+        _sibling_views = _register_sibling_temp_views(
+            spark, _sql_filter, config.catalog, config.schema,
+        )
+        if _sibling_views:
+            logger.info(
+                "Registered sibling temp views for scope-filter subqueries: %s",
+                _sibling_views,
+            )
         if config.filter_via_table:
             # Route the filter through the source landing table whose
             # raw columns survive transforms-untouched. The customer

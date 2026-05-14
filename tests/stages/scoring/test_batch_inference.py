@@ -426,6 +426,120 @@ class TestScopeFilterApplication:
             "must pass through verbatim."
         )
 
+    def test_databricks_path_registers_sibling_temp_views_from_filter(self, monkeypatch):
+        """SQL subqueries inside the scope filter (`... in (select X from contract
+        where ...)`) reference dataset tables by bare name. Without a temp-view
+        bootstrap, Spark resolves them against `current_schema()` and raises
+        `[TABLE_OR_VIEW_NOT_FOUND] contract`. The framework must scan the
+        filter and pre-register each bare name as a temp view backed by
+        `{catalog}.{schema}.landing_<name>` — mirroring the bootstrap the
+        renderer emits at the top of every `landing_<ds>.py`."""
+        pytest.importorskip("pyspark", reason="PySpark required")
+        from unittest.mock import MagicMock
+
+        from customer_retention.stages.scoring import batch_inference
+        from customer_retention.stages.scoring.batch_inference import (
+            BatchInferenceConfig,
+            _run_databricks,
+        )
+
+        temp_view_registrations: list[str] = []
+
+        class _FakeReader:
+            def format(self, _fmt): return self
+            def table(self, fqn):
+                df = MagicMock()
+                df.createOrReplaceTempView = lambda name: temp_view_registrations.append((fqn, name))
+                return df
+
+        class _FakeSparkDF:
+            def filter(self, _expr): return self
+            def select(self, *_a, **_kw): return self
+            def distinct(self): return self
+            def join(self, *_a, **_kw): return self
+            def count(self): return 100
+            def withColumn(self, *_a, **_kw): return self  # noqa: N802
+
+            def agg(self, *_a, **_kw):
+                r = MagicMock()
+                r.collect.return_value = [{"total": 0, "churners": 0, "avg_prob": 0.0}]
+                return r
+
+            def groupBy(self, *_a, **_kw):  # noqa: N802
+                r = MagicMock()
+                cnt = MagicMock()
+                cnt.collect.return_value = []
+                r.count.return_value = cnt
+                return r
+
+            def write(self, *_a, **_kw): return MagicMock()
+
+        class _BoomError(RuntimeError):
+            pass
+
+        def stub_score(spark, entity_df, feature_table, model_uri, **_kw):  # noqa: ARG001
+            raise _BoomError("stop after view registration")
+
+        monkeypatch.setattr(batch_inference, "_score_with_feature_store", stub_score)
+
+        fake_spark = MagicMock()
+        fake_spark.table.return_value = _FakeSparkDF()
+        fake_spark.read = _FakeReader()
+        # Both landing_contract and landing_account exist in this fake UC;
+        # the filter references `contract` only, so `account` must NOT be
+        # registered (it's not in the filter text).
+        fake_spark.catalog.tableExists.side_effect = lambda fqn: fqn in {
+            "c.s.landing_contract", "c.s.landing_account",
+        }
+        monkeypatch.setattr(batch_inference, "_get_spark", lambda: fake_spark)
+
+        cfg = BatchInferenceConfig(
+            catalog="c", schema="s", model_name="m",
+            customer_table="c.s.gold_features_X",
+            filter_expression=(
+                "REVENUE_MARKET_SEGMENT in ['Emerging', 'Small'] and "
+                "ACCOUNT_ID in (select ACCOUNT_ID from contract where event_type = 'start')"
+            ),
+        )
+        with pytest.raises(_BoomError):
+            _run_databricks(cfg)
+
+        # Only `contract` is referenced; `account` is not in the filter text.
+        assert temp_view_registrations == [("c.s.landing_contract", "contract")], temp_view_registrations
+
+    def test_databricks_path_skips_temp_view_for_missing_landing_table(self, monkeypatch):
+        """When the bare-name reference doesn't have a corresponding
+        `landing_<name>` table in UC, the registration silently skips it —
+        the downstream df.filter() surfaces the cleaner
+        `[TABLE_OR_VIEW_NOT_FOUND]` message naturally."""
+        pytest.importorskip("pyspark", reason="PySpark required")
+        from unittest.mock import MagicMock
+
+        from customer_retention.stages.scoring.batch_inference import (
+            _register_sibling_temp_views,
+        )
+
+        registrations: list[tuple] = []
+
+        class _FakeReader:
+            def format(self, _f): return self
+            def table(self, fqn):
+                df = MagicMock()
+                df.createOrReplaceTempView = lambda n: registrations.append((fqn, n))
+                return df
+
+        fake_spark = MagicMock()
+        fake_spark.read = _FakeReader()
+        fake_spark.catalog.tableExists.side_effect = lambda fqn: False
+
+        result = _register_sibling_temp_views(
+            fake_spark,
+            "x in (select y from never_existed where z = 1)",
+            "c", "s",
+        )
+        assert result == []
+        assert registrations == []
+
     def test_databricks_path_routes_filter_via_landing_table(self, monkeypatch):
         """When the scope filter references a raw landing column that has been
         one-hot encoded in gold (typical for a string categorical like
