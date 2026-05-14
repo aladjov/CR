@@ -219,14 +219,41 @@ class TestPerStageContent:
         downstream archetype assignment with out-of-scope rows.
 
         The notebook resolves the filter from ``RunNamespace.project_context_path``
-        and threads it into ``BatchInferenceConfig.filter_expression``."""
+        and threads the composed scoring filter into
+        ``BatchInferenceConfig.filter_expression``."""
         gen = LocalNotebookGenerator(NotebookConfig(), None)
         nb = gen.generate_stage(NotebookStage.BATCH_INFERENCE_CAUSAL)
         code = _all_code(nb)
         assert "ProjectContext" in code
         assert "project_context_path" in code
         assert "sample_filters" in code
-        assert "filter_expression=_scope_filter" in code
+        assert "_resolve_scope_filter" in code
+        assert "filter_expression=_scoring_filter" in code
+
+    def test_c04_always_excludes_already_positive_target(self):
+        """Scoring must drop entities whose target label is already 1
+        (e.g. ``churned = 0``). The trained model has nothing useful to say
+        about an already-positive row, and the CSM-facing dashboard wastes
+        headcount on accounts the business can no longer recover.
+
+        The exclusion is derived from ``ProjectContext.target_column`` and
+        composed with the scope filter so a missing ``target_column``
+        gracefully falls back to scope-only filtering rather than blocking
+        the run."""
+        gen = LocalNotebookGenerator(NotebookConfig(), None)
+        nb = gen.generate_stage(NotebookStage.BATCH_INFERENCE_CAUSAL)
+        code = _all_code(nb)
+        assert "_resolve_already_positive_exclusion" in code
+        assert "target_column" in code
+        # The composed predicate must reach BatchInferenceConfig, not
+        # bypass it via a stray reference to the bare scope filter.
+        assert "_compose_scoring_filter" in code
+        assert "filter_expression=_scoring_filter" in code
+        assert "filter_expression=_scope_filter" not in code
+        # Operator-visible diagnostics: the cell must print which clauses
+        # are in force so a confused operator can see why their account
+        # population dropped.
+        assert "Already-positive exclusion" in code
 
     def test_c04_passes_gold_features_fqn_as_customer_table(self):
         """Regression: the default ``gold_customers`` table doesn't exist

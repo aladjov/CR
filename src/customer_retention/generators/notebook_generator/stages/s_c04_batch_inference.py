@@ -100,7 +100,54 @@ def _resolve_scope_filter():
     return _filters.get(_target_name)
 
 
+def _resolve_already_positive_exclusion():
+    """Return a Spark-SQL predicate that drops entities whose target label is
+    already 1 (e.g. ``churned = 0``), resolved from
+    ``ProjectContext.target_column``. Always-on at scoring time: the trained
+    model has nothing useful to say about a row that is already a positive
+    outcome, and surfacing such rows in the CSM-facing dashboard wastes
+    headcount on accounts the business can no longer recover. Distinct from
+    ``_resolve_scope_filter`` so the training parity contract stays clean —
+    training cohort keeps positives (the model needs them to learn the
+    boundary); scoring drops them because they aren't actionable.
+
+    Returns ``None`` when project_context is absent or carries no
+    ``target_column`` — the cell then falls back to the unmodified scope
+    filter and logs the omission so the operator can see it didn't apply."""
+    try:
+        from customer_retention.analysis.auto_explorer.project_context import ProjectContext
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+    except ImportError:
+        return None
+    _ns = RunNamespace.from_env_or_latest()
+    if _ns is None:
+        return None
+    _path = _ns.project_context_path
+    if not _path.exists():
+        return None
+    _ctx = ProjectContext.load(_path)
+    _target_col = getattr(_ctx, "target_column", None)
+    if not _target_col:
+        return None
+    return f"{_target_col} = 0"
+
+
+def _compose_scoring_filter(*parts):
+    """AND-combine non-empty Spark-SQL predicates, parenthesizing each so
+    later predicates can't accidentally rebind the earlier ones via
+    operator-precedence surprises. Returns ``None`` when every part is
+    falsy."""
+    _kept = [p for p in parts if p]
+    if not _kept:
+        return None
+    if len(_kept) == 1:
+        return _kept[0]
+    return " and ".join(f"({p})" for p in _kept)
+
+
 _scope_filter = _resolve_scope_filter()
+_already_positive_exclusion = _resolve_already_positive_exclusion()
+_scoring_filter = _compose_scoring_filter(_scope_filter, _already_positive_exclusion)
 
 batch_inference_result = None
 _predictions_status = "UNKNOWN"
@@ -143,6 +190,13 @@ else:
             print(f"Scope filter (from NB00 project_context): {_scope_filter}")
         else:
             print("Scope filter: (none — scoring full entity population)")
+        if _already_positive_exclusion:
+            print(f"Already-positive exclusion (target_column): {_already_positive_exclusion}")
+        else:
+            print(
+                "Already-positive exclusion: (none — project_context.target_column "
+                "not set; rows already at the positive outcome will be scored)"
+            )
         config = BatchInferenceConfig(
             catalog=CATALOG,
             schema=SCHEMA,
@@ -152,7 +206,7 @@ else:
             risk_tier_high=RISK_TIER_HIGH,
             risk_tier_medium=RISK_TIER_MEDIUM,
             inference_timestamp=datetime.now(timezone.utc),
-            filter_expression=_scope_filter,
+            filter_expression=_scoring_filter,
         )
         batch_inference_result = run_batch_inference(config)
         _predictions_status = batch_inference_result.summary()
