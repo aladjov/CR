@@ -596,23 +596,37 @@ def build_eligibility_snapshot(config: SnapshotConfig) -> SnapshotResult:
         dashboard_min_churn_probability=config.dashboard_min_churn_probability,
     )
 
-    # Cache before consuming twice (snapshot MERGE + summary aggregation).
-    # Without this, the entire predict→assign→fan-out→window plan is
-    # recomputed for each downstream consumer — see Coding_Practices.md
-    # §"Batched .agg() Pattern" / clusterer.py for the canonical pattern.
-    _cache_dataframe(decisioned_df)
-    try:
-        snapshot_df = _shape_snapshot_rows(
-            decisioned_df,
-            config=config,
-            scoring_run_id=scoring_run_id,
-            as_of_date=as_of_date,
-            definitions=definitions,
-        )
-        write_snapshot(spark, snapshot_df, config.snapshot_table_fqn)
-        counts = _compute_snapshot_counts(decisioned_df)
-    finally:
-        _unpersist_dataframe(decisioned_df)
+    # Materialize-once strategy. Previously this block cached `decisioned_df`
+    # so the predict→assign→fan-out→window plan didn't re-run on the second
+    # consumer (the summary aggregation). The cache call dispatches to
+    # `CACHE TABLE` server-side under Spark Connect (every DBR 14+ cluster,
+    # shared and serverless alike) and gets rejected with
+    # `[NOT_SUPPORTED_WITH_SERVERLESS] PERSIST TABLE is not supported`
+    # whenever the cluster policy includes the serverless-compatibility
+    # subset — which on shared clusters can flip without notice.
+    #
+    # Replace the cache with a single Delta MERGE pass + read-back. The
+    # snapshot rows are written exactly once via `write_snapshot`, then the
+    # counts come from the freshly-written rows filtered to THIS run's
+    # `scoring_run_id` (the MERGE key prefix). Every column the count
+    # aggregation needs — `risk_tier`, `recommended`, `is_holdout`,
+    # `playbook_suppressed_reason` — is already in
+    # `_shape_snapshot_rows`'s projection, so reading from the snapshot
+    # table is a strict superset of what the cache covered. The trade-off
+    # is one extra Delta scan; the win is zero in-memory cache calls,
+    # which means this works identically on shared, serverless, and
+    # single-user clusters.
+    snapshot_df = _shape_snapshot_rows(
+        decisioned_df,
+        config=config,
+        scoring_run_id=scoring_run_id,
+        as_of_date=as_of_date,
+        definitions=definitions,
+    )
+    write_snapshot(spark, snapshot_df, config.snapshot_table_fqn)
+    counts = _compute_snapshot_counts_from_table(
+        spark, config.snapshot_table_fqn, scoring_run_id,
+    )
 
     result = SnapshotResult(
         scoring_run_id=scoring_run_id,
@@ -630,18 +644,27 @@ def build_eligibility_snapshot(config: SnapshotConfig) -> SnapshotResult:
     return result
 
 
-def _cache_dataframe(df: "DataFrame") -> None:
-    try:
-        df.cache()
-    except (AttributeError, RuntimeError) as exc:
-        logger.debug("snapshot cache() failed (non-fatal): %s", exc)
+def _compute_snapshot_counts_from_table(
+    spark: "SparkSession", snapshot_table_fqn: str, scoring_run_id: str,
+) -> Dict[str, Any]:
+    """Read the freshly-written snapshot table and aggregate counts for THIS
+    scoring run only.
 
+    Replaces the previous flow that cached ``decisioned_df`` in memory and
+    ran ``_compute_snapshot_counts`` on it twice (once for the MERGE, once
+    for the summary). The cache step doesn't survive Databricks shared/
+    serverless cluster policies — Spark Connect rejects ``CACHE TABLE``
+    even on shared clusters when the cluster falls under the serverless-
+    compatibility access mode subset. Reading back from Delta is portable
+    across every cluster type and every access mode at the cost of one
+    extra (small, range-pruned) Delta scan.
+    """
+    from pyspark.sql import functions as F  # noqa: N812
 
-def _unpersist_dataframe(df: "DataFrame") -> None:
-    try:
-        df.unpersist()
-    except (AttributeError, RuntimeError) as exc:
-        logger.debug("snapshot unpersist() failed (non-fatal): %s", exc)
+    snapshot_df = spark.table(snapshot_table_fqn).filter(
+        F.col("scoring_run_id") == F.lit(scoring_run_id)
+    )
+    return _compute_snapshot_counts(snapshot_df)
 
 
 # ---------------------------------------------------------------------------

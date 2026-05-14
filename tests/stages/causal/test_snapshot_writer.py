@@ -664,12 +664,23 @@ class TestBuildEligibilitySnapshotE2E:
 
         def fake_write_snapshot(spark, snapshot_df, table_fqn):
             captured["columns"] = set(snapshot_df.columns)
+            # Stash the shaped snapshot so the count-from-table read-back
+            # below can be served without a real Delta write.
+            captured["snapshot_df"] = snapshot_df
             return {"target": table_fqn}
+
+        def fake_compute_counts_from_table(spark, snapshot_table_fqn, scoring_run_id):  # noqa: ARG001
+            # Same code path counts would take after a real Delta read-back.
+            return sw._compute_snapshot_counts(captured["snapshot_df"])
 
         with (
             patch.object(sw, "_load_active_definitions", return_value=self._definitions()),
             patch.object(sw, "_load_latest_predictions", return_value=predictions_df),
             patch.object(sw, "write_snapshot", side_effect=fake_write_snapshot),
+            patch.object(
+                sw, "_compute_snapshot_counts_from_table",
+                side_effect=fake_compute_counts_from_table,
+            ),
         ):
             result = build_eligibility_snapshot(config)
 
@@ -698,6 +709,77 @@ class TestBuildEligibilitySnapshotE2E:
         assert required_cols.issubset(captured["columns"]), (
             f"missing snapshot columns: {required_cols - captured['columns']}"
         )
+
+    def test_no_cache_call_and_counts_read_from_snapshot_table(self, spark_session):
+        """Root-cause fix for Databricks shared/serverless clusters that reject
+        ``df.cache()`` via Spark Connect with
+        ``[NOT_SUPPORTED_WITH_SERVERLESS] PERSIST TABLE is not supported``.
+        The orchestrator must NOT call cache anywhere — counts come from a
+        read-back of the just-written snapshot Delta table filtered to this
+        run's scoring_run_id."""
+        from unittest.mock import patch
+
+        import customer_retention.stages.causal.snapshot_writer as sw
+
+        config = SnapshotConfig(
+            spark=spark_session,
+            predictions_fqn="mock.predictions",
+            archetype_catalog_fqn="mock.archetype_catalog",
+            eligibility_policy_fqn="mock.eligibility_policy",
+            decision_policy_fqn="mock.decision_policy",
+            snapshot_table_fqn="mock.eligibility_snapshot",
+            model_name="m", model_version="v1",
+            as_of_date=datetime(2026, 4, 9, 0, 0, 0, tzinfo=timezone.utc),
+        )
+
+        predictions_df = spark_session.createDataFrame(
+            [("a1", 0.9, 10.0, 100.0), ("a2", 0.4, 5.0, 50.0)],
+            ["entity_id", "churn_probability", "f1", "f2"],
+        )
+
+        # Track whether anybody calls .cache() — fail loudly if so.
+        cache_calls: list[int] = []
+        original_cache = type(predictions_df).cache
+
+        def _tripwire_cache(self):
+            cache_calls.append(1)
+            return original_cache(self)
+
+        captured: Dict[str, Any] = {}
+
+        def fake_write_snapshot(spark, snapshot_df, table_fqn):
+            captured["snapshot_df"] = snapshot_df
+            captured["scoring_run_id"] = snapshot_df.select("scoring_run_id").first()[0]
+            return {"target": table_fqn}
+
+        count_calls: list[tuple] = []
+
+        def fake_count_from_table(spark, table_fqn, scoring_run_id):
+            count_calls.append((table_fqn, scoring_run_id))
+            return sw._compute_snapshot_counts(captured["snapshot_df"])
+
+        with (
+            patch.object(type(predictions_df), "cache", _tripwire_cache),
+            patch.object(sw, "_load_active_definitions", return_value=self._definitions()),
+            patch.object(sw, "_load_latest_predictions", return_value=predictions_df),
+            patch.object(sw, "write_snapshot", side_effect=fake_write_snapshot),
+            patch.object(sw, "_compute_snapshot_counts_from_table", side_effect=fake_count_from_table),
+        ):
+            result = build_eligibility_snapshot(config)
+
+        assert cache_calls == [], (
+            f"build_eligibility_snapshot must not call .cache() — caught {len(cache_calls)} call(s). "
+            "Spark Connect on shared/serverless clusters rejects cache via "
+            "[NOT_SUPPORTED_WITH_SERVERLESS] PERSIST TABLE."
+        )
+        assert len(count_calls) == 1
+        called_fqn, called_run_id = count_calls[0]
+        assert called_fqn == "mock.eligibility_snapshot"
+        assert called_run_id == captured["scoring_run_id"], (
+            "counts read-back must filter on the THIS run's scoring_run_id so a "
+            "second concurrent c05 doesn't double-count rows in the same table."
+        )
+        assert result.total_eligible_rows == 2
 
 
 # ---------------------------------------------------------------------------
