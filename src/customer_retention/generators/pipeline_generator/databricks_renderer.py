@@ -2412,6 +2412,28 @@ def run_gold():
             for c in df.columns
         ]
         df = df.select(*_f32_exprs)
+        # Drop NULL entity_id rows BEFORE the final write. The post-write
+        # PK constraint registrar issues `ALTER TABLE ALTER COLUMN entity_id
+        # SET NOT NULL`, which Databricks Delta enforces by scanning every
+        # row; any single NULL rolls back the entire gold write with
+        # [DELTA_NEW_NOT_NULL_VIOLATION]. NULLs only enter gold when
+        # silver's spine union pulled orphan keys from a bronze dataset
+        # whose entity_id column had NULLs — surface the rows so the
+        # upstream root cause is diagnosable from the gold log alone
+        # (operator can grep `WARNING: dropping ... NULL entity_id` and
+        # copy-paste the sample rows into an investigation ticket).
+        _null_count = df.filter(F.col("entity_id").isNull()).count()
+        if _null_count:
+            print(f"  WARNING: dropping {_null_count} row(s) with NULL entity_id before write.")
+            print(f"  Delta PK constraint on entity_id requires NOT NULL; root cause must be fixed upstream.")
+            _diag_cols = [c for c in df.columns
+                          if c.startswith("original_") or c in ("as_of_date", "feature_timestamp", TIMESTAMP_COLUMN)]
+            _diag_cols = _diag_cols[:8] if _diag_cols else list(df.columns[:8])
+            print(f"  Sample NULL-entity_id rows (up to 10; projecting {_diag_cols}):")
+            df.filter(F.col("entity_id").isNull()).select(*_diag_cols).limit(10).show(truncate=False)
+            df = df.filter(F.col("entity_id").isNotNull())
+        else:
+            print(f"  entity_id NULL check: clean (0 rows)")
         # Final stage barrier so the output_table write plans against a
         # shallow read (the rename + ntz cast + f32 cast otherwise stack
         # back up before write).

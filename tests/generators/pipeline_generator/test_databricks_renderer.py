@@ -3836,6 +3836,27 @@ class TestDatabricksGoldFeatureStoreRegistration:
         fn = result[result.index("def _register_feature_table") :]
         assert "already exists" in fn
 
+    def test_gold_drops_null_entity_id_before_pk_alter(self, renderer, sample_pipeline_config):
+        # Defends against [DELTA_NEW_NOT_NULL_VIOLATION] on the post-write
+        # `ALTER TABLE ALTER COLUMN entity_id SET NOT NULL`. NULL entity_id
+        # rows enter gold via silver's spine union when any bronze source
+        # carries orphan keys; the filter must run BEFORE the final
+        # saveAsTable and BEFORE the PK registrar call, with a diagnostic
+        # print so the operator can root-cause the upstream source.
+        result = renderer.render_gold(sample_pipeline_config)
+        fn = result[result.index("def run_gold") :]
+        filter_pos = fn.index('df.filter(F.col("entity_id").isNotNull())')
+        save_pos = fn.index("saveAsTable(output_table)")
+        registrar_call_pos = fn.index("_register_feature_table(output_table")
+        assert filter_pos < save_pos, "NULL entity_id filter must run before saveAsTable"
+        assert save_pos < registrar_call_pos, "saveAsTable must precede the PK registrar call"
+        # Diagnostic shape: count + warning text + sample-rows show.
+        diagnostic_block = fn[fn.index('F.col("entity_id").isNull()') : filter_pos]
+        assert "_null_count" in diagnostic_block
+        assert "WARNING:" in diagnostic_block
+        assert "original_" in diagnostic_block, "must project original_* columns for root-cause tracing"
+        assert ".show(truncate=False)" in diagnostic_block, "must print sample NULL rows"
+
     def test_gold_no_rdd_access(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
         assert ".rdd" not in result
