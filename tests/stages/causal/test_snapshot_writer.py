@@ -493,6 +493,82 @@ class TestApplyDecisionPolicy:
         assert counts["a1"] == 2  # a1 has p1 and p2
         assert counts["a2"] == 1
 
+    def test_policy_rank_among_eligible_uses_fit_score(self, spark_session):
+        """Regression for the alphabetical-first failure mode.
+
+        churn_probability is replicated across (entity, playbook) rows so
+        it doesn't differentiate playbooks within a partition. Without
+        fit_score in the sort, every entity received the alphabetically
+        first eligible playbook regardless of c02's matching. With the
+        fix, the higher fit_score wins even when its playbook_id sorts
+        later alphabetically.
+        """
+        from pyspark.sql import functions as F  # noqa: N812
+
+        rows = [
+            ("a1", "alpha_first", 0.9, 0.10),  # alpha first, weak fit
+            ("a1", "zulu_last",   0.9, 0.80),  # alpha last, strong fit -> should win
+        ]
+        df = spark_session.createDataFrame(
+            rows, ["entity_id", "playbook_id", "churn_probability", "fit_score"]
+        )
+        df = (
+            df.withColumn("playbook_version", F.lit("v1"))
+            .withColumn("eligibility_policy_id", F.lit("ep1"))
+            .withColumn("eligibility_policy_version", F.lit("v1"))
+            .withColumn("eligibility_evidence", F.lit(""))
+            .withColumn("archetype_id", F.lit("arch1"))
+            .withColumn("archetype_version", F.lit("v1"))
+        )
+        out = apply_decision_policy(df, None)
+        ranks = {r["playbook_id"]: r["policy_rank_among_eligible"] for r in out.collect()}
+        assert ranks["zulu_last"] == 1, (
+            f"strong fit_score must beat alphabetical first; got ranks={ranks}"
+        )
+        assert ranks["alpha_first"] == 2
+
+    def test_policy_rank_handles_null_fit_score(self, spark_session):
+        """Pre-migration rows have NULL fit_score. NULLS LAST keeps a
+        scored row above an unscored one even when the unscored row's
+        playbook_id sorts earlier."""
+        from pyspark.sql import functions as F  # noqa: N812
+
+        rows = [
+            ("a1", "alpha_unscored", 0.9, None),
+            ("a1", "zulu_scored",    0.9, 0.30),
+        ]
+        df = spark_session.createDataFrame(
+            rows, ["entity_id", "playbook_id", "churn_probability", "fit_score"]
+        )
+        df = (
+            df.withColumn("playbook_version", F.lit("v1"))
+            .withColumn("eligibility_policy_id", F.lit("ep1"))
+            .withColumn("eligibility_policy_version", F.lit("v1"))
+            .withColumn("eligibility_evidence", F.lit(""))
+            .withColumn("archetype_id", F.lit("arch1"))
+            .withColumn("archetype_version", F.lit("v1"))
+        )
+        out = apply_decision_policy(df, None)
+        ranks = {r["playbook_id"]: r["policy_rank_among_eligible"] for r in out.collect()}
+        assert ranks["zulu_scored"] == 1
+        assert ranks["alpha_unscored"] == 2
+
+    def test_policy_rank_falls_back_when_fit_score_column_absent(self, spark_session):
+        """When the input frame predates the fit_score column, ranking
+        falls back to (churn_probability DESC, playbook_id) — same
+        behaviour as before the fix. Guards against breaking older
+        callers that don't add fit_score."""
+        df = self._eligible_df(spark_session)
+        assert "fit_score" not in df.columns  # precondition
+        out = apply_decision_policy(df, None)
+        a1_ranks = {
+            r["playbook_id"]: r["policy_rank_among_eligible"]
+            for r in out.collect() if r["entity_id"] == "a1"
+        }
+        # Both rows have churn_probability=0.9, so alphabetical decides.
+        assert a1_ranks["p1"] == 1
+        assert a1_ranks["p2"] == 2
+
 
 # ---------------------------------------------------------------------------
 # Capacity / holdout column-construction helpers (driver-side)

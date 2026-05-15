@@ -316,7 +316,9 @@ def derive_archetypes_and_policies(config: DerivationConfig) -> DerivationResult
     )
 
     namer = config.llm_namer or build_llm_namer(config.llm_endpoint_name)
-    enrichment_builder = config.enrichment_builder or _default_enrichment_builder(config)
+    enrichment_builder = config.enrichment_builder or _default_enrichment_builder(
+        config, extracted_rules=extracted_rules,
+    )
     mappings = map_archetypes_to_playbooks(
         archetypes=summaries,
         playbooks=config.playbooks,
@@ -526,7 +528,10 @@ def _compute_feature_scales(
     return scales
 
 
-def _default_enrichment_builder(config: "DerivationConfig"):
+def _default_enrichment_builder(
+    config: "DerivationConfig",
+    extracted_rules: Optional[Sequence[ExtractedRule]] = None,
+):
     """Build a default enrichment_builder that resolves feature business
     phrases from ``feature_meta`` + ``column_descriptions`` UC tables.
 
@@ -541,6 +546,13 @@ def _default_enrichment_builder(config: "DerivationConfig"):
     phrases like "regularity score" or "180-day event count" instead of
     cryptic identifiers like ``regularity_score`` or ``event_count_180d``,
     which dramatically improves prose-overlap scoring.
+
+    ``extracted_rules`` (when supplied by the orchestrator) lets the
+    builder pre-render per-cluster eligibility-rule prose into
+    ``EnrichedArchetypeContext.eligibility_rule_prose`` so the LLM prompt
+    quotes a real "Eligible when …" sentence instead of "no eligibility
+    rule". Optional — callers that don't pass it get the legacy "no rule"
+    behaviour.
     """
     spark = getattr(config, "spark", None)
     if spark is None:
@@ -550,8 +562,14 @@ def _default_enrichment_builder(config: "DerivationConfig"):
         return None
     catalog, schema = parts[0], parts[1]
 
+    namespace = getattr(config, "namespace", None)
+    namespace_run_id = getattr(namespace, "run_id", None) if namespace is not None else None
+
     feature_meta = _load_feature_meta_from_uc(spark, catalog, schema)
     column_descriptions = _load_column_descriptions_from_uc(spark, catalog, schema)
+    population_stats = _load_population_stats_from_uc(
+        spark, catalog, schema, run_id=namespace_run_id,
+    )
     if not feature_meta and not column_descriptions:
         logger.info(
             "default enrichment_builder skipped: neither feature_meta nor "
@@ -560,23 +578,72 @@ def _default_enrichment_builder(config: "DerivationConfig"):
         )
         return None
     logger.info(
-        "default enrichment_builder wired: %d feature_meta rows, %d column_descriptions",
-        len(feature_meta), len(column_descriptions),
+        "default enrichment_builder wired: %d feature_meta rows, %d column_descriptions, "
+        "%d population_stats",
+        len(feature_meta), len(column_descriptions), len(population_stats),
+    )
+
+    rule_prose_by_cluster = _compile_rule_prose_by_cluster(
+        extracted_rules,
+        feature_meta=feature_meta,
+        population_stats=population_stats,
+        column_descriptions=column_descriptions,
     )
 
     from .interpretation.archetype_context import build_enriched_context
 
     def _builder(archetype, context):
         candidates = list(getattr(context, "candidate_playbooks", []) or [])
+        cluster_idx = int(getattr(archetype, "cluster_index", -1))
         return build_enriched_context(
             context,
             feature_meta=feature_meta,
-            population_stats={},
+            population_stats=population_stats,
             column_descriptions=column_descriptions,
             raw_candidate_playbooks=candidates,
+            eligibility_rule_prose=rule_prose_by_cluster.get(cluster_idx),
         )
 
     return _builder
+
+
+def _compile_rule_prose_by_cluster(
+    extracted_rules: Optional[Sequence[ExtractedRule]],
+    *,
+    feature_meta: Dict[str, Any],
+    population_stats: Dict[str, Any],
+    column_descriptions: Dict[str, Any],
+) -> Dict[int, Optional[str]]:
+    """Map each cluster's predicate_json → human-readable "Eligible when …" prose.
+
+    Pre-computed once at builder creation so the per-cluster prompt build
+    doesn't re-discover sidecars N times. Failures fall back to None per
+    cluster — the prompt will say "no eligibility rule" for that one
+    archetype rather than blocking the whole derivation.
+    """
+    out: Dict[int, Optional[str]] = {}
+    if not extracted_rules:
+        return out
+    try:
+        from customer_retention.stages.causal.interpretation import compile_predicate_prose
+    except ImportError:
+        logger.debug("compile_predicate_prose unavailable; skipping per-cluster rule prose")
+        return out
+    for rule in extracted_rules:
+        cluster_idx = int(getattr(rule, "cluster_index", -1))
+        predicate = getattr(rule, "predicate_json", None)
+        if predicate is None:
+            continue
+        try:
+            out[cluster_idx] = compile_predicate_prose(
+                predicate,
+                feature_meta=feature_meta,
+                population_stats=population_stats,
+                column_descriptions=column_descriptions,
+            )
+        except Exception as exc:  # noqa: BLE001 — best-effort per cluster
+            logger.debug("rule prose for cluster %s failed: %s", cluster_idx, exc)
+    return out
 
 
 def _load_feature_meta_from_uc(spark, catalog: str, schema: str):
@@ -635,6 +702,60 @@ def _load_column_descriptions_from_uc(spark, catalog: str, schema: str):
         return {}
 
 
+def _load_population_stats_from_uc(
+    spark, catalog: str, schema: str, run_id: Optional[str] = None,
+):
+    """Read ``{catalog}.{schema}.feature_population_stats`` into
+    ``{feature_name: PopulationStats}``.
+
+    When ``run_id`` is provided, scopes to that run. Otherwise picks the
+    latest ``run_id`` per ``feature_name`` so reruns don't blend stats
+    from older derivation cycles into the prompt's value bands.
+    """
+    fqn = f"{catalog}.{schema}.feature_population_stats"
+    try:
+        if not spark.catalog.tableExists(fqn):
+            return {}
+        from .interpretation.quantile_phrasing import PopulationStats
+
+        if run_id:
+            df = spark.sql(f"SELECT * FROM {fqn} WHERE run_id = ?", args=[run_id])
+        else:
+            df = spark.sql(
+                f"""
+                WITH ranked AS (
+                  SELECT *,
+                         ROW_NUMBER() OVER (
+                           PARTITION BY feature_name ORDER BY run_id DESC
+                         ) AS _rn
+                  FROM {fqn}
+                )
+                SELECT * FROM ranked WHERE _rn = 1
+                """
+            )
+        rows = df.collect()
+        out: Dict[str, Any] = {}
+        for r in rows:
+            d = r.asDict(recursive=True)
+            name = d.get("feature_name")
+            if not name:
+                continue
+            try:
+                out[str(name)] = PopulationStats(
+                    q05=_safe_float(d.get("q05")),
+                    q25=_safe_float(d.get("q25")),
+                    q50=_safe_float(d.get("q50")),
+                    q75=_safe_float(d.get("q75")),
+                    q95=_safe_float(d.get("q95")),
+                )
+            except Exception as exc:  # noqa: BLE001 — best-effort
+                logger.debug("population_stats row %s skipped: %s", name, exc)
+        return out
+    except Exception as exc:  # noqa: BLE001 — best-effort load; fall back to empty
+        logger.warning("could not load population_stats from %s: %s", fqn, exc)
+        return {}
+
+
 def _build_archetype_summaries(
     sizes: List[Tuple[int, int]],
     mean_targets: List[Tuple[int, float]],
@@ -645,6 +766,7 @@ def _build_archetype_summaries(
 ) -> List[ArchetypeSummary]:
     target_lookup = {cluster_id: mean for cluster_id, mean in mean_targets}
     raw_lookup = {idx: vec for idx, vec in enumerate(raw_centroids)}
+    cross_cluster_mean_shap = _cross_cluster_mean_shap(shap_centroids, shap_feature_order)
     summaries: List[ArchetypeSummary] = []
     for idx, (cluster_id, size) in enumerate(sizes):
         shap_vec = shap_centroids[idx] if idx < len(shap_centroids) else []
@@ -654,6 +776,7 @@ def _build_archetype_summaries(
             shap_feature_order=shap_feature_order,
             raw_vec=raw_vec,
             raw_feature_order=raw_feature_order,
+            cross_cluster_mean_shap=cross_cluster_mean_shap,
         )
         summaries.append(
             ArchetypeSummary(
@@ -667,28 +790,75 @@ def _build_archetype_summaries(
     return summaries
 
 
+def _cross_cluster_mean_shap(
+    shap_centroids: Sequence[Sequence[float]],
+    shap_feature_order: Sequence[str],
+) -> Dict[str, float]:
+    """Per-feature average SHAP across all cluster centroids.
+
+    Used by ``_split_drivers`` so per-cluster top drivers reflect what
+    *differentiates* this cluster from the rest, not which features are
+    globally important. Without this, every cluster surfaced the same
+    top-N tokens (the SPS run had identical driver token sets across
+    4/7 clusters), and prose-overlap matching gave every cluster the
+    same playbook ranking.
+    """
+    if not shap_centroids:
+        return {}
+    sums: Dict[str, float] = {}
+    counts: Dict[str, int] = {}
+    for vec in shap_centroids:
+        for idx, name in enumerate(shap_feature_order):
+            if idx >= len(vec):
+                continue
+            feature_name = name[len("shap_") :] if name.startswith("shap_") else name
+            sums[feature_name] = sums.get(feature_name, 0.0) + float(vec[idx])
+            counts[feature_name] = counts.get(feature_name, 0) + 1
+    return {f: sums[f] / counts[f] for f in sums if counts[f] > 0}
+
+
 def _split_drivers(
     shap_vec: Sequence[float],
     shap_feature_order: Sequence[str],
     raw_vec: Sequence[float],
     raw_feature_order: Sequence[str],
+    cross_cluster_mean_shap: Optional[Dict[str, float]] = None,
 ) -> Tuple[List[Dict[str, float]], List[Dict[str, float]]]:
+    """Pick top positive/negative drivers for one cluster.
+
+    Ranking is by deviation from the cross-cluster mean SHAP so a feature
+    that is high *for every cluster* doesn't dominate every cluster's top
+    list. Polarity (positive vs negative) is still by sign of the
+    cluster's own mean SHAP — semantically "raises risk in this cluster"
+    vs "lowers risk in this cluster" — so consumers reading
+    ``top_positive_drivers`` get the same intuition as before.
+    """
+    cross = cross_cluster_mean_shap or {}
     raw_lookup = {name: raw_vec[i] if i < len(raw_vec) else 0.0 for i, name in enumerate(raw_feature_order)}
     drivers: List[Dict[str, Any]] = []
     for idx, name in enumerate(shap_feature_order):
         if idx >= len(shap_vec):
             continue
         feature_name = name[len("shap_") :] if name.startswith("shap_") else name
+        mean_shap = float(shap_vec[idx])
+        baseline = float(cross.get(feature_name, 0.0))
         drivers.append(
             {
                 "feature": feature_name,
-                "mean_shap": float(shap_vec[idx]),
+                "mean_shap": mean_shap,
                 "mean_value": float(raw_lookup.get(feature_name, 0.0)),
+                "_deviation": abs(mean_shap - baseline),
             }
         )
-    drivers.sort(key=lambda d: -abs(d["mean_shap"]))
-    positives = [d for d in drivers if d["mean_shap"] > 0][:_TOP_DRIVER_COUNT]
-    negatives = [d for d in drivers if d["mean_shap"] < 0][:_TOP_DRIVER_COUNT]
+    drivers.sort(key=lambda d: -d["_deviation"])
+    positives = [
+        {k: v for k, v in d.items() if k != "_deviation"}
+        for d in drivers if d["mean_shap"] > 0
+    ][:_TOP_DRIVER_COUNT]
+    negatives = [
+        {k: v for k, v in d.items() if k != "_deviation"}
+        for d in drivers if d["mean_shap"] < 0
+    ][:_TOP_DRIVER_COUNT]
     return positives, negatives
 
 

@@ -336,8 +336,18 @@ class DatabricksFoundationModelNamer:
         endpoint_name: str,
         workspace_url: Optional[str] = None,  # accepted for back-compat; unused
         workspace_token: Optional[str] = None,  # accepted for back-compat; unused
-        max_tokens: int = 800,
-        temperature: float = 0.0,
+        # 800 was below the floor needed for 10 playbooks × ~120 tokens of
+        # rationale + envelope; the response truncated at the 8th playbook,
+        # JSON parse failed, and the namer fell back to ProseOverlapMatcher
+        # silently. 2400 fits the full ranked array with rationales for our
+        # current ten-playbook catalog and leaves headroom for prose growth.
+        max_tokens: int = 2400,
+        # 0.0 made the model converge on the same top-2 across clusters that
+        # share dominant SHAP drivers (the SPS run had identical driver
+        # token sets across 4/7 clusters). A modest temperature lets the
+        # model use the rationale text to differentiate when the structured
+        # signal is weak.
+        temperature: float = 0.2,
     ) -> None:
         self.endpoint_name = endpoint_name
         self.workspace_url = workspace_url or os.environ.get("DATABRICKS_HOST", "")
@@ -370,11 +380,34 @@ class DatabricksFoundationModelNamer:
                 },
             )
             content = _extract_message_content(response)
+            finish_reason = _extract_finish_reason(response)
             parsed = self._parse_response(content)
         except Exception as exc:  # noqa: BLE001 — fallback for any LLM error
             return self._fallback_with_log(f"LLM call failed: {exc}", context, enriched)
+        if parsed is None and finish_reason == "length":
+            # Truncated mid-JSON. The repair attempt closes hanging strings,
+            # arrays, and objects so a partial response still surfaces the
+            # playbooks the model managed to score before hitting max_tokens.
+            # Without this the silent fallback to ProseOverlapMatcher made
+            # length-truncated runs indistinguishable from "no LLM at all".
+            parsed = _repair_truncated_json(content)
+            if parsed is not None:
+                logger.warning(
+                    "DatabricksFoundationModelNamer: response truncated at "
+                    "max_tokens=%d (finish_reason=length); recovered %d "
+                    "playbook decisions via repair-parse. Bump max_tokens to "
+                    "avoid silent loss of trailing rankings.",
+                    self.max_tokens,
+                    len(parsed.get("playbooks", []) or []),
+                )
         if parsed is None:
-            return self._fallback_with_log("LLM returned unparseable JSON", context, enriched)
+            reason = (
+                f"LLM truncated at max_tokens={self.max_tokens} (finish_reason=length); "
+                "JSON repair-parse also failed"
+                if finish_reason == "length"
+                else "LLM returned unparseable JSON"
+            )
+            return self._fallback_with_log(reason, context, enriched)
         decisions = [
             PlaybookFitDecision(
                 playbook_id=str(item.get("playbook_id")),
@@ -553,3 +586,101 @@ def _parse_json_response(content: str) -> Optional[Dict[str, Any]]:
             return json.loads(text[start : end + 1])
         except (TypeError, ValueError, json.JSONDecodeError):
             return None
+
+
+def _extract_finish_reason(response: Any) -> Optional[str]:
+    """Return the OpenAI-style finish_reason from a serving-endpoints response.
+
+    ``"length"`` indicates the model hit ``max_tokens`` mid-generation; any
+    JSON we receive is structurally incomplete and the standard parser
+    will return ``None`` even though the partial payload is meaningful.
+    """
+    if response is None:
+        return None
+    choices = response.get("choices") if isinstance(response, dict) else getattr(response, "choices", None)
+    if not choices:
+        return None
+    first = choices[0]
+    reason = (
+        first.get("finish_reason") if isinstance(first, dict)
+        else getattr(first, "finish_reason", None)
+    )
+    return str(reason) if reason else None
+
+
+def _repair_truncated_json(content: str) -> Optional[Dict[str, Any]]:
+    """Best-effort recovery of a JSON object truncated mid-string/array/object.
+
+    Strategy:
+      1. Strip the longest prefix of whole top-level keys we can validate.
+      2. Walk the payload to track open string / array / object state, drop
+         the trailing partial token, and emit closers.
+
+    Returns the parsed dict when at least one structural key (typically
+    ``"playbooks"``) survives; ``None`` when nothing recoverable.
+    """
+    if not content:
+        return None
+    text = content.strip()
+    if text.startswith("```"):
+        text = text.strip("`").lstrip("json").strip()
+    start = text.find("{")
+    if start == -1:
+        return None
+    text = text[start:]
+    in_string = False
+    escape = False
+    stack: list[str] = []
+    last_safe_idx = -1  # index AFTER a structural delimiter that left the parser between elements
+    for idx, ch in enumerate(text):
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in "{[":
+            stack.append(ch)
+        elif ch in "}]":
+            if not stack:
+                break
+            stack.pop()
+            last_safe_idx = idx + 1
+            if not stack:
+                break
+        elif ch == ",":
+            last_safe_idx = idx + 1
+        # all other characters (whitespace, ':', literal/number bytes) are
+        # mid-entry; never safe to cut here
+    if last_safe_idx <= 0:
+        return None
+    truncated = text[:last_safe_idx].rstrip().rstrip(",")
+    # Re-scan the kept prefix to know what's still open.
+    in_string = False
+    escape = False
+    stack = []
+    for ch in truncated:
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in "{[":
+            stack.append(ch)
+        elif ch in "}]" and stack:
+            stack.pop()
+    closers = "".join("}" if c == "{" else "]" for c in reversed(stack))
+    candidate = truncated + closers
+    try:
+        return json.loads(candidate)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None

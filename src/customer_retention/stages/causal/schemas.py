@@ -448,6 +448,13 @@ def eligibility_snapshot_schema() -> "StructType":
             t["StructField"]("eligible_playbook_count", t["IntegerType"](), True),
             t["StructField"]("policy_rank_among_eligible", t["IntegerType"](), True),
             t["StructField"]("priority_rank_within_cohort", t["IntegerType"](), True),
+            # Frozen archetype↔playbook fit_score from eligibility_policy.
+            # Drives policy_rank_among_eligible so the dashboard's primary
+            # recommendation reflects c02's matching, not the alphabetical
+            # tie-break that took over when probability+playbook_id were the
+            # only sort keys. Nullable so rows written before this field
+            # existed read back as NULL; downstream sorts use NULLS LAST.
+            t["StructField"]("fit_score", t["DoubleType"](), True),
             t["StructField"]("eligibility_evidence", t["StringType"](), True),  # JSON
             # Holdout assignment
             t["StructField"]("is_holdout", t["BooleanType"](), False),

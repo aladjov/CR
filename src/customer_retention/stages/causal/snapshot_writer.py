@@ -366,13 +366,28 @@ def _annotate_policy_match(
 ) -> "DataFrame":
     from pyspark.sql import functions as F  # noqa: N812
 
+    fit_score = _coerce_optional_float(policy_row.get("fit_score"))
+    fit_score_lit = (
+        F.lit(fit_score).cast("double") if fit_score is not None
+        else F.lit(None).cast("double")
+    )
     return (
         matches_df.withColumn("playbook_id", F.lit(str(policy_row["playbook_id"])))
         .withColumn("playbook_version", F.lit(str(policy_row.get("playbook_version") or "")))
         .withColumn("eligibility_policy_id", F.lit(str(policy_row["eligibility_policy_id"])))
         .withColumn("eligibility_policy_version", F.lit(str(policy_row.get("version") or "")))
         .withColumn("eligibility_evidence", F.lit(str(evidence)))
+        .withColumn("fit_score", fit_score_lit)
     )
+
+
+def _coerce_optional_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _empty_eligibility_df(enriched_df: "DataFrame") -> "DataFrame":
@@ -385,6 +400,7 @@ def _empty_eligibility_df(enriched_df: "DataFrame") -> "DataFrame":
         .withColumn("eligibility_policy_id", F.lit(None).cast("string"))
         .withColumn("eligibility_policy_version", F.lit(None).cast("string"))
         .withColumn("eligibility_evidence", F.lit(None).cast("string"))
+        .withColumn("fit_score", F.lit(None).cast("double"))
     )
 
 
@@ -483,8 +499,20 @@ def apply_decision_policy(
         F.col("playbook_suppressed_reason").isNotNull(), F.col("playbook_suppressed_reason")
     ).when(capacity_breached, F.lit("capacity_exceeded")).otherwise(F.lit(None).cast("string"))
 
+    # Per-entity ranking is fit_score-first because churn_probability and
+    # value_at_risk are per-entity quantities replicated across every
+    # (entity, playbook) row in the partition — so they're constant within
+    # the partition and don't differentiate playbooks. Without fit_score
+    # the sort collapsed to playbook_id ASC and every entity received the
+    # alphabetically-first eligible playbook regardless of c02's matching.
+    fit_score_col = (
+        F.col("fit_score") if "fit_score" in eligible_df.columns
+        else F.lit(None).cast("double")
+    )
     entity_window = Window.partitionBy(F.col(entity_id_column)).orderBy(
-        F.col(probability_column).desc(), F.col("playbook_id")
+        fit_score_col.desc_nulls_last(),
+        F.col(probability_column).desc(),
+        F.col("playbook_id"),
     )
     entity_set_window = Window.partitionBy(F.col(entity_id_column))
 
@@ -1180,6 +1208,7 @@ def _shape_snapshot_rows(
         F.col("eligible_playbook_count"),
         F.col("policy_rank_among_eligible"),
         F.col("priority_rank_within_cohort"),
+        F.col("fit_score").cast("double").alias("fit_score"),
         F.col("eligibility_evidence"),
         F.col("is_holdout"),
         F.col("holdout_stratum"),

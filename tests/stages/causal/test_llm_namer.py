@@ -169,9 +169,15 @@ class _FakeDeployClient:
     is exercised end-to-end without network.
     """
 
-    def __init__(self, content: str = "", raise_exc: Exception | None = None) -> None:
+    def __init__(
+        self,
+        content: str = "",
+        raise_exc: Exception | None = None,
+        finish_reason: str | None = "stop",
+    ) -> None:
         self.content = content
         self.raise_exc = raise_exc
+        self.finish_reason = finish_reason
         self.last_endpoint: str | None = None
         self.last_inputs: dict | None = None
         # Tests that predate the deploy-client switch still read
@@ -184,7 +190,10 @@ class _FakeDeployClient:
         self.last_kwargs = inputs
         if self.raise_exc is not None:
             raise self.raise_exc
-        return {"choices": [{"message": {"content": self.content}}]}
+        choice = {"message": {"content": self.content}}
+        if self.finish_reason is not None:
+            choice["finish_reason"] = self.finish_reason
+        return {"choices": [choice]}
 
 
 class TestDatabricksFoundationModelNamer:
@@ -481,3 +490,67 @@ class TestDatabricksFoundationModelNamer:
         assert "messages" in client.last_inputs
         assert client.last_inputs["max_tokens"] == 1234
         assert client.last_inputs["temperature"] == 0.25
+
+    def test_default_max_tokens_avoids_truncation_floor(self):
+        """800 was below the floor needed for 10 playbooks with rationales —
+        responses truncated at the 8th entry on the SPS production run.
+        Default must give the model room for the full ranked array."""
+        namer = DatabricksFoundationModelNamer(endpoint_name="x")
+        assert namer.max_tokens >= 2000, (
+            f"max_tokens default {namer.max_tokens} is below the floor needed "
+            "for 10-playbook catalogs; previous default of 800 caused silent "
+            "truncation -> ProseOverlapMatcher fallback."
+        )
+
+    def test_default_temperature_allows_differentiation(self):
+        """0.0 made the model converge on identical top picks across clusters
+        that share dominant SHAP drivers. A modest non-zero default lets
+        rationale-text differentiation surface."""
+        namer = DatabricksFoundationModelNamer(endpoint_name="x")
+        assert 0.0 < namer.temperature <= 0.4
+
+    def test_truncated_json_is_repaired_when_finish_reason_length(self):
+        """When the model hits max_tokens mid-array, the structural repair
+        recovers the entries that DID complete instead of silently
+        falling back to ProseOverlapMatcher."""
+        # Simulate a response that completed the first two playbooks and
+        # was cut mid-rationale on the third.
+        truncated = (
+            '{"archetype_name": "Truncated", '
+            '"archetype_description": "cut mid-array", '
+            '"confidence": 0.5, '
+            '"playbooks": ['
+            '{"playbook_id": "p_alpha", "fit_score": 0.7, "rationale": "first"},'
+            '{"playbook_id": "p_beta", "fit_score": 0.5, "rationale": "second"},'
+            '{"playbook_id": "p_gamma", "fit_score": 0.3, "rationale": "thi'
+        )
+        client = _FakeDeployClient(content=truncated, finish_reason="length")
+        namer = DatabricksFoundationModelNamer(endpoint_name="x", max_tokens=128)
+        namer._client = client
+        result = namer.name_archetype(_make_context())
+        # Must NOT fall back — the repair should recover the two complete
+        # decisions plus surface the partial third (or drop it cleanly).
+        assert result.llm_model_id == "x", (
+            f"truncated-but-recoverable response should use the LLM result, "
+            f"got llm_model_id={result.llm_model_id!r}"
+        )
+        recovered_ids = {d.playbook_id for d in result.playbooks}
+        assert "p_alpha" in recovered_ids and "p_beta" in recovered_ids
+
+    def test_truncated_unrecoverable_falls_back_with_clear_reason(self, caplog):
+        """When repair fails too, fall back BUT log a reason that names
+        the truncation so operators can bump max_tokens instead of chasing
+        a 'malformed JSON' ghost."""
+        import logging
+
+        # Pure noise after the opening brace — repair has nothing to work with.
+        client = _FakeDeployClient(content='{ noise that is not parseable', finish_reason="length")
+        namer = DatabricksFoundationModelNamer(endpoint_name="x", max_tokens=64)
+        namer._client = client
+        with caplog.at_level(logging.WARNING):
+            result = namer.name_archetype(_make_context())
+        assert result.llm_model_id == "x:fallback"
+        joined = " ".join(rec.message for rec in caplog.records).lower()
+        assert "truncat" in joined or "max_tokens" in joined, (
+            f"truncation fallback must mention max_tokens / truncation in the log; got: {joined!r}"
+        )

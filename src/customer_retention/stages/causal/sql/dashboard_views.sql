@@ -292,14 +292,18 @@ playbook_names AS (
     FROM {catalog}.{schema}.playbook_catalog
     GROUP BY playbook_id
 ),
-active_policies AS (
+-- Per-(archetype, playbook) policy details. Joined on the snapshot's
+-- eligibility_policy_id so each row carries the SPECIFIC policy that
+-- matched, not a per-playbook MAX(fit_score) collapse across every
+-- archetype that maps to the same playbook (the previous behaviour
+-- erased archetype-specific ranking).
+policy_details AS (
     SELECT
-        playbook_id,
-        MAX(fit_score) AS fit_score,
-        MAX(expected_uplift_pct) AS expected_uplift_pct
+        eligibility_policy_id,
+        version AS eligibility_policy_version,
+        expected_uplift_pct
     FROM {catalog}.{schema}.eligibility_policy
     WHERE status = 'active'
-    GROUP BY playbook_id
 ),
 joined AS (
     SELECT
@@ -322,8 +326,8 @@ joined AS (
         s.recommended,
         s.is_holdout,
         s.playbook_suppressed_reason,
-        ap.fit_score,
-        ap.expected_uplift_pct,
+        s.fit_score,
+        pd.expected_uplift_pct,
         s.eligibility_policy_id,
         s.decision_policy_id,
         s.model_name,
@@ -334,7 +338,9 @@ joined AS (
     JOIN latest_run lr ON s.scoring_run_id = lr.scoring_run_id
     LEFT JOIN archetype_names an ON s.archetype_id = an.archetype_id
     LEFT JOIN playbook_names pn ON s.playbook_id = pn.playbook_id
-    LEFT JOIN active_policies ap ON ap.playbook_id = s.playbook_id
+    LEFT JOIN policy_details pd
+        ON pd.eligibility_policy_id = s.eligibility_policy_id
+       AND pd.eligibility_policy_version = s.eligibility_policy_version
     WHERE COALESCE(s.is_dashboard_visible, TRUE) = TRUE
 ),
 ranked AS (
@@ -347,7 +353,10 @@ ranked AS (
                 CASE WHEN recommended THEN 0 ELSE 1 END,
                 -- Lower policy_rank wins (1 = top).
                 COALESCE(policy_rank_among_eligible, 2147483647) ASC,
-                -- Highest expected loss as tiebreak.
+                -- c02's archetype↔playbook fit, NULLS LAST so pre-migration
+                -- rows don't beat scored ones.
+                fit_score DESC NULLS LAST,
+                -- Highest expected loss as next tiebreak.
                 COALESCE(expected_loss, -1.0) DESC,
                 -- Stable final tiebreak so the choice is deterministic.
                 playbook_id ASC

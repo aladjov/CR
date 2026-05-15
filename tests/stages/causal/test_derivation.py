@@ -130,6 +130,136 @@ class TestSplitDrivers:
         )
         assert [p["feature"] for p in positives] == ["b", "c", "a"]
 
+    def test_cross_cluster_baseline_promotes_distinctive_drivers(self):
+        """Without baseline, a feature high in EVERY cluster dominates every
+        cluster's top-N. With baseline, the per-cluster top reflects what
+        differentiates this cluster — the SPS production failure mode
+        where 4/7 clusters had identical driver token sets."""
+        # 'a' is high everywhere (mean_shap 0.5 globally); 'b' is high only
+        # in this cluster (cluster value 0.3 vs baseline 0.05). Ranking
+        # without baseline would pick 'a' first (0.5 > 0.3); with baseline
+        # 'b' wins (deviation 0.25 > 0.0).
+        positives, _ = derivation._split_drivers(
+            shap_vec=[0.5, 0.3],
+            shap_feature_order=["shap_a", "shap_b"],
+            raw_vec=[1.0, 2.0],
+            raw_feature_order=["a", "b"],
+            cross_cluster_mean_shap={"a": 0.5, "b": 0.05},
+        )
+        assert [p["feature"] for p in positives] == ["b", "a"], (
+            "deviation-from-baseline must promote distinctive drivers "
+            "over globally-high ones to fix the identical-driver-token "
+            "failure mode."
+        )
+
+    def test_polarity_still_by_sign_of_mean_shap(self):
+        """Even though ranking changed to deviation, polarity (positive vs
+        negative driver) must still reflect the cluster's actual sign so
+        consumers reading 'top_positive_drivers' get raises-risk features."""
+        positives, negatives = derivation._split_drivers(
+            shap_vec=[0.1, -0.4],
+            shap_feature_order=["shap_a", "shap_b"],
+            raw_vec=[1.0, 2.0],
+            raw_feature_order=["a", "b"],
+            cross_cluster_mean_shap={"a": 0.5, "b": 0.0},  # flips a's deviation sign
+        )
+        # 'a' has cluster mean +0.1 → positive even though deviation is -0.4
+        # 'b' has cluster mean -0.4 → negative
+        assert [p["feature"] for p in positives] == ["a"]
+        assert [n["feature"] for n in negatives] == ["b"]
+
+
+class TestCrossClusterMeanShap:
+    def test_averages_per_feature_across_centroids(self):
+        result = derivation._cross_cluster_mean_shap(
+            shap_centroids=[[0.4, 0.0], [0.6, 0.2]],
+            shap_feature_order=["shap_a", "shap_b"],
+        )
+        assert result == {"a": 0.5, "b": 0.1}
+
+    def test_strips_shap_prefix_from_keys(self):
+        result = derivation._cross_cluster_mean_shap(
+            shap_centroids=[[0.3]],
+            shap_feature_order=["shap_tenure_days"],
+        )
+        assert "tenure_days" in result
+        assert "shap_tenure_days" not in result
+
+    def test_empty_centroids_returns_empty(self):
+        assert derivation._cross_cluster_mean_shap([], ["shap_a"]) == {}
+
+
+class TestCompileRuleProseByCluster:
+    def test_empty_rules_returns_empty_map(self):
+        result = derivation._compile_rule_prose_by_cluster(
+            None, feature_meta={}, population_stats={}, column_descriptions={},
+        )
+        assert result == {}
+
+    def test_per_cluster_rule_prose_keyed_by_cluster_index(self):
+        from customer_retention.stages.causal.rule_extractor import ExtractedRule
+
+        rules = [
+            ExtractedRule(
+                cluster_index=0,
+                predicate_json={"op": ">=", "feature": "tenure_days", "value": 100},
+                predicate_sql="`tenure_days` >= 100",
+                feature_thresholds={"tenure_days": {"gte": 100}},
+                used_features=["tenure_days"],
+                pure_leaf_count=1,
+                coverage=0.5,
+            ),
+            ExtractedRule(
+                cluster_index=1,
+                predicate_json={"op": "<", "feature": "support_tickets_30d", "value": 2},
+                predicate_sql="`support_tickets_30d` < 2",
+                feature_thresholds={"support_tickets_30d": {"lt": 2}},
+                used_features=["support_tickets_30d"],
+                pure_leaf_count=1,
+                coverage=0.4,
+            ),
+        ]
+        result = derivation._compile_rule_prose_by_cluster(
+            rules, feature_meta={}, population_stats={}, column_descriptions={},
+        )
+        assert set(result.keys()) == {0, 1}
+        # compile_predicate_prose returns a string (or None on internal failure);
+        # both paths are acceptable — we just verify the per-cluster keying works
+        # and no rule blocks the others.
+        for cluster_idx in (0, 1):
+            assert cluster_idx in result
+
+    def test_per_rule_failure_does_not_block_other_clusters(self, monkeypatch):
+        """One bad predicate must not poison the whole cluster set."""
+        from customer_retention.stages.causal import interpretation as interp_pkg
+        from customer_retention.stages.causal.rule_extractor import ExtractedRule
+
+        call_count = {"n": 0}
+
+        def flaky_compile(predicate, **_kwargs):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise RuntimeError("simulated compile failure")
+            return "Eligible when tenure is high"
+
+        monkeypatch.setattr(interp_pkg, "compile_predicate_prose", flaky_compile)
+        rules = [
+            ExtractedRule(
+                cluster_index=7, predicate_json={"op": "true"}, predicate_sql="TRUE",
+                feature_thresholds={}, used_features=[], pure_leaf_count=1, coverage=1.0,
+            ),
+            ExtractedRule(
+                cluster_index=8, predicate_json={"op": "true"}, predicate_sql="TRUE",
+                feature_thresholds={}, used_features=[], pure_leaf_count=1, coverage=1.0,
+            ),
+        ]
+        result = derivation._compile_rule_prose_by_cluster(
+            rules, feature_meta={}, population_stats={}, column_descriptions={},
+        )
+        # Cluster 7 raised → omitted; cluster 8 succeeded → present.
+        assert 7 not in result
+        assert result.get(8) == "Eligible when tenure is high"
+
 
 # ---------------------------------------------------------------------------
 # Top-shap struct

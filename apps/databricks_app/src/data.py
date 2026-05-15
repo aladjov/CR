@@ -329,6 +329,8 @@ def playbook_catalog_all() -> pd.DataFrame:
                 name,
                 description,
                 when_applicable,
+                policy_summary,
+                expected_effect,
                 cost_per_customer_default,
                 expected_uplift_pct_default,
                 outcome_windows_days,
@@ -366,6 +368,8 @@ def playbook_catalog_all() -> pd.DataFrame:
             p.name,
             p.description,
             p.when_applicable,
+            p.policy_summary,
+            p.expected_effect,
             p.cost_per_customer_default,
             p.expected_uplift_pct_default,
             p.outcome_windows_days,
@@ -438,6 +442,144 @@ def archetype_catalog_all() -> pd.DataFrame:
         FROM {cfg.fqn_prefix}.v_archetype_overview
         ORDER BY cluster_mean_churn_probability DESC NULLS LAST, cluster_size DESC
     """)
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def playbook_yaml_runbook(playbook_id: str) -> dict | None:
+    """Return the parsed playbook YAML (or ``None`` when unavailable).
+
+    The framework's playbook loader writes the ``catalog`` and ``steps``
+    blocks to UC but deliberately drops ``operator_runbook`` -- that block
+    is operator content, not model-derived. To surface it in the dashboard
+    without a schema migration we read the YAML directly from the same
+    playbooks directory the loader uses.
+
+    Resolution order for the playbooks root:
+      1. ``CR_PLAYBOOKS_DIR`` env var (Volume path like
+         ``/Volumes/<catalog>/<schema>/playbooks`` or any filesystem dir).
+         Volume paths are read via the Databricks SDK ``files`` API; local
+         paths via ``Path.read_text``.
+      2. Repo-relative ``playbooks/`` discovered by walking up from this
+         file (works in local dev).
+      3. Give up — return ``None`` so the UI gracefully falls back to the
+         catalog-only layout.
+
+    Per-playbook caching is keyed on ``playbook_id`` so a click into a
+    different playbook only hits one file read.
+    """
+    import os
+    from pathlib import Path
+
+    import yaml
+
+    candidates = []
+    env_dir = os.environ.get("CR_PLAYBOOKS_DIR")
+    if env_dir:
+        candidates.append(env_dir)
+    here = Path(__file__).resolve()
+    # apps/databricks_app/src/data.py -> repo_root/playbooks
+    for parent in here.parents:
+        candidate = parent / "playbooks"
+        if candidate.is_dir():
+            candidates.append(str(candidate))
+            break
+
+    for root in candidates:
+        text = _read_playbook_yaml(root, playbook_id)
+        if text is None:
+            continue
+        try:
+            parsed = yaml.safe_load(text)
+        except yaml.YAMLError:
+            return None
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def _read_playbook_yaml(root: str, playbook_id: str) -> str | None:
+    """Find ``<playbook_id>.yaml`` under ``root`` and return its contents.
+
+    Searches the top level and the first level of subdirectories so the
+    SPS/email split (``playbooks/sps/foo.yaml`` vs ``playbooks/email/bar.yaml``)
+    works without configuration. Volume paths (starting ``/Volumes/``)
+    go through the Databricks SDK file API; everything else uses the
+    local filesystem. Returns ``None`` when nothing matches.
+    """
+    target = f"{playbook_id}.yaml"
+    if root.startswith("/Volumes/"):
+        return _read_yaml_from_volume(root, target)
+    from pathlib import Path
+    base = Path(root)
+    if not base.is_dir():
+        return None
+    candidates = [base / target]
+    for child in sorted(base.iterdir()):
+        if child.is_dir():
+            candidates.append(child / target)
+    for path in candidates:
+        if path.is_file():
+            try:
+                return path.read_text(encoding="utf-8")
+            except OSError:
+                return None
+    return None
+
+
+def _read_yaml_from_volume(root: str, target: str) -> str | None:
+    """Read ``<root>/<sub>/<target>`` from a Unity Catalog Volume.
+
+    Uses ``WorkspaceClient.files.download`` -- the supported SDK path that
+    works reliably from Databricks Apps where FUSE is unreliable. Walks
+    the top level then one level of subdirectories so the SPS/email split
+    is auto-discovered.
+    """
+    try:
+        from databricks.sdk import WorkspaceClient
+    except ImportError:
+        return None
+    try:
+        w = WorkspaceClient()
+    except Exception:
+        return None
+
+    def _try_path(path: str) -> str | None:
+        try:
+            resp = w.files.download(path)
+        except Exception:
+            return None
+        try:
+            data = resp.contents.read()
+        except Exception:
+            return None
+        try:
+            return data.decode("utf-8") if isinstance(data, (bytes, bytearray)) else str(data)
+        except Exception:
+            return None
+
+    # Try top-level first.
+    direct = _try_path(f"{root.rstrip('/')}/{target}")
+    if direct is not None:
+        return direct
+    # Walk one level of subdirectories.
+    try:
+        listing = list(w.files.list_directory_contents(root))
+    except Exception:
+        return None
+    for entry in listing:
+        # The SDK returns a DirectoryEntry-like object; both ``is_directory``
+        # and ``path`` are present on the variants we care about.
+        try:
+            is_dir = bool(getattr(entry, "is_directory", False))
+            entry_path = getattr(entry, "path", None)
+        except Exception:
+            continue
+        if not is_dir or not entry_path:
+            continue
+        found = _try_path(f"{entry_path.rstrip('/')}/{target}")
+        if found is not None:
+            return found
+    return None
 
 
 @st.cache_data(ttl=300, show_spinner=False)
