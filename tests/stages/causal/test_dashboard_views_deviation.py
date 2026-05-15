@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from customer_retention.stages.causal.dashboard_views import (
+    _MATERIALIZED_VIEW_SPECS,
     DASHBOARD_DEVIATION_VIEW_NAMES,
     DASHBOARD_PROVENANCE_VIEW_NAMES,
     DASHBOARD_TEMPLATE_TABLE_NAMES,
@@ -33,12 +34,27 @@ _BASE_NON_DEVIATION_STATEMENTS = (
     + len(DASHBOARD_TEMPLATE_TABLE_NAMES)
     + len(DASHBOARD_TEMPLATE_VIEW_NAMES)
 )
+# Number of materialization specs that re-define a CREATE OR REPLACE VIEW
+# at the end of publish_dashboard_views. Two flavors:
+#   - ``noncomposite`` specs run on every publish (v_account_explanation +
+#     v_account_primary_recommendation).
+#   - ``deviation`` specs only run when composite_name resolves to a
+#     non-None ``effective_composite`` (v_account_feature_deviation +
+#     v_account_feature_deviation_topn).
+_MATERIALIZE_NONCOMPOSITE_SPECS = sum(
+    1 for s in _MATERIALIZED_VIEW_SPECS if not s.requires_composite
+)
+_MATERIALIZE_DEVIATION_SPECS = sum(
+    1 for s in _MATERIALIZED_VIEW_SPECS if s.requires_composite
+)
 # Subset that becomes a CREATE OR REPLACE VIEW (everything except the
-# template table's CREATE TABLE).
+# template table's CREATE TABLE), including the materialization re-points
+# of the hot-path views.
 _BASE_NON_DEVIATION_VIEW_CALLS = (
     len(DASHBOARD_VIEW_NAMES)
     + len(DASHBOARD_PROVENANCE_VIEW_NAMES)
     + len(DASHBOARD_TEMPLATE_VIEW_NAMES)
+    + _MATERIALIZE_NONCOMPOSITE_SPECS
 )
 
 
@@ -171,8 +187,15 @@ def test_publish_with_composite_name_runs_extra_statements():
     publish_dashboard_views(spark, "c", "s", composite_name="cn1")
     # MagicMock's tableExists returns truthy for every prereq, so the publisher
     # includes both the deviation block and the provenance view, plus the
-    # always-on template-store view.
-    expected = _BASE_NON_DEVIATION_VIEW_CALLS + len(DASHBOARD_DEVIATION_VIEW_NAMES)
+    # always-on template-store view. With a composite name in scope, the
+    # materialization pass also re-defines the two deviation views as
+    # ``SELECT * FROM <materialized_table>`` -- those re-defines add to the
+    # CREATE OR REPLACE VIEW count too.
+    expected = (
+        _BASE_NON_DEVIATION_VIEW_CALLS
+        + len(DASHBOARD_DEVIATION_VIEW_NAMES)
+        + _MATERIALIZE_DEVIATION_SPECS
+    )
     view_calls = [
         call for call in spark.sql.call_args_list
         if "CREATE OR REPLACE VIEW" in call.args[0]

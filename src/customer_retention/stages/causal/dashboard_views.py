@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass
 from importlib.resources import files
 from typing import TYPE_CHECKING, List, Optional, Sequence
 
@@ -596,6 +597,155 @@ def _deviation_prerequisites_present(
     return (not missing), missing
 
 
+@dataclass(frozen=True)
+class _MaterializedViewSpec:
+    """A view whose body gets materialized as a Delta table at publish time.
+
+    After ``publish_dashboard_views`` submits all view DDLs, each spec
+    triggers a three-step materialization pass:
+
+      1. ``CREATE OR REPLACE TABLE <table_fqn> USING DELTA AS SELECT *
+         FROM <view_fqn>`` — snapshot the view's result set into a table.
+      2. ``OPTIMIZE <table_fqn> ZORDER BY (<zorder_col>)`` — index the
+         table on the per-click filter column so point lookups stay fast.
+      3. ``CREATE OR REPLACE VIEW <view_fqn> AS SELECT * FROM
+         <table_fqn>`` — re-point the view at the materialized table.
+
+    Step 3 preserves the public view name + every column the original
+    view emitted, so app code, downstream notebooks, and tests that read
+    through the view name keep working with identical semantics. The
+    only observable change is read latency on a per-entity ``WHERE
+    entity_id = :eid`` lookup.
+    """
+
+    view_name: str
+    table_name: str
+    zorder_col: str
+    requires_composite: bool
+
+
+# Hot-path views whose bodies are re-executed on every L1-L4 page click.
+# Materializing each into a Delta table indexed on ``entity_id`` collapses
+# per-click execution from a multi-CTE / explode-and-filter scan into a
+# point lookup that the SQL warehouse can serve in milliseconds.
+#
+# Order matters: ``v_account_primary_recommendation`` is the upstream
+# source for ``v_eligible_all_playbooks``, ``v_portfolio_risk_matrix``,
+# and ``v_playbook_archetype_rollup`` (none of which are materialized —
+# they're aggregations small enough to stay live) so it must be
+# materialized first to feed those downstream views.
+_MATERIALIZED_VIEW_SPECS: tuple[_MaterializedViewSpec, ...] = (
+    _MaterializedViewSpec(
+        view_name="v_account_primary_recommendation",
+        table_name="dashboard_account_primary_recommendation",
+        zorder_col="entity_id",
+        requires_composite=False,
+    ),
+    _MaterializedViewSpec(
+        view_name="v_account_explanation",
+        table_name="dashboard_account_explanation",
+        zorder_col="entity_id",
+        requires_composite=False,
+    ),
+    _MaterializedViewSpec(
+        view_name="v_account_feature_deviation",
+        table_name="dashboard_account_feature_deviation",
+        zorder_col="entity_id",
+        requires_composite=True,
+    ),
+    _MaterializedViewSpec(
+        view_name="v_account_feature_deviation_topn",
+        table_name="dashboard_account_feature_deviation_topn",
+        zorder_col="entity_id",
+        requires_composite=True,
+    ),
+)
+
+
+def _materialize_view_as_table(
+    spark: "SparkSession",
+    catalog: str,
+    schema: str,
+    spec: _MaterializedViewSpec,
+) -> bool:
+    """Run the CTAS + OPTIMIZE + re-point sequence for one spec.
+
+    Returns ``True`` when the view ends up reading from the materialized
+    table (i.e. CTAS + re-point succeeded), ``False`` when CTAS or the
+    final view re-point failed and the view was left in its pre-call
+    state. A failed OPTIMIZE step does NOT flip the return to ``False`` —
+    the table still serves point lookups faster than the original view
+    body, just without Z-ORDER clustering. Every failure is logged so
+    operators can investigate without the publish call itself crashing.
+    """
+    view_fqn = f"{catalog}.{schema}.{spec.view_name}"
+    table_fqn = f"{catalog}.{schema}.{spec.table_name}"
+    try:
+        spark.sql(
+            f"CREATE OR REPLACE TABLE {table_fqn} USING DELTA "
+            f"AS SELECT * FROM {view_fqn}"
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort, never fail publish
+        logger.warning(
+            "materialization CTAS of %s -> %s failed: %s. "
+            "View left as-is (slower per-click read path).",
+            view_fqn, table_fqn, exc,
+        )
+        return False
+    try:
+        spark.sql(f"OPTIMIZE {table_fqn} ZORDER BY (`{spec.zorder_col}`)")
+    except Exception as exc:  # noqa: BLE001 — non-Databricks Delta may
+        # not support OPTIMIZE / ZORDER. The table is still a useful
+        # indexable target compared to re-running the view body each
+        # click, so we log and continue rather than rolling back.
+        logger.warning(
+            "OPTIMIZE ZORDER on %s failed: %s. "
+            "Table is still queryable; clustering will be unindexed.",
+            table_fqn, exc,
+        )
+    try:
+        spark.sql(
+            f"CREATE OR REPLACE VIEW {view_fqn} AS SELECT * FROM {table_fqn}"
+        )
+    except Exception as exc:  # noqa: BLE001 — the table exists but the
+        # view still points at its original body. Per-click reads stay
+        # on the old slow path; operators see this in the warning log.
+        logger.warning(
+            "re-pointing %s at %s failed: %s. "
+            "View still resolves via its original body.",
+            view_fqn, table_fqn, exc,
+        )
+        return False
+    logger.info(
+        "materialized %s -> %s (Z-ORDER by %s)",
+        view_fqn, table_fqn, spec.zorder_col,
+    )
+    return True
+
+
+def _materialize_hot_views(
+    spark: "SparkSession",
+    catalog: str,
+    schema: str,
+    *,
+    include_deviation: bool,
+) -> List[str]:
+    """Materialize every applicable spec; return the list of view names rewired.
+
+    ``include_deviation`` gates the deviation-block specs (which require
+    a composite_name + the upstream gold table). Specs whose individual
+    materialization fails are silently skipped (with a warning log); the
+    return value lets callers / tests observe which ones succeeded.
+    """
+    rewired: List[str] = []
+    for spec in _MATERIALIZED_VIEW_SPECS:
+        if spec.requires_composite and not include_deviation:
+            continue
+        if _materialize_view_as_table(spark, catalog, schema, spec):
+            rewired.append(spec.view_name)
+    return rewired
+
+
 def publish_dashboard_views(
     spark: "SparkSession",
     catalog: str,
@@ -687,4 +837,22 @@ def publish_dashboard_views(
         logger.info(
             "deviation views skipped (no composite_name supplied; pass composite_name= to enable)"
         )
+
+    # Materialize the four hot-path views whose bodies the app re-executes
+    # on every L1->L4 click. After this pass each rewired view's body is
+    # ``SELECT * FROM <table>`` (Z-ORDERED on entity_id) so a per-entity
+    # WHERE collapses to an indexed point lookup. View names and emitted
+    # columns are unchanged -- downstream readers (the Streamlit app,
+    # other views that source from these) keep working with identical
+    # semantics.
+    rewired = _materialize_hot_views(
+        spark, catalog, schema,
+        include_deviation=effective_composite is not None,
+    )
+    if rewired:
+        logger.info(
+            "hot-path views materialized as Delta tables: %s",
+            ", ".join(rewired),
+        )
+
     return submitted

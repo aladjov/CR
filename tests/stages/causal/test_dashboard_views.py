@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from customer_retention.stages.causal.dashboard_views import (
+    _MATERIALIZED_VIEW_SPECS,
     DASHBOARD_PROVENANCE_VIEW_NAMES,
     DASHBOARD_VIEW_NAMES,
     _resolve_gold_dedup_order_by,
@@ -16,6 +17,16 @@ from customer_retention.stages.causal.dashboard_views import (
     render_dashboard_view_sql,
     split_view_statements,
 )
+
+# Number of materialization specs that fire when no composite_name is passed
+# (i.e. specs whose ``requires_composite`` is False). Each spec adds three
+# spark.sql calls: CTAS, OPTIMIZE, and a final CREATE OR REPLACE VIEW that
+# re-points the public view at the materialized Delta table. Only the third
+# of those three is a CREATE OR REPLACE VIEW.
+_MATERIALIZE_NONCOMPOSITE_SPECS = sum(
+    1 for s in _MATERIALIZED_VIEW_SPECS if not s.requires_composite
+)
+_MATERIALIZE_NONCOMPOSITE_SQL_CALLS = _MATERIALIZE_NONCOMPOSITE_SPECS * 3
 
 
 class TestResolveGoldDedupOrderBy:
@@ -291,8 +302,14 @@ class TestPublishDashboardViews:
         # the view body at DDL time), and one extra CREATE TABLE IF NOT EXISTS
         # for ``column_descriptions`` issued by the synthetic-placeholder seed
         # (the merge it executes after fails on MagicMock and is swallowed,
-        # but the CREATE TABLE call count is still recorded).
-        assert spark.sql.call_count == expected + 2
+        # but the CREATE TABLE call count is still recorded). It then issues
+        # the materialization pass: per non-composite spec, three more calls
+        # (CREATE OR REPLACE TABLE, OPTIMIZE ZORDER, CREATE OR REPLACE VIEW)
+        # that snapshot the hot-path view into an indexed Delta table so the
+        # app's per-click reads collapse to point lookups.
+        assert spark.sql.call_count == (
+            expected + 2 + _MATERIALIZE_NONCOMPOSITE_SQL_CALLS
+        )
         view_calls = [
             call for call in spark.sql.call_args_list
             if "CREATE OR REPLACE VIEW" in call.args[0]
@@ -301,6 +318,7 @@ class TestPublishDashboardViews:
             len(DASHBOARD_VIEW_NAMES)
             + len(DASHBOARD_PROVENANCE_VIEW_NAMES)
             + len(DASHBOARD_TEMPLATE_VIEW_NAMES)
+            + _MATERIALIZE_NONCOMPOSITE_SPECS
         )
 
     def test_ensures_run_context_table_before_publishing_views(self):
@@ -316,3 +334,177 @@ class TestPublishDashboardViews:
         publish_dashboard_views(spark, "alpha", "beta")
         joined = "\n".join(call.args[0] for call in spark.sql.call_args_list)
         assert "alpha.beta." in joined
+
+
+class TestMaterializeHotViews:
+    """The materialization pass at the end of publish_dashboard_views.
+
+    The four hot-path views (v_account_primary_recommendation,
+    v_account_explanation, v_account_feature_deviation,
+    v_account_feature_deviation_topn) are the SQL bodies the Streamlit
+    app re-executes on every L1->L4 click. The publisher snapshots each
+    into a Delta table (Z-ORDERED on entity_id) and re-points the public
+    view at the materialized table so per-click reads become indexed
+    point lookups. These tests assert the CTAS + OPTIMIZE + re-point
+    sequence happens and that failure modes degrade rather than crash.
+    """
+
+    def _sqls(self, spark) -> list[str]:
+        return [call.args[0] for call in spark.sql.call_args_list]
+
+    def test_emits_ctas_for_each_noncomposite_spec(self):
+        pytest.importorskip("pyspark")
+        spark = MagicMock()
+        publish_dashboard_views(spark, "c", "s")
+        sqls = self._sqls(spark)
+        # Two non-composite specs: v_account_primary_recommendation and
+        # v_account_explanation. Each emits a CREATE OR REPLACE TABLE ...
+        # AS SELECT * FROM v_<name>.
+        ctas = [s for s in sqls if "CREATE OR REPLACE TABLE c.s.dashboard_" in s]
+        assert len(ctas) == 2
+        assert any(
+            "dashboard_account_primary_recommendation USING DELTA" in s
+            and "FROM c.s.v_account_primary_recommendation" in s
+            for s in ctas
+        )
+        assert any(
+            "dashboard_account_explanation USING DELTA" in s
+            and "FROM c.s.v_account_explanation" in s
+            for s in ctas
+        )
+
+    def test_emits_optimize_zorder_on_entity_id(self):
+        pytest.importorskip("pyspark")
+        spark = MagicMock()
+        publish_dashboard_views(spark, "c", "s")
+        sqls = self._sqls(spark)
+        zorders = [
+            s for s in sqls
+            if s.startswith("OPTIMIZE c.s.dashboard_") and "ZORDER BY" in s
+        ]
+        assert len(zorders) == 2
+        for s in zorders:
+            assert "(`entity_id`)" in s
+
+    def test_repoints_view_at_materialized_table(self):
+        pytest.importorskip("pyspark")
+        spark = MagicMock()
+        publish_dashboard_views(spark, "c", "s")
+        sqls = self._sqls(spark)
+        # The final pass re-creates the view as SELECT * FROM the table.
+        repoints = [
+            s for s in sqls
+            if "CREATE OR REPLACE VIEW c.s.v_account_explanation AS"
+               " SELECT * FROM c.s.dashboard_account_explanation" in s
+            or "CREATE OR REPLACE VIEW c.s.v_account_primary_recommendation AS"
+               " SELECT * FROM c.s.dashboard_account_primary_recommendation" in s
+        ]
+        assert len(repoints) == 2
+
+    def test_emits_deviation_specs_when_composite_supplied(self):
+        pytest.importorskip("pyspark")
+        spark = MagicMock()
+
+        class _F:
+            def __init__(self, name, type_name):
+                self.name = name
+                self.dataType = type(type_name, (), {})()
+
+        # Gold schema with one numeric column so the deviation block fires.
+        spark.table.return_value.schema = [
+            _F("entity_id", "StringType"),
+            _F("feat_a", "DoubleType"),
+        ]
+        publish_dashboard_views(spark, "c", "s", composite_name="cn1")
+        sqls = self._sqls(spark)
+        # All four specs ran: two non-composite + two deviation.
+        ctas = [s for s in sqls if "CREATE OR REPLACE TABLE c.s.dashboard_" in s]
+        assert len(ctas) == 4
+        assert any("dashboard_account_feature_deviation USING DELTA" in s for s in ctas)
+        assert any("dashboard_account_feature_deviation_topn USING DELTA" in s for s in ctas)
+
+    def test_skips_deviation_materialization_without_composite(self):
+        pytest.importorskip("pyspark")
+        spark = MagicMock()
+        publish_dashboard_views(spark, "c", "s")
+        sqls = self._sqls(spark)
+        # Deviation tables never get materialized when no composite_name is in
+        # effect (effective_composite is None on the no-composite-name path).
+        assert not any("dashboard_account_feature_deviation" in s for s in sqls)
+
+    def test_skips_deviation_materialization_when_prereqs_missing(self):
+        # The publisher's effective_composite resolves to None when the
+        # deviation prerequisites are absent (e.g. gold_features_cn1 does
+        # not exist). In that case the deviation specs must be skipped at
+        # the materialization pass too -- otherwise the CTAS would fail
+        # against a view body the publisher already stripped out.
+        pytest.importorskip("pyspark")
+        spark = MagicMock()
+        spark.catalog.tableExists.side_effect = lambda fqn: "gold_features_" not in fqn
+        publish_dashboard_views(spark, "c", "s", composite_name="cn1")
+        sqls = self._sqls(spark)
+        assert not any("dashboard_account_feature_deviation" in s for s in sqls)
+        # Non-composite specs still materialize.
+        assert any("dashboard_account_explanation USING DELTA" in s for s in sqls)
+
+    def test_optimize_failure_does_not_block_view_repoint(self):
+        # Some Delta deployments do not support OPTIMIZE ZORDER. The
+        # publisher must tolerate that failure: the table is still useful
+        # (a snapshot of the view's body), and re-pointing the view at it
+        # still wins back the per-click latency from CTE re-execution.
+        pytest.importorskip("pyspark")
+        spark = MagicMock()
+
+        def _side_effect(stmt):
+            if stmt.startswith("OPTIMIZE "):
+                raise RuntimeError("OPTIMIZE not supported on this engine")
+            return MagicMock()
+
+        spark.sql.side_effect = _side_effect
+        # No assertion error from publish itself; warnings logged for OPTIMIZE.
+        publish_dashboard_views(spark, "c", "s")
+        sqls = [call.args[0] for call in spark.sql.call_args_list]
+        # CTAS still ran, view re-point still ran for both specs.
+        ctas = [s for s in sqls if "CREATE OR REPLACE TABLE c.s.dashboard_" in s]
+        repoints = [
+            s for s in sqls
+            if "CREATE OR REPLACE VIEW c.s.v_account_explanation AS"
+               " SELECT * FROM c.s.dashboard_account_explanation" in s
+            or "CREATE OR REPLACE VIEW c.s.v_account_primary_recommendation AS"
+               " SELECT * FROM c.s.dashboard_account_primary_recommendation" in s
+        ]
+        assert len(ctas) == 2
+        assert len(repoints) == 2
+
+    def test_ctas_failure_does_not_block_remaining_specs(self):
+        # If one CTAS errors out (e.g. transient permission issue on the
+        # destination table), the publisher must still attempt the other
+        # specs rather than fail the whole publish. Each spec is
+        # independent: a failure on one leaves its view at the pre-call
+        # body but the others still get materialized.
+        pytest.importorskip("pyspark")
+        spark = MagicMock()
+
+        def _side_effect(stmt):
+            if (
+                stmt.startswith("CREATE OR REPLACE TABLE ")
+                and "dashboard_account_primary_recommendation" in stmt
+            ):
+                raise RuntimeError("simulated CTAS failure")
+            return MagicMock()
+
+        spark.sql.side_effect = _side_effect
+        publish_dashboard_views(spark, "c", "s")
+        sqls = [call.args[0] for call in spark.sql.call_args_list]
+        # v_account_explanation still materialized successfully.
+        assert any(
+            "CREATE OR REPLACE TABLE c.s.dashboard_account_explanation" in s
+            for s in sqls
+        )
+        # v_account_primary_recommendation CTAS attempted (and failed) so
+        # its OPTIMIZE / re-point are skipped (CTAS returns False before
+        # the downstream steps).
+        assert not any(
+            "OPTIMIZE c.s.dashboard_account_primary_recommendation" in s
+            for s in sqls
+        )
