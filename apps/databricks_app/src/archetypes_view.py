@@ -1,12 +1,18 @@
 """Archetypes tab — master table of model-derived archetypes + readonly detail.
 
-Master row click reveals a complex profile: summary header (cluster size,
-mean churn, derivation), prose blocks (description, rationale), then the
-top SHAP drivers split into positive (risk-pushing) and negative
-(protective) lists. Each driver shows the readable business phrase on
-the surface; an Expander reveals the raw technical metadata (column name,
-mean SHAP, mean value, p25/p50/p75 from feature_thresholds, source
-dataset / window from feature provenance).
+The detail view splits driver features into two parallel columns —
+risk-driving on the left, protective on the right — with proportional
+bars that mirror the L4 SHAP visual: yellow grows rightward from the
+centre, green grows leftward, so the heaviest drivers on both sides
+bracket the divider line. A per-row "tech" disclosure surfaces the raw
+column name, cluster mean value, mean SHAP, p25/p50/p75 thresholds, and
+source-dataset metadata from feature provenance.
+
+Mean-churn handling: when ``cluster_mean_churn_probability`` is 0 for
+every active archetype the value is treated as upstream-missing rather
+than a true 0% rate. The master-table cell renders "—", the detail chip
+is suppressed, and a banner explains the gap. This avoids flat 0% bars
+that read as a UI bug while honoring real values when they're present.
 """
 from __future__ import annotations
 
@@ -22,6 +28,11 @@ _STATE_KEY = "arch_detail_id"
 
 _DIRECTION_POSITIVE = "positive"
 _DIRECTION_NEGATIVE = "negative"
+
+
+# ---------------------------------------------------------------------------
+# Formatters
+# ---------------------------------------------------------------------------
 
 
 def _fmt_pct(v: Any) -> str:
@@ -57,42 +68,74 @@ def _fmt_float(v: Any, *, precision: int = 3) -> str:
         return "—"
 
 
-def _chip(label: str, value: str, *, accent: bool = False) -> str:
-    cls = "catalog-chip accent" if accent else "catalog-chip"
-    return (
-        f'<span class="{cls}">'
-        f'<span class="label">{escape(label)}</span>'
-        f'<span class="value">{escape(value)}</span>'
-        f'</span>'
-    )
-
-
-def _prose_block(title: str, text: Any) -> str:
-    if text is None:
-        return ""
+def _safe_float(v: Any) -> float | None:
     try:
-        if pd.isna(text):
-            return ""
+        if v is None:
+            return None
+        if pd.isna(v):
+            return None
+        return float(v)
     except (TypeError, ValueError):
-        pass
-    s = str(text).strip()
-    if not s:
-        return ""
-    return (
-        '<section class="catalog-section">'
-        f'<h4>{escape(title)}</h4>'
-        f'<p class="prose">{escape(s)}</p>'
-        '</section>'
-    )
+        return None
 
 
-def _render_master_table(df: pd.DataFrame) -> int | None:
+# ---------------------------------------------------------------------------
+# Mean-churn-zero detection
+# ---------------------------------------------------------------------------
+
+
+def _mean_churn_all_zero(df: pd.DataFrame) -> bool:
+    """Return True when every archetype reports churn probability ~0.
+
+    The signal pattern we care about is "all rows are exactly 0 or null
+    after a fresh derivation run" -- a true cluster with a 0% historical
+    churn rate is implausible for any active archetype, so seeing it
+    uniformly across the catalog is almost always an upstream-data gap
+    (target column missing from the join, or rows filtered out before
+    the per-cluster mean was computed).
+    """
+    if df is None or df.empty:
+        return False
+    col = df.get("cluster_mean_churn_probability")
+    if col is None:
+        return True
+    series = pd.to_numeric(col, errors="coerce").fillna(0.0)
+    return bool((series.abs() < 1e-9).all())
+
+
+# ---------------------------------------------------------------------------
+# Master table
+# ---------------------------------------------------------------------------
+
+
+def _render_master_table(df: pd.DataFrame, *, hide_mean_churn: bool) -> int | None:
+    """Master table. When ``hide_mean_churn`` the column collapses to "—"
+    text so the row no longer renders a uniform 0% progress bar that
+    reads as a UI bug."""
+
+    if hide_mean_churn:
+        mean_churn_col_data = pd.Series(["—"] * len(df), dtype="string")
+        mean_churn_cfg = st.column_config.TextColumn(
+            width="small",
+            help=(
+                "Cluster mean churn probability is 0 for every active archetype — "
+                "likely upstream gap (target column missing from the derivation "
+                "join). Re-run c02 archetype_derivation against training data that "
+                "carries the binary target."
+            ),
+        )
+    else:
+        mean_churn_col_data = df["cluster_mean_churn_probability"]
+        mean_churn_cfg = st.column_config.ProgressColumn(
+            format="%.2f", min_value=0.0, max_value=1.0, width="small"
+        )
+
     display = pd.DataFrame({
         "Archetype":   df["archetype_name"].astype(str),
         "ID":          df["archetype_id"].astype(str),
         "Version":     df["archetype_version"].astype(str),
         "Cluster":     df["cluster_size"].astype("Int64"),
-        "Mean churn":  df["cluster_mean_churn_probability"],
+        "Mean churn":  mean_churn_col_data,
         "Stability":   df.get("stability_vs_prior_version", pd.Series([None] * len(df))),
         "Method":      df["derivation_method"].astype(str),
     })
@@ -102,11 +145,11 @@ def _render_master_table(df: pd.DataFrame) -> int | None:
         "ID":         st.column_config.TextColumn(width="small", help="archetype_id"),
         "Version":    st.column_config.TextColumn(width="small"),
         "Cluster":    st.column_config.NumberColumn(format="%,d", width="small"),
-        "Mean churn": st.column_config.ProgressColumn(
-            format="%.2f", min_value=0.0, max_value=1.0, width="small"
+        "Mean churn": mean_churn_cfg,
+        "Stability":  st.column_config.NumberColumn(
+            format="%.2f", width="small",
+            help="Jaccard-like overlap with the same archetype in the prior version (1.0 = identical)",
         ),
-        "Stability":  st.column_config.NumberColumn(format="%.2f", width="small",
-            help="Jaccard-like overlap with the same archetype in the prior version (1.0 = identical)"),
         "Method":     st.column_config.TextColumn(width="small"),
     }
 
@@ -130,7 +173,7 @@ def _render_master_table(df: pd.DataFrame) -> int | None:
 
 
 def _as_dict(item: Any) -> dict[str, Any]:
-    """Coerce a row of ``top_shap_features`` (struct or pyspark Row) to dict."""
+    """Coerce a row of ``top_shap_features`` (struct / Row / dict) to dict."""
     if item is None:
         return {}
     if isinstance(item, dict):
@@ -140,7 +183,6 @@ def _as_dict(item: Any) -> dict[str, Any]:
             return item.asDict()
         except Exception:
             pass
-    # plain object with attribute access (e.g. namedtuple-like)
     out: dict[str, Any] = {}
     for key in ("feature", "mean_shap", "mean_value", "direction"):
         if hasattr(item, key):
@@ -149,7 +191,12 @@ def _as_dict(item: Any) -> dict[str, Any]:
 
 
 def _split_drivers(features: Any) -> tuple[list[dict], list[dict]]:
-    """Return ``(positive, negative)`` SHAP-driver dicts, ordered by |mean_shap|."""
+    """Return ``(positive, negative)`` driver dicts, ordered by |mean_shap|.
+
+    The framework writes an explicit ``direction`` of "positive" or
+    "negative"; when it's missing we fall back to the sign of ``mean_shap``
+    so older catalogs still split cleanly.
+    """
     if features is None:
         return [], []
     try:
@@ -172,7 +219,6 @@ def _split_drivers(features: Any) -> tuple[list[dict], list[dict]]:
         elif direction == _DIRECTION_NEGATIVE:
             neg.append(d)
         else:
-            # No explicit direction — fall back to sign of mean_shap.
             try:
                 if mean_shap is not None and float(mean_shap) >= 0:
                     pos.append(d)
@@ -231,14 +277,36 @@ def _phrase_lookup(phrases_df: pd.DataFrame) -> dict[str, dict[str, Any]]:
     return out
 
 
-def _render_driver_row(
+# ---------------------------------------------------------------------------
+# Two-column drivers — chart-style layout
+# ---------------------------------------------------------------------------
+
+
+def _max_abs_shap(*driver_lists: list[dict]) -> float:
+    """Joint |mean_shap| max across both columns. Used to scale bars so
+    risk and protective sides share the same x-axis: a 0.8-shap protective
+    feature reads as wider than a 0.3-shap risk feature."""
+    cap = 0.0
+    for dl in driver_lists:
+        for d in dl:
+            v = d.get("mean_shap")
+            try:
+                a = abs(float(v))
+            except (TypeError, ValueError):
+                continue
+            if a > cap:
+                cap = a
+    return cap
+
+
+def _driver_row_html(
     driver: dict,
     *,
     direction: str,
     thresholds: dict,
     phrases: dict[str, dict[str, Any]],
-    expander_key: str,
-) -> None:
+    cap: float,
+) -> str:
     feature = str(driver.get("feature") or "")
     phrase_meta = phrases.get(feature, {})
     display_phrase = (
@@ -246,89 +314,150 @@ def _render_driver_row(
         or feature
     )
     mean_shap = driver.get("mean_shap")
-    glyph = "▲" if direction == _DIRECTION_POSITIVE else "▼"
-    cls = "pos" if direction == _DIRECTION_POSITIVE else "neg"
+    abs_shap = 0.0
+    try:
+        abs_shap = abs(float(mean_shap))
+    except (TypeError, ValueError):
+        pass
+    pct = (abs_shap / cap * 100.0) if cap > 0 else 0.0
 
-    # Summary row (always visible)
-    st.markdown(
-        f'<div class="feature-row {cls}">'
-        f'<span class="glyph">{glyph}</span>'
-        f'<span class="phrase">{escape(display_phrase)}</span>'
-        f'<span class="shap">SHAP {_fmt_float(mean_shap, precision=4)}</span>'
-        '</div>',
-        unsafe_allow_html=True,
+    # Tech-detail body — definition list of every field we have, written
+    # only when at least one piece of metadata is non-empty.
+    tech_rows: list[tuple[str, str]] = []
+    tech_rows.append(("Column", feature))
+    mean_value = driver.get("mean_value")
+    if mean_value is not None:
+        tech_rows.append(("Cluster mean value", _fmt_float(mean_value, precision=4)))
+    if mean_shap is not None:
+        tech_rows.append(("Cluster mean SHAP", _fmt_float(mean_shap, precision=6)))
+    explicit_dir = driver.get("direction")
+    if explicit_dir:
+        tech_rows.append(("Direction", str(explicit_dir)))
+    threshold = _threshold_for(thresholds, feature)
+    if threshold:
+        t_bits = []
+        for tk in ("p25", "p50", "p75"):
+            if tk in threshold and threshold[tk] is not None:
+                t_bits.append(f"{tk}={_fmt_float(threshold[tk], precision=3)}")
+        if t_bits:
+            tech_rows.append(("Cluster quantiles", " · ".join(t_bits)))
+    for key, label in (
+        ("source_dataset",   "Source dataset"),
+        ("aggregation_kind", "Aggregation"),
+        ("window_phrase",    "Window"),
+        ("polarity",         "Training polarity"),
+    ):
+        val = phrase_meta.get(key)
+        if val is None:
+            continue
+        try:
+            if pd.isna(val):
+                continue
+        except (TypeError, ValueError):
+            pass
+        s = str(val).strip()
+        if s:
+            tech_rows.append((label, s))
+
+    tech_dl = ''.join(
+        f'<dt>{escape(k)}</dt><dd>{escape(v)}</dd>' for k, v in tech_rows
     )
 
-    # Technical detail (click-to-expand)
-    threshold = _threshold_for(thresholds, feature)
-    with st.expander("technical detail", expanded=False):
-        meta_lines: list[str] = [f"**Column name** &nbsp;`{feature}`"]
-        mean_value = driver.get("mean_value")
-        if mean_value is not None:
-            meta_lines.append(f"**Cluster mean value** &nbsp;{_fmt_float(mean_value, precision=4)}")
-        if mean_shap is not None:
-            meta_lines.append(f"**Cluster mean SHAP** &nbsp;{_fmt_float(mean_shap, precision=6)}")
-        explicit_dir = driver.get("direction")
-        if explicit_dir:
-            meta_lines.append(f"**Direction** &nbsp;{explicit_dir}")
-        if threshold:
-            t_bits = []
-            for tk in ("p25", "p50", "p75"):
-                if tk in threshold and threshold[tk] is not None:
-                    t_bits.append(f"{tk}={_fmt_float(threshold[tk], precision=3)}")
-            if t_bits:
-                meta_lines.append(f"**Cluster quantiles** &nbsp;{' · '.join(t_bits)}")
-        for key, label in (
-            ("source_dataset",   "Source dataset"),
-            ("aggregation_kind", "Aggregation"),
-            ("window_phrase",    "Window"),
-            ("polarity",         "Polarity (training)"),
-        ):
-            val = phrase_meta.get(key)
-            if val is None:
-                continue
-            try:
-                if pd.isna(val):
-                    continue
-            except (TypeError, ValueError):
-                pass
-            s = str(val).strip()
-            if not s:
-                continue
-            meta_lines.append(f"**{label}** &nbsp;{s}")
-        st.markdown("  \n".join(meta_lines))
-    # The key is referenced to keep streamlit expander state stable per row.
-    _ = expander_key  # noqa: F841 — kept for future per-row keying if needed
+    return (
+        '<div class="arch-row">'
+        f'<span class="arch-name" title="{escape(feature)}">{escape(display_phrase)}</span>'
+        f'<span class="arch-shap">{_fmt_float(abs_shap, precision=4)}</span>'
+        '<span class="arch-bar-track">'
+        f'<span class="arch-bar" style="width:{pct:.2f}%"></span>'
+        '</span>'
+        '<details class="arch-tech">'
+        '<summary>technical detail</summary>'
+        f'<div class="arch-tech-body"><dl>{tech_dl}</dl></div>'
+        '</details>'
+        '</div>'
+    )
 
 
-def _render_drivers_section(
-    title: str,
-    drivers: list[dict],
-    *,
-    direction: str,
+def _render_drivers_two_col(
+    pos: list[dict],
+    neg: list[dict],
     thresholds: dict,
     phrases: dict[str, dict[str, Any]],
-    archetype_id: str,
 ) -> None:
-    if not drivers:
-        return
+    cap = _max_abs_shap(pos, neg)
+
+    def _col(drivers: list[dict], side: str, head_class: str, head_label: str) -> str:
+        if drivers:
+            rows = ''.join(
+                _driver_row_html(d, direction=side, thresholds=thresholds, phrases=phrases, cap=cap)
+                for d in drivers
+            )
+        else:
+            rows = '<div class="arch-col-empty">No drivers in this direction.</div>'
+        head_count = (
+            f'<span class="count">{len(drivers)}</span>' if drivers else ''
+        )
+        return (
+            f'<div class="arch-col {head_class}">'
+            f'<div class="arch-col-head {head_class}">'
+            f'<span class="dot"></span><span>{escape(head_label)}</span>{head_count}'
+            '</div>'
+            f'{rows}'
+            '</div>'
+        )
+
     st.markdown(
-        f'<section class="catalog-section">'
-        f'<h4>{escape(title)} · {len(drivers)}</h4>'
+        '<section class="catalog-section" style="margin-top:1.25rem">'
+        '<h4>Driver features</h4>'
+        '<div class="arch-drivers">'
+        f'{_col(pos, "risk", "risk", "Risk-driving")}'
+        f'{_col(neg, "prot", "prot", "Protective")}'
+        '</div>'
         '</section>',
         unsafe_allow_html=True,
     )
-    for i, d in enumerate(drivers):
-        _render_driver_row(
-            d,
-            direction=direction,
-            thresholds=thresholds,
-            phrases=phrases,
-            expander_key=f"{archetype_id}::{direction}::{i}",
-        )
 
 
-def _render_detail(row: pd.Series, phrases: dict[str, dict[str, Any]]) -> None:
+# ---------------------------------------------------------------------------
+# Hero card + prose
+# ---------------------------------------------------------------------------
+
+
+def _chip(label: str, value: str, *, accent: bool = False) -> str:
+    cls = "catalog-chip accent" if accent else "catalog-chip"
+    return (
+        f'<span class="{cls}">'
+        f'<span class="label">{escape(label)}</span>'
+        f'<span class="value">{escape(value)}</span>'
+        f'</span>'
+    )
+
+
+def _prose_block(title: str, text: Any) -> str:
+    if text is None:
+        return ""
+    try:
+        if pd.isna(text):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    s = str(text).strip()
+    if not s:
+        return ""
+    return (
+        '<section class="catalog-section">'
+        f'<h4>{escape(title)}</h4>'
+        f'<p class="prose">{escape(s)}</p>'
+        '</section>'
+    )
+
+
+def _render_detail(
+    row: pd.Series,
+    phrases: dict[str, dict[str, Any]],
+    *,
+    mean_churn_unreliable: bool,
+) -> None:
     name = str(row.get("archetype_name") or row.get("archetype_id"))
     aid = str(row.get("archetype_id"))
     version = str(row.get("archetype_version"))
@@ -337,15 +466,15 @@ def _render_detail(row: pd.Series, phrases: dict[str, dict[str, Any]]) -> None:
         _chip("ID", aid),
         _chip("Version", version),
         _chip("Cluster size", _fmt_int(row.get("cluster_size"))),
-        _chip("Mean churn", _fmt_pct(row.get("cluster_mean_churn_probability")), accent=True),
-        _chip("Method", str(row.get("derivation_method") or "—")),
     ]
-    stability = row.get("stability_vs_prior_version")
-    try:
-        if stability is not None and not pd.isna(stability):
-            chips.append(_chip("Stability vs prior", _fmt_float(stability, precision=2)))
-    except (TypeError, ValueError):
-        pass
+    if not mean_churn_unreliable:
+        mean_churn = _safe_float(row.get("cluster_mean_churn_probability"))
+        if mean_churn is not None and mean_churn > 0:
+            chips.append(_chip("Mean churn", _fmt_pct(mean_churn), accent=True))
+    chips.append(_chip("Method", str(row.get("derivation_method") or "—")))
+    stability = _safe_float(row.get("stability_vs_prior_version"))
+    if stability is not None:
+        chips.append(_chip("Stability vs prior", _fmt_float(stability, precision=2)))
     model_name = row.get("model_name")
     model_version = row.get("model_version")
     if model_name:
@@ -385,22 +514,12 @@ def _render_detail(row: pd.Series, phrases: dict[str, dict[str, Any]]) -> None:
         )
         return
 
-    _render_drivers_section(
-        "Risk-driving features",
-        pos,
-        direction=_DIRECTION_POSITIVE,
-        thresholds=thresholds,
-        phrases=phrases,
-        archetype_id=aid,
-    )
-    _render_drivers_section(
-        "Protective features",
-        neg,
-        direction=_DIRECTION_NEGATIVE,
-        thresholds=thresholds,
-        phrases=phrases,
-        archetype_id=aid,
-    )
+    _render_drivers_two_col(pos, neg, thresholds, phrases)
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 
 def render() -> None:
@@ -408,9 +527,10 @@ def render() -> None:
         '<p class="catalog-lead">'
         'Behavioural clusters the model has identified in the current '
         'feature space. Click a row to see the archetype’s description, '
-        'rationale, and the SHAP drivers — split into risk-driving '
-        '(pushes prediction toward churn) and protective. Expand any '
-        'driver for its technical detail.'
+        'rationale, and the SHAP drivers — risk-driving on the left, '
+        'protective on the right, scaled to the same axis so a long '
+        'protective bar reads as stronger than a short risk bar. Expand '
+        'any driver for its technical detail.'
         '</p>',
         unsafe_allow_html=True,
     )
@@ -424,13 +544,28 @@ def render() -> None:
         st.info("No active archetypes — run c03 / c04 to derive and publish.")
         return
 
+    mean_churn_unreliable = _mean_churn_all_zero(df)
+    if mean_churn_unreliable:
+        st.markdown(
+            '<div class="arch-data-warn">'
+            '<strong>Mean churn probability unavailable.</strong> '
+            'Every active archetype reports 0 — almost certainly an '
+            'upstream gap (the binary target column was missing from '
+            'the derivation join, or rows were filtered out before the '
+            'per-cluster mean was computed). The column is hidden until '
+            'c02 archetype_derivation is re-run against training data '
+            'that carries the target.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
     try:
         phrases_df = data.feature_business_phrases()
     except Exception:
         phrases_df = pd.DataFrame()
     phrases = _phrase_lookup(phrases_df)
 
-    idx = _render_master_table(df)
+    idx = _render_master_table(df, hide_mean_churn=mean_churn_unreliable)
     if idx is None:
         prior = st.session_state.get(_STATE_KEY)
         if not prior:
@@ -442,4 +577,4 @@ def render() -> None:
     else:
         st.session_state[_STATE_KEY] = str(df.iloc[idx]["archetype_id"])
 
-    _render_detail(df.iloc[idx], phrases)
+    _render_detail(df.iloc[idx], phrases, mean_churn_unreliable=mean_churn_unreliable)

@@ -750,34 +750,215 @@ hr, [data-testid="stHorizontalBlock"] + div { border: none; }
   font-weight: 600;
 }
 
-/* Feature rows (Archetypes positive/negative drivers) ----------------------- */
-.feature-row {
+/* Drivers section (Archetypes risk-driving / protective columns) ------------
+   Two-column layout that mirrors the L4 SHAP visual: each row has a
+   proportional bar whose width tracks |mean_shap|, oriented outward from
+   a central divider so the two columns read as one chart split at zero.
+   Colour follows the L4 convention — yellow (warm) = risk-driving,
+   green (cool) = protective. */
+.arch-drivers {
   display: grid;
-  grid-template-columns: 18px 1fr auto;
-  gap: 0.7rem;
-  align-items: baseline;
-  padding: 0.55rem 0;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 2rem;
+  margin: 0;
+  position: relative;
+}
+.arch-drivers::before {
+  content: "";
+  position: absolute;
+  top: 2.5rem;
+  bottom: 0.3rem;
+  left: 50%;
+  width: 1px;
+  background: var(--line);
+  transform: translateX(-0.5px);
+}
+@media (max-width: 760px) {
+  .arch-drivers { grid-template-columns: 1fr; gap: 1rem 0; }
+  .arch-drivers::before { display: none; }
+}
+
+.arch-col-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--muted);
+  padding-bottom: 0.55rem;
+  margin-bottom: 0.4rem;
+  border-bottom: 1px solid var(--line);
+}
+.arch-col-head .dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.arch-col-head.risk      { color: var(--yellow-800); }
+.arch-col-head.risk .dot { background: var(--yellow-400); }
+.arch-col-head.prot      { color: var(--green-800); }
+.arch-col-head.prot .dot { background: var(--green-400); }
+.arch-col-head .count {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--muted);
+  letter-spacing: 0.06em;
+  text-transform: none;
+}
+.arch-col-empty {
+  font-family: var(--font-serif);
+  font-style: italic;
+  color: var(--muted);
+  font-size: 0.9rem;
+  padding: 0.6rem 0;
+}
+
+/* Right column flips the row so the bar anchors against the central
+   divider and grows outward (rightward in left col, leftward in right
+   col). This produces a "fan-out" reading where the heaviest drivers on
+   both sides bracket the divider line. */
+.arch-col.risk .arch-row {
+  grid-template-columns: 1fr auto;
+  text-align: left;
+}
+.arch-col.prot .arch-row {
+  grid-template-columns: auto 1fr;
+  text-align: right;
+}
+.arch-col.prot .arch-row .arch-name { order: 2; }
+.arch-col.prot .arch-row .arch-shap { order: 1; text-align: left; }
+.arch-col.prot .arch-row .arch-bar-track .arch-bar { right: 0; left: auto; }
+
+.arch-row {
+  display: grid;
+  align-items: center;
+  gap: 0.45rem 0.65rem;
+  padding: 0.4rem 0 0.25rem 0;
   border-bottom: 1px dashed var(--paper-edge);
 }
-.feature-row:last-child { border-bottom: none; }
-.feature-row .glyph {
-  font-family: var(--font-mono);
-  font-size: 0.95rem;
-  line-height: 1;
-}
-.feature-row.pos .glyph { color: var(--blue-500); }
-.feature-row.neg .glyph { color: var(--green-600); }
-.feature-row .phrase {
+.arch-row:last-of-type { border-bottom: none; }
+
+.arch-name {
   font-family: var(--font-sans);
-  font-size: 0.92rem;
+  font-size: 0.88rem;
   color: var(--ink);
   font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: help;
 }
-.feature-row .shap {
+.arch-shap {
   font-family: var(--font-mono);
-  font-size: 0.74rem;
-  color: var(--muted);
+  font-size: 0.72rem;
+  color: var(--ink-soft);
   font-feature-settings: "tnum" 1, "lnum" 1;
+  white-space: nowrap;
+}
+.arch-col.risk .arch-shap { color: var(--yellow-800); }
+.arch-col.prot .arch-shap { color: var(--green-800); }
+
+.arch-bar-track {
+  grid-column: 1 / -1;
+  position: relative;
+  height: 8px;
+  background: var(--paper-deep);
+  border-radius: 2px;
+  overflow: hidden;
+  border: 1px solid var(--line-soft);
+}
+.arch-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: block;
+  transition: width 0.18s ease;
+}
+.arch-col.risk .arch-bar { left: 0; background: var(--yellow-400); }
+.arch-col.prot .arch-bar { right: 0; background: var(--green-400); }
+
+/* Per-row technical-detail expander beneath the bar — minimal, single
+   click target. Body inherits sans-serif so the metadata reads as
+   secondary to the headline name + bar. */
+.arch-tech {
+  grid-column: 1 / -1;
+  margin: 0.15rem 0 0.1rem 0;
+}
+.arch-tech > summary {
+  list-style: none;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--whisper);
+  user-select: none;
+}
+.arch-tech > summary::-webkit-details-marker { display: none; }
+.arch-tech > summary::before {
+  content: "▸ ";
+  display: inline-block;
+  transition: transform 0.15s ease;
+  margin-right: 0.25rem;
+}
+.arch-tech[open] > summary::before { transform: rotate(90deg); }
+.arch-tech-body {
+  margin-top: 0.4rem;
+  padding: 0.55rem 0.75rem;
+  background: var(--paper-deep);
+  border: 1px solid var(--paper-edge);
+  border-radius: 6px;
+  font-family: var(--font-sans);
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+  line-height: 1.55;
+}
+.arch-tech-body dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 0.9rem;
+  margin: 0;
+}
+.arch-tech-body dt {
+  font-family: var(--font-sans);
+  font-size: 0.66rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 600;
+}
+.arch-tech-body dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  color: var(--ink);
+  font-size: 0.78rem;
+  word-break: break-word;
+  text-align: left;
+}
+.arch-col.prot .arch-tech > summary { text-align: right; }
+
+/* Banner shown when cluster_mean_churn_probability is 0 across every
+   archetype — surfaces the upstream-data gap instead of letting the
+   table show identical empty progress bars. */
+.arch-data-warn {
+  font-family: var(--font-sans);
+  font-size: 0.82rem;
+  color: var(--orange-800);
+  background: var(--orange-50);
+  border: 1px solid var(--orange-100);
+  border-left: 3px solid var(--orange-400);
+  border-radius: 6px;
+  padding: 0.65rem 0.9rem;
+  margin: 0 0 1rem 0;
+  line-height: 1.5;
+}
+.arch-data-warn strong {
+  font-weight: 600;
+  color: var(--orange-800);
 }
 
 /* Catalog tab description blocks (the small lead paragraph above the
