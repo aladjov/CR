@@ -58,6 +58,25 @@ class TestBatchInferenceConfig:
         cfg = BatchInferenceConfig(timestamp_column="ts")
         assert cfg.timestamp_column == "ts"
 
+    def test_already_positive_exclusion_fields_default_none(self):
+        """Entity-level already-positive exclusion is opt-in by passing all
+        three fields together; default keeps the framework backwards
+        compatible with callers that don't set them."""
+        cfg = BatchInferenceConfig()
+        assert cfg.exclude_already_positive_target_column is None
+        assert cfg.exclude_already_positive_via_table is None
+        assert cfg.exclude_already_positive_entity_key is None
+
+    def test_already_positive_exclusion_fields_passthrough(self):
+        cfg = BatchInferenceConfig(
+            exclude_already_positive_target_column="churned",
+            exclude_already_positive_via_table="cat.sch.landing_account",
+            exclude_already_positive_entity_key="ACCOUNT_ID",
+        )
+        assert cfg.exclude_already_positive_target_column == "churned"
+        assert cfg.exclude_already_positive_via_table == "cat.sch.landing_account"
+        assert cfg.exclude_already_positive_entity_key == "ACCOUNT_ID"
+
 
 class TestResolveModelVersion:
     def test_resolves_alias_uri(self, monkeypatch):

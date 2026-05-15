@@ -223,6 +223,31 @@ class BatchInferenceConfig:
     # ``project_context.datasets[<target>].entity_column`` automatically.
     filter_via_table_entity_key: Optional[str] = None
 
+    # Entity-level exclusion of rows already at the positive outcome.
+    # Distinct from ``filter_expression`` because ``churned = 0`` is a
+    # *row-level* predicate and landing is a per-snapshot panel: an entity
+    # that was churned=0 in earlier snapshots and churned=1 later still has
+    # rows passing the row-level filter, so its entity_id survives
+    # ``.select().distinct()`` and the scoring cohort silently leaks
+    # already-positive accounts onto the CSM-facing dashboard.
+    #
+    # Set all three together to drop any entity whose target has EVER been
+    # 1 across any row of ``via_table`` (the landing table for the target
+    # dataset). Applied as a one-sided ``left_anti`` join after the scope
+    # filter resolves entity_df — single Spark job, narrow shuffle, no
+    # collect-to-driver. The trained model has nothing useful to say about
+    # an already-positive row and the business can no longer recover that
+    # account; no opt-out by design.
+    #
+    # When any of the three fields is ``None`` the exclusion is silently
+    # skipped. The c04 stage generator populates them automatically from
+    # ``project_context.target_column`` + the target dataset's
+    # ``entity_column`` so old callers (that pre-date this change) keep
+    # working unchanged but get the looser row-level semantics.
+    exclude_already_positive_target_column: Optional[str] = None
+    exclude_already_positive_via_table: Optional[str] = None
+    exclude_already_positive_entity_key: Optional[str] = None
+
 
 @dataclass
 class BatchInferenceResult:
@@ -576,6 +601,42 @@ def _run_databricks(config: BatchInferenceConfig) -> BatchInferenceResult:
     entity_count = int(entity_df.count())
     prep_seconds = time.perf_counter() - t_prep
     _emit(f"{entity_count:,} entities after filter/dedup (prep {prep_seconds:.1f}s)")
+
+    # Entity-level already-positive exclusion. Runs in addition to the
+    # row-level scope filter above because ``churned = 0`` applied per-row
+    # to a snapshot-panel landing table can never produce the right
+    # answer: an entity with both churned=0 and churned=1 rows passes the
+    # row-level filter and slips into the scored cohort. Here we build
+    # the "ever-positive" entity set from landing and ``left_anti`` join
+    # it out — one narrow shuffle, no collect-to-driver, no temp views.
+    _excl_col = config.exclude_already_positive_target_column
+    _excl_table = config.exclude_already_positive_via_table
+    _excl_key = config.exclude_already_positive_entity_key
+    if _excl_col and _excl_table and _excl_key:
+        from pyspark.sql.functions import col as _col  # noqa: N812 — Spark API name
+
+        if not spark.catalog.tableExists(_excl_table):
+            _emit(
+                f"WARNING: exclude_already_positive_via_table {_excl_table} does not "
+                "exist; skipping entity-level already-positive exclusion."
+            )
+        else:
+            _ever_positive = (
+                spark.table(_excl_table)
+                .filter(_col(_excl_col) == lit(1))
+                .select(_col(_excl_key).alias("entity_id"))
+                .distinct()
+            )
+            entity_df = entity_df.join(_ever_positive, on="entity_id", how="left_anti")
+            _post_excl = int(entity_df.count())
+            _dropped = entity_count - _post_excl
+            _emit(
+                f"dropped {_dropped:,} entities with {_excl_col}=1 in any "
+                f"{_excl_table} row (entity-level exclusion); "
+                f"{_post_excl:,} entities remain"
+            )
+            entity_count = _post_excl
+
     if entity_count == 0:
         raise ValueError(
             f"Scope filter + distinct produced 0 entities in {customer_table}; "

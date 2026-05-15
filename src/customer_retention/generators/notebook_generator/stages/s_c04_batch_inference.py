@@ -101,53 +101,67 @@ def _resolve_scope_filter():
 
 
 def _resolve_already_positive_exclusion():
-    """Return a Spark-SQL predicate that drops entities whose target label is
-    already 1 (e.g. ``churned = 0``), resolved from
-    ``ProjectContext.target_column``. Always-on at scoring time: the trained
-    model has nothing useful to say about a row that is already a positive
-    outcome, and surfacing such rows in the CSM-facing dashboard wastes
-    headcount on accounts the business can no longer recover. Distinct from
-    ``_resolve_scope_filter`` so the training parity contract stays clean —
-    training cohort keeps positives (the model needs them to learn the
-    boundary); scoring drops them because they aren't actionable.
+    """Return ``(target_column, landing_fqn, raw_entity_key)`` so scoring can
+    drop entities whose target label has EVER been 1 in landing — applied
+    by the framework as a ``left_anti`` join against
+    ``landing_<target>.filter(<target_col> = 1)``.
 
-    Returns ``None`` when project_context is absent or carries no
-    ``target_column`` — the cell then falls back to the unmodified scope
-    filter and logs the omission so the operator can see it didn't apply."""
+    Entity-level by construction: a row-level ``<target_col> = 0`` clause
+    cannot work against a snapshot-panel landing table, because an entity
+    with both ``<target_col>=0`` and ``<target_col>=1`` rows would still
+    survive the row-level filter (the 0-rows pass; ``distinct(entity_id)``
+    re-admits the entity). Anti-join on the "ever positive" entity set is
+    the only shape that matches the intent — drop the entity wholesale if
+    landing has ANY row at the positive outcome.
+
+    Always-on at scoring time: the trained model has nothing useful to say
+    about an already-positive row, and surfacing such rows in the
+    CSM-facing dashboard wastes headcount on accounts the business can no
+    longer recover. Distinct from ``_resolve_scope_filter`` so the training
+    parity contract stays clean — training cohort keeps positives (the
+    model needs them to learn the boundary); scoring drops them because
+    they aren't actionable.
+
+    Returns ``(None, None, None)`` when project_context is absent or
+    cannot resolve a target column / raw entity key — the cell then falls
+    back to the unmodified scope filter and logs the omission so the
+    operator can see it didn't apply."""
     try:
         from customer_retention.analysis.auto_explorer.project_context import ProjectContext
         from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
     except ImportError:
-        return None
+        return None, None, None
     _ns = RunNamespace.from_env_or_latest()
     if _ns is None:
-        return None
+        return None, None, None
     _path = _ns.project_context_path
     if not _path.exists():
-        return None
+        return None, None, None
     _ctx = ProjectContext.load(_path)
     _target_col = getattr(_ctx, "target_column", None)
     if not _target_col:
-        return None
-    return f"{_target_col} = 0"
-
-
-def _compose_scoring_filter(*parts):
-    """AND-combine non-empty Spark-SQL predicates, parenthesizing each so
-    later predicates can't accidentally rebind the earlier ones via
-    operator-precedence surprises. Returns ``None`` when every part is
-    falsy."""
-    _kept = [p for p in parts if p]
-    if not _kept:
-        return None
-    if len(_kept) == 1:
-        return _kept[0]
-    return " and ".join(f"({p})" for p in _kept)
+        return None, None, None
+    _target_name = (
+        getattr(_ctx, "target_dataset", None)
+        or next(
+            (n for n, d in _ctx.datasets.items() if getattr(d, "role", None) == "target"),
+            None,
+        )
+    )
+    if _target_name is None and len(_ctx.datasets) == 1:
+        _target_name = next(iter(_ctx.datasets))
+    if _target_name is None:
+        return None, None, None
+    _target_ds = _ctx.datasets.get(_target_name)
+    _raw_key = getattr(_target_ds, "entity_column", None) if _target_ds is not None else None
+    if not _raw_key:
+        return None, None, None
+    _landing_fqn = f"{CATALOG}.{SCHEMA}.landing_{_target_name}"
+    return _target_col, _landing_fqn, _raw_key
 
 
 _scope_filter = _resolve_scope_filter()
-_already_positive_exclusion = _resolve_already_positive_exclusion()
-_scoring_filter = _compose_scoring_filter(_scope_filter, _already_positive_exclusion)
+_excl_target_col, _excl_landing_fqn, _excl_entity_key = _resolve_already_positive_exclusion()
 
 batch_inference_result = None
 _predictions_status = "UNKNOWN"
@@ -190,12 +204,17 @@ else:
             print(f"Scope filter (from NB00 project_context): {_scope_filter}")
         else:
             print("Scope filter: (none — scoring full entity population)")
-        if _already_positive_exclusion:
-            print(f"Already-positive exclusion (target_column): {_already_positive_exclusion}")
+        if _excl_target_col and _excl_landing_fqn and _excl_entity_key:
+            print(
+                f"Already-positive exclusion (entity-level anti-join): "
+                f"DROP entity where any row of {_excl_landing_fqn} has "
+                f"{_excl_target_col} = 1 (key={_excl_entity_key})"
+            )
         else:
             print(
                 "Already-positive exclusion: (none — project_context.target_column "
-                "not set; rows already at the positive outcome will be scored)"
+                "or target dataset entity_column not resolvable; entities already "
+                "at the positive outcome may be scored)"
             )
         config = BatchInferenceConfig(
             catalog=CATALOG,
@@ -206,7 +225,10 @@ else:
             risk_tier_high=RISK_TIER_HIGH,
             risk_tier_medium=RISK_TIER_MEDIUM,
             inference_timestamp=datetime.now(timezone.utc),
-            filter_expression=_scoring_filter,
+            filter_expression=_scope_filter,
+            exclude_already_positive_target_column=_excl_target_col,
+            exclude_already_positive_via_table=_excl_landing_fqn,
+            exclude_already_positive_entity_key=_excl_entity_key,
         )
         batch_inference_result = run_batch_inference(config)
         _predictions_status = batch_inference_result.summary()

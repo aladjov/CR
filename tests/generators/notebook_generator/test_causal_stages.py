@@ -219,8 +219,10 @@ class TestPerStageContent:
         downstream archetype assignment with out-of-scope rows.
 
         The notebook resolves the filter from ``RunNamespace.project_context_path``
-        and threads the composed scoring filter into
-        ``BatchInferenceConfig.filter_expression``."""
+        and threads it into ``BatchInferenceConfig.filter_expression``.
+        Entity-level already-positive exclusion is now a separate channel
+        (``exclude_already_positive_*`` fields) — see
+        ``test_c04_always_excludes_already_positive_target``."""
         gen = LocalNotebookGenerator(NotebookConfig(), None)
         nb = gen.generate_stage(NotebookStage.BATCH_INFERENCE_CAUSAL)
         code = _all_code(nb)
@@ -228,28 +230,39 @@ class TestPerStageContent:
         assert "project_context_path" in code
         assert "sample_filters" in code
         assert "_resolve_scope_filter" in code
-        assert "filter_expression=_scoring_filter" in code
+        assert "filter_expression=_scope_filter" in code
 
     def test_c04_always_excludes_already_positive_target(self):
-        """Scoring must drop entities whose target label is already 1
-        (e.g. ``churned = 0``). The trained model has nothing useful to say
-        about an already-positive row, and the CSM-facing dashboard wastes
-        headcount on accounts the business can no longer recover.
+        """Scoring must drop any entity whose target label has EVER been 1
+        in landing — entity-level wholesale, not row-level. The trained
+        model has nothing useful to say about an already-positive row, and
+        the CSM-facing dashboard wastes headcount on accounts the business
+        can no longer recover.
 
-        The exclusion is derived from ``ProjectContext.target_column`` and
-        composed with the scope filter so a missing ``target_column``
-        gracefully falls back to scope-only filtering rather than blocking
-        the run."""
+        The exclusion is derived from ``ProjectContext.target_column`` +
+        the target dataset's ``entity_column`` and threaded into three
+        dedicated ``BatchInferenceConfig`` fields. The framework applies a
+        ``left_anti`` join against
+        ``landing_<target>.filter(<target_col>=1)`` — a row-level
+        ``<target_col> = 0`` predicate in ``filter_expression`` is wrong
+        by construction because an entity with both 0-rows and 1-rows
+        survives ``.distinct(entity_id)`` and slips through."""
         gen = LocalNotebookGenerator(NotebookConfig(), None)
         nb = gen.generate_stage(NotebookStage.BATCH_INFERENCE_CAUSAL)
         code = _all_code(nb)
         assert "_resolve_already_positive_exclusion" in code
         assert "target_column" in code
-        # The composed predicate must reach BatchInferenceConfig, not
-        # bypass it via a stray reference to the bare scope filter.
-        assert "_compose_scoring_filter" in code
-        assert "filter_expression=_scoring_filter" in code
-        assert "filter_expression=_scope_filter" not in code
+        # The three exclusion fields must reach BatchInferenceConfig.
+        assert "exclude_already_positive_target_column=_excl_target_col" in code
+        assert "exclude_already_positive_via_table=_excl_landing_fqn" in code
+        assert "exclude_already_positive_entity_key=_excl_entity_key" in code
+        # The scope filter still flows through filter_expression — separately.
+        assert "filter_expression=_scope_filter" in code
+        # The old row-level composition path must be gone: the helper that
+        # AND-joined ``churned = 0`` into filter_expression silently failed
+        # against snapshot-panel landing tables and is the bug we're fixing.
+        assert "_compose_scoring_filter" not in code
+        assert "filter_expression=_scoring_filter" not in code
         # Operator-visible diagnostics: the cell must print which clauses
         # are in force so a confused operator can see why their account
         # population dropped.
