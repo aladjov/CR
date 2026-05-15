@@ -72,16 +72,50 @@ def _query(cfg: AppConfig, sql_text: str, params: Optional[dict[str, Any]] = Non
 
 @st.cache_data(ttl=60, show_spinner=False)
 def portfolio_by_playbook_risk_tier() -> pd.DataFrame:
+    """Per-(playbook, risk_tier) rollup for the L1 treemap.
+
+    This is intentionally NOT entity-grain. ``v_portfolio_risk_matrix``
+    (and its source ``v_account_primary_recommendation``) collapses each
+    account to its single PRIMARY play -- so a playbook for which every
+    eligible account also matched a higher-fit play would render as a
+    zero-tile and be unclickable, even though it's an active filter
+    target.
+
+    The treemap doubles as the level-2 selector, so we want every
+    *active* playbook to be visible. We read ``eligibility_snapshot``
+    directly and count every (entity, playbook) eligibility row -- an
+    account appearing in N plays appears in N tiles. The chart caption
+    below the treemap calls out the overlap so a CSM doesn't read a
+    tile-sum as a deduplicated account count.
+    """
     cfg = load_config()
     return _query(cfg, f"""
-        SELECT playbook_name, risk_tier,
-               SUM(eligible_count) AS eligible_count,
-               SUM(recommended_count) AS recommended_count,
-               SUM(holdout_count) AS holdout_count,
-               SUM(total_value_at_risk) AS total_value_at_risk,
-               AVG(mean_churn_probability) AS mean_churn_probability
-        FROM {cfg.fqn_prefix}.v_portfolio_risk_matrix
-        GROUP BY playbook_name, risk_tier
+        WITH latest_run AS (
+            SELECT scoring_run_id
+            FROM {cfg.fqn_prefix}.eligibility_snapshot
+            WHERE as_of_date = (
+                SELECT MAX(as_of_date) FROM {cfg.fqn_prefix}.eligibility_snapshot
+            )
+            LIMIT 1
+        ),
+        playbook_names AS (
+            SELECT playbook_id, MAX(name) AS playbook_name
+            FROM {cfg.fqn_prefix}.playbook_catalog
+            GROUP BY playbook_id
+        )
+        SELECT
+            COALESCE(pn.playbook_name, s.playbook_id) AS playbook_name,
+            s.risk_tier,
+            COUNT(*)                                                            AS eligible_count,
+            SUM(CASE WHEN s.recommended THEN 1 ELSE 0 END)                       AS recommended_count,
+            SUM(CASE WHEN s.is_holdout  THEN 1 ELSE 0 END)                       AS holdout_count,
+            SUM(COALESCE(s.value_at_risk, 0))                                    AS total_value_at_risk,
+            AVG(s.churn_probability)                                             AS mean_churn_probability
+        FROM {cfg.fqn_prefix}.eligibility_snapshot s
+        JOIN latest_run lr ON s.scoring_run_id = lr.scoring_run_id
+        LEFT JOIN playbook_names pn ON s.playbook_id = pn.playbook_id
+        WHERE COALESCE(s.is_dashboard_visible, TRUE) = TRUE
+        GROUP BY pn.playbook_name, s.playbook_id, s.risk_tier
     """)
 
 
@@ -128,6 +162,14 @@ def portfolio_totals() -> pd.DataFrame:
             COUNT(*)                                                      AS total_eligible,
             SUM(CASE WHEN recommended           THEN 1 ELSE 0 END)         AS total_recommended,
             SUM(COALESCE(value_at_risk, 0))                                AS total_value_at_risk,
+            -- Probability-weighted dollar exposure across the eligible
+            -- cohort. churn_probability is 0..1 and value_at_risk is
+            -- per-account ARR -- summing the product gives "if we did
+            -- nothing this cycle, this is the realistic $ projection of
+            -- what we'd lose". Strictly more useful for portfolio
+            -- managers than raw value_at_risk (which is worst-case).
+            SUM(COALESCE(churn_probability, 0.0) * COALESCE(value_at_risk, 0.0))
+                                                                          AS total_expected_loss,
 
             SUM(CASE WHEN risk_tier = 'High'   THEN 1 ELSE 0 END)         AS eligible_high,
             SUM(CASE WHEN risk_tier = 'Medium' THEN 1 ELSE 0 END)         AS eligible_medium,
@@ -140,6 +182,10 @@ def portfolio_totals() -> pd.DataFrame:
             SUM(CASE WHEN risk_tier = 'High'   THEN COALESCE(value_at_risk, 0) ELSE 0 END) AS value_at_risk_high,
             SUM(CASE WHEN risk_tier = 'Medium' THEN COALESCE(value_at_risk, 0) ELSE 0 END) AS value_at_risk_medium,
             SUM(CASE WHEN risk_tier = 'Low'    THEN COALESCE(value_at_risk, 0) ELSE 0 END) AS value_at_risk_low,
+
+            SUM(CASE WHEN risk_tier = 'High'   THEN COALESCE(churn_probability, 0.0) * COALESCE(value_at_risk, 0.0) ELSE 0 END) AS expected_loss_high,
+            SUM(CASE WHEN risk_tier = 'Medium' THEN COALESCE(churn_probability, 0.0) * COALESCE(value_at_risk, 0.0) ELSE 0 END) AS expected_loss_medium,
+            SUM(CASE WHEN risk_tier = 'Low'    THEN COALESCE(churn_probability, 0.0) * COALESCE(value_at_risk, 0.0) ELSE 0 END) AS expected_loss_low,
 
             (SELECT active_playbooks FROM active_pb) AS active_playbooks
         FROM primary_only

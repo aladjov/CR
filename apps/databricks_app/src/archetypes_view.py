@@ -363,17 +363,37 @@ def _driver_row_html(
         f'<dt>{escape(k)}</dt><dd>{escape(v)}</dd>' for k, v in tech_rows
     )
 
-    return (
-        '<div class="arch-row">'
+    name_html = (
         f'<span class="arch-name" title="{escape(feature)}">{escape(display_phrase)}</span>'
-        f'<span class="arch-shap">{_fmt_float(abs_shap, precision=4)}</span>'
+    )
+    shap_html = f'<span class="arch-shap">{_fmt_float(abs_shap, precision=4)}</span>'
+    bar_html = (
         '<span class="arch-bar-track">'
         f'<span class="arch-bar" style="width:{pct:.2f}%"></span>'
         '</span>'
+    )
+    tech_html = (
         '<details class="arch-tech">'
         '<summary>technical detail</summary>'
         f'<div class="arch-tech-body"><dl>{tech_dl}</dl></div>'
         '</details>'
+    )
+
+    # For the protective column we mirror the row: value on the left,
+    # name on the right, bar anchored right and growing leftward toward
+    # the divider. We control that purely by DOM order here -- earlier
+    # attempts via CSS ``order:`` collided with the full-width
+    # ``arch-bar-track`` / ``arch-tech`` grid items and pushed them
+    # above the labels.
+    if direction == _DIRECTION_NEGATIVE:
+        return (
+            '<div class="arch-row">'
+            f'{shap_html}{name_html}{bar_html}{tech_html}'
+            '</div>'
+        )
+    return (
+        '<div class="arch-row">'
+        f'{name_html}{shap_html}{bar_html}{tech_html}'
         '</div>'
     )
 
@@ -462,11 +482,23 @@ def _render_detail(
     aid = str(row.get("archetype_id"))
     version = str(row.get("archetype_version"))
 
-    chips = [
-        _chip("ID", aid),
-        _chip("Version", version),
-        _chip("Cluster size", _fmt_int(row.get("cluster_size"))),
-    ]
+    # Hero bubbles: the archetype name is shown as a soft pill so the
+    # full LLM-authored phrase is always visible (no h3 truncation), and
+    # the version sits in a more prominent accent bubble next to it --
+    # the version is what changes most frequently as new derivation runs
+    # ship, so an operator scanning across runs needs to spot it first.
+    name_bubble = (
+        f'<span class="arch-name-bubble" title="{escape(aid)}">{escape(name)}</span>'
+    )
+    version_bubble = (
+        f'<span class="arch-version-bubble">v{escape(version)}</span>'
+    )
+
+    # Secondary chips (everything except name/version, which now live in
+    # the hero bubbles). ID drops too — it's surfaced via the hover
+    # tooltip on the name bubble — but cluster size, mean churn, method,
+    # stability and model stay as informational chips.
+    chips = [_chip("Cluster size", _fmt_int(row.get("cluster_size")))]
     if not mean_churn_unreliable:
         mean_churn = _safe_float(row.get("cluster_mean_churn_probability"))
         if mean_churn is not None and mean_churn > 0:
@@ -492,8 +524,8 @@ def _render_detail(
         f"""
         <article class="catalog-detail">
           <div class="eyebrow">Archetype · readonly</div>
-          <h3 class="title">{escape(name)}</h3>
-          <p class="subtitle">{escape(aid)} · v{escape(version)}</p>
+          <div class="arch-hero-row">{name_bubble}{version_bubble}</div>
+          <p class="subtitle">{escape(aid)}</p>
           <div class="chip-row">{''.join(chips)}</div>
           {sections_html}
         </article>

@@ -243,8 +243,8 @@ def _render_stat_row() -> None:
     r = df.iloc[0]
 
     eligible = _compact_number(r.get("total_eligible"))
-    recommended = _compact_number(r.get("total_recommended"))
     value_at_risk = _compact_currency(r.get("total_value_at_risk"))
+    expected_loss = _compact_currency(r.get("total_expected_loss"))
     playbooks = _compact_number(r.get("active_playbooks"))
 
     eligible_breakdown = _stat_breakdown_html(
@@ -253,32 +253,31 @@ def _render_stat_row() -> None:
         _safe_float(r.get("eligible_low")),
         formatter=_compact_number,
     )
-    recommended_breakdown = _stat_breakdown_html(
-        _safe_float(r.get("recommended_high")),
-        _safe_float(r.get("recommended_medium")),
-        _safe_float(r.get("recommended_low")),
-        formatter=_compact_number,
-    )
     var_breakdown = _stat_breakdown_html(
         _safe_float(r.get("value_at_risk_high")),
         _safe_float(r.get("value_at_risk_medium")),
         _safe_float(r.get("value_at_risk_low")),
         formatter=lambda v: f"${_compact_currency(v)}",
     )
+    el_breakdown = _stat_breakdown_html(
+        _safe_float(r.get("expected_loss_high")),
+        _safe_float(r.get("expected_loss_medium")),
+        _safe_float(r.get("expected_loss_low")),
+        formatter=lambda v: f"${_compact_currency(v)}",
+    )
 
-    # "Recommended" reads as "the model says act on these" — which is
-    # confusing when only 14 of ~1K high-risk eligibles appear in it. The
-    # number is actually the cycle's action queue after the decision
-    # policy applies capacity caps, holdout sampling (random subset
-    # withheld to measure model lift), and cooldowns on recently-engaged
-    # accounts. The label, the help tooltip, and the explainer caption
-    # below the value all reinforce that meaning so a CSM doesn't read
-    # the gap as a model bug.
-    recommended_help = (
-        "Accounts the decision policy is pushing to CSMs this cycle. "
-        "Smaller than eligible by design — capacity caps per playbook, "
-        "random holdouts kept aside to measure model lift, and cooldowns "
-        "on accounts engaged recently."
+    # Expected loss = sum of P(churn) × value_at_risk across eligible
+    # accounts. Value-at-risk is "worst case if every eligible account
+    # churned"; expected loss is the probability-weighted projection of
+    # what we'd actually lose this cycle if we did nothing. The tier
+    # breakdown shows whether risk is concentrated (most $ in high
+    # tier = act first) or spread (similar weights across tiers = harder
+    # prioritization).
+    expected_loss_help = (
+        "Probability-weighted dollar exposure: Σ(churn_probability × value_at_risk) "
+        "across every eligible account. Read it as 'if we did nothing this cycle, "
+        "this is the realistic $ projection of what we'd lose'. The breakdown bar "
+        "shows how concentrated that risk is across tiers."
     )
 
     st.markdown(
@@ -289,16 +288,15 @@ def _render_stat_row() -> None:
             <span class="stat-value">{eligible}</span>
             {eligible_breakdown}
           </div>
-          <div class="stat" title="{escape(recommended_help)}">
-            <span class="stat-label">In active queue</span>
-            <span class="stat-value"><em>{recommended}</em></span>
-            <span class="stat-explainer">of {eligible} eligible · after capacity, holdouts, cooldowns</span>
-            {recommended_breakdown}
-          </div>
           <div class="stat">
             <span class="stat-label">Value at risk</span>
             <span class="stat-value">${value_at_risk}</span>
             {var_breakdown}
+          </div>
+          <div class="stat" title="{escape(expected_loss_help)}">
+            <span class="stat-label">Expected loss</span>
+            <span class="stat-value"><em>${expected_loss}</em></span>
+            {el_breakdown}
           </div>
           <div class="stat">
             <span class="stat-label">Active playbooks</span>
@@ -469,6 +467,12 @@ with _tab_dashboard:
         '<span class="accent-green">▬</span>&nbsp;low risk · '
         '<span class="accent-yellow">▬</span>&nbsp;medium · '
         '<span class="accent-blue">▬</span>&nbsp;high · click any playbook to drill'
+        '</p>'
+        '<p class="chart-caption chart-caption-note">'
+        'Tiles count every eligible (account, playbook) pair so each active play '
+        'is visible and clickable. An account that matches several playbooks '
+        'appears in each — so tile counts overlap and summing them across '
+        'playbooks will exceed the unique-account total in the figures above.'
         '</p>',
         unsafe_allow_html=True,
     )

@@ -538,6 +538,21 @@ hr, [data-testid="stHorizontalBlock"] + div { border: none; }
 .chart-caption .accent-green  { color: var(--green-600); }
 .chart-caption .accent-yellow { color: var(--yellow-600); }
 .chart-caption .accent-blue   { color: var(--blue-500); }
+/* Secondary caption -- explanatory prose under a chart, no upper-case
+   mono. Sits below the legend line as a soft note (e.g. the L1 treemap
+   overlap disclaimer). */
+.chart-caption-note {
+  font-family: var(--font-serif);
+  font-size: 0.85rem;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink-soft);
+  font-weight: 400;
+  font-style: italic;
+  max-width: 64ch;
+  margin-top: 0.35rem;
+  font-variation-settings: "opsz" 14;
+}
 
 /* --------------------------------------------------------------------------
    Streamlit alerts — pastel override
@@ -817,10 +832,12 @@ hr, [data-testid="stHorizontalBlock"] + div { border: none; }
   padding: 0.6rem 0;
 }
 
-/* Right column flips the row so the bar anchors against the central
-   divider and grows outward (rightward in left col, leftward in right
-   col). This produces a "fan-out" reading where the heaviest drivers on
-   both sides bracket the divider line. */
+/* Two-column rows: the Python renderer already emits HTML with the
+   correct DOM order per side (risk = name, value, bar, tech ;
+   protective = value, name, bar, tech). CSS just sets column widths
+   and text alignment per side -- no ``order:`` tricks, because those
+   collided with the full-width ``arch-bar-track`` / ``arch-tech``
+   grid items and pushed them above the labels. */
 .arch-col.risk .arch-row {
   grid-template-columns: 1fr auto;
   text-align: left;
@@ -829,9 +846,8 @@ hr, [data-testid="stHorizontalBlock"] + div { border: none; }
   grid-template-columns: auto 1fr;
   text-align: right;
 }
-.arch-col.prot .arch-row .arch-name { order: 2; }
-.arch-col.prot .arch-row .arch-shap { order: 1; text-align: left; }
-.arch-col.prot .arch-row .arch-bar-track .arch-bar { right: 0; left: auto; }
+.arch-col.risk .arch-row > .arch-shap { text-align: right; }
+.arch-col.prot .arch-row > .arch-shap { text-align: left; }
 
 .arch-row {
   display: grid;
@@ -851,6 +867,7 @@ hr, [data-testid="stHorizontalBlock"] + div { border: none; }
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: help;
+  min-width: 0;
 }
 .arch-shap {
   font-family: var(--font-mono);
@@ -878,7 +895,13 @@ hr, [data-testid="stHorizontalBlock"] + div { border: none; }
   display: block;
   transition: width 0.18s ease;
 }
-.arch-col.risk .arch-bar { left: 0; background: var(--yellow-400); }
+/* Bars mirror around the central divider: risk-driving (left column)
+   anchors to its LEFT edge and grows rightward; protective (right
+   column) anchors to its RIGHT edge and grows leftward. Both grow
+   TOWARD the divider, so the heaviest drivers on either side meet
+   near the middle — reading as one bidirectional chart split at the
+   divider line. */
+.arch-col.risk .arch-bar { left:  0; background: var(--yellow-400); }
 .arch-col.prot .arch-bar { right: 0; background: var(--green-400); }
 
 /* Per-row technical-detail expander beneath the bar — minimal, single
@@ -940,6 +963,52 @@ hr, [data-testid="stHorizontalBlock"] + div { border: none; }
   text-align: left;
 }
 .arch-col.prot .arch-tech > summary { text-align: right; }
+
+/* Archetype hero — name + version rendered as two bubbles so the full
+   LLM-authored phrase is always readable (no h3 truncation) and the
+   version, which rolls forward on every derivation run, is the most
+   visually weighted token next to it. */
+.arch-hero-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem 0.75rem;
+  margin: 0.2rem 0 0.55rem 0;
+}
+.arch-name-bubble {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-serif);
+  font-weight: 500;
+  font-size: clamp(1.05rem, 1.6vw, 1.35rem);
+  line-height: 1.25;
+  letter-spacing: -0.005em;
+  color: var(--ink);
+  background: var(--paper-deep);
+  border: 1px solid var(--paper-edge);
+  border-radius: 999px;
+  padding: 0.35rem 1rem;
+  max-width: 100%;
+  word-break: break-word;
+  font-variation-settings: "opsz" 24;
+  cursor: help;
+}
+.arch-version-bubble {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+  color: var(--orange-800);
+  background: var(--orange-50);
+  border: 1px solid var(--orange-200);
+  border-radius: 999px;
+  padding: 0.32rem 0.85rem;
+  white-space: nowrap;
+  text-transform: lowercase;
+  box-shadow: 0 1px 0 var(--orange-100);
+}
 
 /* Banner shown when cluster_mean_churn_probability is 0 across every
    archetype — surfaces the upstream-data gap instead of letting the

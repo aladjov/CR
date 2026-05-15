@@ -81,13 +81,18 @@ class TestPortfolioTotalsShape:
         assert "is_dashboard_visible" in body
 
     def test_emits_the_four_tile_columns(self):
-        # app.py reads these four keys via ``r.get(...)``. Renaming any of
+        # app.py reads these keys via ``r.get(...)``. Renaming any of
         # them silently breaks the L1 tiles -- pin the contract here.
+        # ``total_recommended`` is no longer rendered (the "In active
+        # queue" tile was removed), but the column is kept in the SQL
+        # output so downstream queries or future tiles can pick it up
+        # without another schema round-trip.
         body = _portfolio_totals_source()
         for col in (
             "total_eligible",
             "total_recommended",
             "total_value_at_risk",
+            "total_expected_loss",
             "active_playbooks",
         ):
             assert f"AS {col}" in body, f"column {col!r} missing from portfolio_totals SQL"
