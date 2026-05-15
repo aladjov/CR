@@ -149,6 +149,16 @@ def playbook_catalog_schema() -> "StructType":
             # description. Authored by CS leadership in the YAML. No feature
             # column names; business prose only.
             t["StructField"]("when_applicable", t["StringType"](), True),
+            # Enriched-prompt slots consumed by EnrichedPlaybook /
+            # llm_prompt._playbook_payload. ``policy_summary`` narrates what
+            # the CSM actually does (action sequence, cadence, channels);
+            # ``expected_effect`` narrates what the playbook is designed to
+            # achieve (saved ARR, NRR, dissatisfaction-signal capture). The
+            # loader has been emitting these fields ahead of the schema; this
+            # closes the strict row↔schema contract enforced by
+            # ``test_loaded_rows_match_schema_fields``.
+            t["StructField"]("policy_summary", t["StringType"](), True),
+            t["StructField"]("expected_effect", t["StringType"](), True),
         ]
     )
 
