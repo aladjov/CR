@@ -505,14 +505,13 @@ def _run_databricks(config: BatchInferenceConfig) -> BatchInferenceResult:
     t_prep = time.perf_counter()
     df_customers = spark.table(customer_table)
     if config.filter_expression:
-        # NB00's `sample_filter` predicate is stored in pandas/Python
-        # syntax (`column in ['a', 'b']`) because exploration filters via
-        # `df.query()`. Spark `df.filter()` needs SQL-tuple syntax
-        # (`column IN ('a', 'b')`). The same translator landing applies
-        # before its `df.filter(...)` call (see `findings_parser`
-        # invocation of `_spark_safe_query_expr`) — apply it here so the
-        # same predicate string drives both stages without operator
-        # intervention.
+        # The NB00 sample_filter predicate is stored in pandas-style
+        # syntax (Python list literals after IN) because exploration
+        # filters via the pandas query API. Spark df.filter needs
+        # SQL-tuple syntax instead. The same translator landing applies
+        # before its df.filter call (see findings_parser invocation of
+        # _spark_safe_query_expr) — apply it here so the same predicate
+        # string drives both stages without operator intervention.
         from customer_retention.core.compat import _spark_safe_query_expr
         _sql_filter = _spark_safe_query_expr(config.filter_expression)
         # Register sibling-temp-views for any bare-name table references
