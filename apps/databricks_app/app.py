@@ -17,7 +17,17 @@ import pandas as pd
 import streamlit as st
 from src.masthead import l1_title_html, masthead_title
 
-from src import accounts_view, archetype_view, auth, customer_profile, data, state, treemap
+from src import (
+    accounts_view,
+    archetype_view,
+    archetypes_view,
+    auth,
+    customer_profile,
+    data,
+    playbooks_view,
+    state,
+    treemap,
+)
 
 
 def _load_run_context() -> tuple[dict, str | None]:
@@ -401,13 +411,17 @@ def _render_l4_panel(entity_id: str, *, lead: str, key_namespace: str) -> None:
 # ---------------------------------------------------------------------------
 # Tabs
 # ---------------------------------------------------------------------------
-# Two intents:
-#   - Dashboard : top-down drill (L1 portfolio -> L2 playbook -> L3 list -> L4)
-#   - Search    : targeted lookup by entity_id, jumps straight to L4
-# State keys are intentionally distinct (`selected_entity` vs `searched_entity`)
-# so switching tabs doesn't fold a search hit into the drill breadcrumb (which
-# would skip L1/L2/L3 and confuse the trail).
-_tab_dashboard, _tab_search = st.tabs(["Dashboard", "Search"])
+# Four intents:
+#   - Dashboard  : top-down drill (L1 portfolio -> L2 playbook -> L3 list -> L4)
+#   - Playbooks  : readonly catalog of intervention designs (master + detail)
+#   - Archetypes : readonly catalog of model-derived clusters (master + detail)
+#   - Search     : targeted lookup by entity_id, jumps straight to L4
+# State keys are intentionally distinct (`selected_entity` vs `searched_entity`
+# vs `pb_detail_id` / `arch_detail_id`) so switching tabs doesn't fold one
+# selection into another's breadcrumb / drill state.
+_tab_dashboard, _tab_playbooks, _tab_archetypes, _tab_search = st.tabs(
+    ["Dashboard", "Playbooks", "Archetypes", "Search"]
+)
 
 
 with _tab_dashboard:
@@ -494,6 +508,39 @@ with _tab_dashboard:
             lead="Everything we know about this customer and why the model flagged them.",
             key_namespace="dash",
         )
+
+
+with _tab_playbooks:
+    _section_head(
+        eyebrow="Playbooks",
+        title="Intervention catalog",
+        lead=(
+            "Every playbook the model can recommend, with its target-trial "
+            "definition and the ordered step sequence a CSM works through "
+            "once an account is assigned."
+        ),
+    )
+    try:
+        playbooks_view.render()
+    except Exception as exc:
+        st.error(f"Playbooks view failed: {exc}")
+
+
+with _tab_archetypes:
+    _section_head(
+        eyebrow="Archetypes",
+        title="Behavioural clusters",
+        lead=(
+            "Active archetypes derived for the current model build. Each "
+            "row is a SHAP-space cluster with its driver features and "
+            "cluster statistics — the building blocks the eligibility "
+            "policy stitches into playbook recommendations."
+        ),
+    )
+    try:
+        archetypes_view.render()
+    except Exception as exc:
+        st.error(f"Archetypes view failed: {exc}")
 
 
 with _tab_search:

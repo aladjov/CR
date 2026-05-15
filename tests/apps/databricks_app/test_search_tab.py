@@ -142,17 +142,30 @@ class TestAppTabsLayout:
         return _APP_PY.read_text(encoding="utf-8")
 
     def test_tabs_split_into_dashboard_and_search(self, src):
-        assert 'st.tabs(["Dashboard", "Search"])' in src
+        # The dashboard now exposes four tabs: the original Dashboard/Search
+        # pair plus readonly Playbooks and Archetypes catalogs. The Dashboard
+        # tab still owns the L1→L4 drill and the Search tab still owns the
+        # entity-id lookup; the two new tabs are siblings that read from the
+        # same catalog views.
+        assert 'st.tabs(' in src
+        assert '"Dashboard"' in src
+        assert '"Playbooks"' in src
+        assert '"Archetypes"' in src
+        assert '"Search"' in src
         assert "_tab_dashboard" in src
+        assert "_tab_playbooks" in src
+        assert "_tab_archetypes" in src
         assert "_tab_search" in src
 
     def test_dashboard_tab_owns_l1_to_l3(self, src):
-        # All four levels of the existing cascade must move inside the
+        # All four levels of the existing cascade must live inside the
         # Dashboard tab so Search isn't littered with playbook treemaps.
+        # The Playbooks tab is the next sibling, so we slice the Dashboard
+        # block at ``with _tab_playbooks:``.
         dash_idx = src.find("with _tab_dashboard:")
-        search_idx = src.find("with _tab_search:")
-        assert dash_idx > 0 < search_idx and dash_idx < search_idx
-        dash_block = src[dash_idx:search_idx]
+        next_tab_idx = src.find("with _tab_playbooks:")
+        assert dash_idx > 0 < next_tab_idx and dash_idx < next_tab_idx
+        dash_block = src[dash_idx:next_tab_idx]
         for marker in (
             "Level 01 · Portfolio",
             "Level 02 · Playbook",

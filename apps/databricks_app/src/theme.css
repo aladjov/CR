@@ -43,6 +43,17 @@
   --green-600:   #3d7f4f;
   --green-800:   #1e4d2d;
 
+  /* Oranges — interactive highlight (tab indicator, selected row).
+     Tuned to sit between yellow-400 and a warm peach so it reads as a
+     deliberate accent against paper without screaming like Streamlit's
+     default red. */
+  --orange-50:   #fff3e6;
+  --orange-100:  #ffe2c2;
+  --orange-200:  #fbcb95;
+  --orange-400:  #e89a52;
+  --orange-600:  #b86f23;
+  --orange-800:  #7a4a18;
+
   /* Typography ---------------------------------------------------------- */
   --font-serif: 'Fraunces', 'Iowan Old Style', Georgia, serif;
   --font-sans:  'Geist', -apple-system, system-ui, sans-serif;
@@ -532,4 +543,234 @@ hr, [data-testid="stHorizontalBlock"] + div { border: none; }
 .element-container iframe {
   border: none !important;
   background: transparent !important;
+}
+
+/* --------------------------------------------------------------------------
+   Tabs — replace Streamlit's default red indicator with pastel orange
+   -------------------------------------------------------------------------- */
+.stTabs [data-baseweb="tab-list"] {
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+}
+.stTabs [data-baseweb="tab"] {
+  background: transparent !important;
+  color: var(--muted) !important;
+  font-family: var(--font-sans) !important;
+  font-size: 0.82rem !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.02em !important;
+  padding: 0.55rem 1.1rem !important;
+  border-radius: 6px 6px 0 0 !important;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.stTabs [data-baseweb="tab"]:hover {
+  background: var(--orange-50) !important;
+  color: var(--orange-800) !important;
+}
+.stTabs [data-baseweb="tab"][aria-selected="true"] {
+  color: var(--orange-800) !important;
+  background: var(--orange-50) !important;
+}
+/* Active-tab underline indicator */
+.stTabs [data-baseweb="tab-highlight"],
+.stTabs [data-baseweb="tab-border"] {
+  background-color: var(--orange-400) !important;
+}
+.stTabs [data-baseweb="tab-panel"] {
+  padding-top: 1.25rem;
+}
+
+/* Selected dataframe row — replace Streamlit's pink/red wash with a soft
+   orange tint that reads as a deliberate accent against paper. */
+[data-testid="stDataFrame"] [role="row"][aria-selected="true"] [role="gridcell"],
+[data-testid="stDataFrame"] [aria-selected="true"][role="gridcell"] {
+  background: var(--orange-50) !important;
+  color: var(--ink) !important;
+  box-shadow: inset 2px 0 0 var(--orange-400) !important;
+}
+
+/* --------------------------------------------------------------------------
+   Catalog (master-detail) — Playbooks & Archetypes tabs
+   -------------------------------------------------------------------------- */
+.catalog-detail {
+  margin-top: 1.75rem;
+  padding: 1.75rem 1.9rem;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 1px 0 var(--paper-edge);
+}
+.catalog-detail .eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--orange-600);
+  font-weight: 500;
+  margin-bottom: 0.5rem;
+}
+.catalog-detail .title {
+  font-family: var(--font-serif);
+  font-weight: 500;
+  font-size: clamp(1.4rem, 2.2vw, 1.85rem);
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  margin: 0 0 0.4rem 0;
+  font-variation-settings: "opsz" 72;
+}
+.catalog-detail .subtitle {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+  margin: 0 0 1.4rem 0;
+}
+.catalog-detail .chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: 0 0 1.5rem 0;
+}
+.catalog-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+  background: var(--paper-deep);
+  border: 1px solid var(--paper-edge);
+  border-radius: 999px;
+  padding: 0.22rem 0.7rem;
+  font-weight: 500;
+}
+.catalog-chip .label {
+  text-transform: uppercase;
+  font-size: 0.66rem;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  font-weight: 600;
+}
+.catalog-chip .value {
+  font-family: var(--font-mono);
+  color: var(--ink);
+  font-feature-settings: "tnum" 1, "lnum" 1;
+}
+.catalog-chip.accent { background: var(--orange-50); border-color: var(--orange-100); color: var(--orange-800); }
+.catalog-chip.accent .label { color: var(--orange-600); }
+.catalog-chip.accent .value { color: var(--orange-800); }
+
+.catalog-section {
+  margin: 0 0 1.5rem 0;
+}
+.catalog-section h4 {
+  font-family: var(--font-sans);
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  font-weight: 600;
+  margin: 0 0 0.45rem 0;
+}
+.catalog-section .prose {
+  font-family: var(--font-serif);
+  font-size: 1rem;
+  line-height: 1.65;
+  color: var(--ink-2);
+  margin: 0;
+  font-variation-settings: "opsz" 14;
+}
+.catalog-section .mono {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+  background: var(--paper-deep);
+  border: 1px solid var(--paper-edge);
+  border-radius: 6px;
+  padding: 0.55rem 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Step list (Playbooks) ----------------------------------------------------- */
+.step {
+  display: grid;
+  grid-template-columns: 38px 1fr;
+  gap: 0.85rem;
+  align-items: start;
+  padding: 0.85rem 0;
+  border-bottom: 1px dashed var(--paper-edge);
+}
+.step:last-child { border-bottom: none; }
+.step-num {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--orange-800);
+  background: var(--orange-50);
+  border: 1px solid var(--orange-100);
+  border-radius: 6px;
+  text-align: center;
+  padding: 0.32rem 0;
+  font-weight: 600;
+}
+.step-name {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--ink);
+  margin: 0 0 0.2rem 0;
+}
+.step-meta {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 1rem;
+}
+.step-meta span strong {
+  color: var(--ink-soft);
+  font-weight: 600;
+}
+
+/* Feature rows (Archetypes positive/negative drivers) ----------------------- */
+.feature-row {
+  display: grid;
+  grid-template-columns: 18px 1fr auto;
+  gap: 0.7rem;
+  align-items: baseline;
+  padding: 0.55rem 0;
+  border-bottom: 1px dashed var(--paper-edge);
+}
+.feature-row:last-child { border-bottom: none; }
+.feature-row .glyph {
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  line-height: 1;
+}
+.feature-row.pos .glyph { color: var(--blue-500); }
+.feature-row.neg .glyph { color: var(--green-600); }
+.feature-row .phrase {
+  font-family: var(--font-sans);
+  font-size: 0.92rem;
+  color: var(--ink);
+  font-weight: 500;
+}
+.feature-row .shap {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: var(--muted);
+  font-feature-settings: "tnum" 1, "lnum" 1;
+}
+
+/* Catalog tab description blocks (the small lead paragraph above the
+   master table). Keeps consistent visual rhythm with section-head. */
+.catalog-lead {
+  font-size: 0.96rem;
+  line-height: 1.6;
+  color: var(--ink-soft);
+  margin: 0 0 1.25rem 0;
 }

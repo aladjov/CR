@@ -310,6 +310,157 @@ def load_template_html_from_uc(composite_name: Optional[str] = None) -> Optional
 
 
 @st.cache_data(ttl=300, show_spinner=False)
+def playbook_catalog_all() -> pd.DataFrame:
+    """Latest-version row per playbook from ``playbook_catalog``.
+
+    The catalog is append-only — every YAML re-ingest writes a new
+    ``(playbook_id, version)`` row. We project the most-recently-active
+    row per playbook so the master table shows one line per intervention
+    design. Eligible / recommended counts come from
+    ``v_capacity_utilization`` for the latest scoring run; left-joined so
+    a freshly-loaded playbook with no scoring yet still renders.
+    """
+    cfg = load_config()
+    return _query(cfg, f"""
+        WITH latest_pb AS (
+            SELECT
+                playbook_id,
+                version,
+                name,
+                description,
+                when_applicable,
+                cost_per_customer_default,
+                expected_uplift_pct_default,
+                outcome_windows_days,
+                outcome_definition_version,
+                time_zero_definition,
+                grace_period_days,
+                followup_start_rule,
+                followup_end_rule,
+                default_estimand,
+                analysis_population_rule,
+                active_from,
+                active_to,
+                ROW_NUMBER() OVER (
+                    PARTITION BY playbook_id
+                    ORDER BY active_from DESC NULLS LAST, version DESC
+                ) AS rn
+            FROM {cfg.fqn_prefix}.playbook_catalog
+        ),
+        capacity AS (
+            SELECT playbook_id,
+                   SUM(eligible_count)    AS eligible_count,
+                   SUM(recommended_count) AS recommended_count,
+                   SUM(holdout_count)     AS holdout_count
+            FROM {cfg.fqn_prefix}.v_capacity_utilization
+            GROUP BY playbook_id
+        ),
+        step_counts AS (
+            SELECT playbook_id, playbook_version, COUNT(*) AS step_count
+            FROM {cfg.fqn_prefix}.playbook_steps
+            GROUP BY playbook_id, playbook_version
+        )
+        SELECT
+            p.playbook_id,
+            p.version,
+            p.name,
+            p.description,
+            p.when_applicable,
+            p.cost_per_customer_default,
+            p.expected_uplift_pct_default,
+            p.outcome_windows_days,
+            p.outcome_definition_version,
+            p.time_zero_definition,
+            p.grace_period_days,
+            p.followup_start_rule,
+            p.followup_end_rule,
+            p.default_estimand,
+            p.analysis_population_rule,
+            p.active_from,
+            p.active_to,
+            COALESCE(c.eligible_count, 0)    AS eligible_count,
+            COALESCE(c.recommended_count, 0) AS recommended_count,
+            COALESCE(c.holdout_count, 0)     AS holdout_count,
+            COALESCE(sc.step_count, 0)       AS step_count
+        FROM latest_pb p
+        LEFT JOIN capacity   c  ON c.playbook_id = p.playbook_id
+        LEFT JOIN step_counts sc ON sc.playbook_id = p.playbook_id
+                               AND sc.playbook_version = p.version
+        WHERE p.rn = 1
+        ORDER BY COALESCE(c.recommended_count, 0) DESC, p.name ASC
+    """)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def playbook_steps_for(playbook_id: str, version: str) -> pd.DataFrame:
+    """Ordered step rows for one ``(playbook_id, version)`` pair."""
+    cfg = load_config()
+    return _query(cfg, f"""
+        SELECT step_id, step_sequence, step_name, action_type,
+               automation_level, owner_role, cadence_trigger,
+               cadence_relative_to, cadence_offset_days, cadence_condition,
+               timeout_days, response_schema_id, intensity_param_name,
+               skip_conditions, stop_conditions
+        FROM {cfg.fqn_prefix}.playbook_steps
+        WHERE playbook_id = :pid AND playbook_version = :ver
+        ORDER BY step_sequence ASC
+    """, {"pid": playbook_id, "ver": version})
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def archetype_catalog_all() -> pd.DataFrame:
+    """Active archetypes from ``v_archetype_overview``.
+
+    One row per active archetype with cluster stats and the top-SHAP
+    driver array. The view is already filtered to ``status = 'active'``
+    so the master table reflects what's deployed against the latest
+    model build.
+    """
+    cfg = load_config()
+    return _query(cfg, f"""
+        SELECT
+            archetype_id,
+            archetype_version,
+            archetype_name,
+            archetype_description,
+            rationale,
+            cluster_size,
+            cluster_mean_churn_probability,
+            top_shap_features,
+            feature_thresholds,
+            model_name,
+            model_version,
+            derivation_method,
+            stability_vs_prior_version,
+            status,
+            valid_from,
+            valid_to
+        FROM {cfg.fqn_prefix}.v_archetype_overview
+        ORDER BY cluster_mean_churn_probability DESC NULLS LAST, cluster_size DESC
+    """)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def feature_business_phrases() -> pd.DataFrame:
+    """``feature_name → business_phrase`` map for archetype detail.
+
+    Joined client-side onto the raw SHAP-feature list so the Archetypes
+    tab can show a readable phrase next to each technical column name.
+    Reads ``v_feature_provenance``; returns an empty DataFrame when the
+    view is missing.
+    """
+    cfg = load_config()
+    try:
+        return _query(cfg, f"""
+            SELECT feature_name, business_phrase, source_dataset,
+                   aggregation_kind, window_phrase, polarity
+            FROM {cfg.fqn_prefix}.v_feature_provenance
+        """)
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
 def run_history() -> pd.DataFrame:
     cfg = load_config()
     return _query(cfg, f"""
