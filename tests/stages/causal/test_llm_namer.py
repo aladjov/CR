@@ -331,6 +331,27 @@ class TestDatabricksFoundationModelNamer:
         assert "low_nps" in prompt
         assert "0.420" in prompt or "0.42" in prompt
 
+    def test_legacy_prompt_carries_archetype_naming_rules(self):
+        """The legacy non-enriched path runs whenever the enrichment_builder
+        returns None (off-cluster, missing UC sidecars). Without naming
+        rules it produced labels like 'Archetype 0: high recent_vs_overall_ratio'
+        — useless in the dashboard. Every code path that asks the LLM for
+        a name must carry the same rules."""
+        client = _FakeDeployClient(
+            content=json.dumps(
+                {"archetype_name": "X", "archetype_description": "x", "playbooks": []}
+            )
+        )
+        namer = DatabricksFoundationModelNamer(endpoint_name="x")
+        namer._client = client
+        namer.name_archetype(_make_context())
+        prompt = client.last_kwargs["messages"][0]["content"]
+        assert "ARCHETYPE NAMING RULES" in prompt
+        for token in ("REQUIREMENTS", "GOOD EXAMPLES", "FORBIDDEN"):
+            assert token in prompt, f"naming rules block missing {token!r}"
+        for forbidden in ("Archetype 0", "shap", "Cluster 3"):
+            assert forbidden in prompt
+
     def test_prompt_injects_when_applicable_and_overlap_score(self):
         long_description = (
             "This is a deliberately long playbook description that exceeds the legacy "

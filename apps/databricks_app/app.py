@@ -266,6 +266,21 @@ def _render_stat_row() -> None:
         formatter=lambda v: f"${_compact_currency(v)}",
     )
 
+    # "Recommended" reads as "the model says act on these" — which is
+    # confusing when only 14 of ~1K high-risk eligibles appear in it. The
+    # number is actually the cycle's action queue after the decision
+    # policy applies capacity caps, holdout sampling (random subset
+    # withheld to measure model lift), and cooldowns on recently-engaged
+    # accounts. The label, the help tooltip, and the explainer caption
+    # below the value all reinforce that meaning so a CSM doesn't read
+    # the gap as a model bug.
+    recommended_help = (
+        "Accounts the decision policy is pushing to CSMs this cycle. "
+        "Smaller than eligible by design — capacity caps per playbook, "
+        "random holdouts kept aside to measure model lift, and cooldowns "
+        "on accounts engaged recently."
+    )
+
     st.markdown(
         f"""
         <div class="stat-row">
@@ -274,9 +289,10 @@ def _render_stat_row() -> None:
             <span class="stat-value">{eligible}</span>
             {eligible_breakdown}
           </div>
-          <div class="stat">
-            <span class="stat-label">Recommended</span>
+          <div class="stat" title="{escape(recommended_help)}">
+            <span class="stat-label">In active queue</span>
             <span class="stat-value"><em>{recommended}</em></span>
+            <span class="stat-explainer">of {eligible} eligible · after capacity, holdouts, cooldowns</span>
             {recommended_breakdown}
           </div>
           <div class="stat">

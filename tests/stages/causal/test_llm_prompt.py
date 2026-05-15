@@ -134,6 +134,32 @@ class TestBuildEnrichedPromptMessages:
         assert "business_phrase" in rationale_hint
         assert "verbatim" in rationale_hint
 
+    def test_system_message_carries_archetype_naming_rules(self):
+        """The naming rules block is what stops the LLM from emitting things
+        like 'Archetype 0: high feature_x' or 'Engagement Ratio Shift'.
+        Without explicit guidance the model defaults to either feature
+        names or cluster indices — both unreadable in the dashboard."""
+        system = build_enriched_prompt_messages(_ctx())[0]["content"]
+        assert "ARCHETYPE NAMING RULES" in system
+        # Required structural pieces — change these and the test re-anchors.
+        for token in ("REQUIREMENTS", "GOOD EXAMPLES", "FORBIDDEN"):
+            assert token in system, f"naming rules block missing {token!r}"
+        # At least one explicit forbidden pattern that the operator was
+        # actually seeing in production output.
+        for forbidden in ("Archetype 0", "shap", "Cluster 3"):
+            assert forbidden in system, (
+                f"forbidden naming pattern {forbidden!r} not surfaced — "
+                "operator was seeing this in dashboard output"
+            )
+
+    def test_response_schema_archetype_name_references_naming_rules(self):
+        """The schema slot for archetype_name must point at the naming rules
+        block so the model doesn't fall through to its default '2-4 word
+        label' interpretation (which produced feature-name labels)."""
+        payload = json.loads(build_enriched_prompt_messages(_ctx())[1]["content"])
+        name_schema = payload["response_schema"]["archetype_name"].lower()
+        assert "naming rules" in name_schema or "customer-segment" in name_schema
+
     def test_empty_contrast_and_playbooks_do_not_crash(self):
         payload = json.loads(
             build_enriched_prompt_messages(

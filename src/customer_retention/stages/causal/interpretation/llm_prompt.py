@@ -24,11 +24,51 @@ if TYPE_CHECKING:  # pragma: no cover
     )
 
 
+_ARCHETYPE_NAMING_RULES = (
+    "═══ ARCHETYPE NAMING RULES ═══\n"
+    "The archetype_name is the customer-facing label that appears in CSM\n"
+    "dashboards, intervention queues, and weekly reports. Humans read it\n"
+    "every day — quality matters more than the JSON envelope.\n\n"
+
+    "REQUIREMENTS:\n"
+    "  • 2-4 words, Title Case (\"Pre-Renewal Power Users\")\n"
+    "  • Names a CUSTOMER SEGMENT, not the data behind it — describe what\n"
+    "    these accounts ARE, not which features explain them\n"
+    "  • Uses CSM/retention vocabulary a non-technical operator recognises:\n"
+    "    Onboarding, Renewal, Win-Back, Expansion, At-Risk, Stable,\n"
+    "    Disengaged, High-Touch, Self-Serve, Power Users, Drop-Off,\n"
+    "    Long-Tenure, New, Pre-Cancel, Re-Engaging\n"
+    "  • Pattern: <CUSTOMER STATE adjective> + <CUSTOMER NOUN>\n\n"
+
+    "GOOD EXAMPLES:\n"
+    "  • \"New-Onboarding Adopters\"      (ramping engagement, recent start)\n"
+    "  • \"Pre-Renewal Power Users\"      (high engagement, renewal window)\n"
+    "  • \"Disengaged Long-Tenure\"       (low recent activity, established)\n"
+    "  • \"Cancellation Risk\"            (cancel-precursor patterns)\n"
+    "  • \"Stable Subscribers\"           (steady-state, low risk)\n"
+    "  • \"Re-Engaging Returners\"        (activity rebound after gap)\n"
+    "  • \"Single-Partner At-Risk\"       (concentration + cancel signal)\n\n"
+
+    "FORBIDDEN — these will be rejected at review:\n"
+    "  • \"Archetype 0\", \"Cluster 3\", or any reference to a numeric index\n"
+    "  • Raw feature names: \"High Recent Vs Overall Ratio\",\n"
+    "    \"Subscription Terminate Ratio Group\"\n"
+    "  • Statistical / modelling jargon: \"shap\", \"centroid\", \"cluster\",\n"
+    "    \"segment\" (without a state adjective), \"cohort\"\n"
+    "  • Bloated descriptions: \"High Engagement Existing Customers With\n"
+    "    Subscription Activity\" — keep it ≤ 4 words\n"
+    "  • Pure feature mentions: \"Engagement Ratio Shift\" (it's a feature\n"
+    "    name; say what the customer IS, e.g. \"Re-Engaging Returners\")\n"
+)
+
+
 _SYSTEM_MESSAGE = (
     "You are naming customer-churn archetypes and rating retention-playbook fit. "
     "Every numeric fact in the user payload is already narrated — you MUST NOT "
     "invent thresholds, percentages, or counts. Reference provided business "
     "phrases verbatim. Output JSON only, no prose commentary.\n\n"
+
+    + _ARCHETYPE_NAMING_RULES + "\n"
 
     "═══ SCORING RUBRIC ═══\n"
     "fit_score is a 0.0-1.0 measure of how well THIS PLAYBOOK ADDRESSES THIS "
@@ -60,10 +100,15 @@ _SYSTEM_MESSAGE = (
 )
 
 _RESPONSE_SCHEMA = {
-    "archetype_name": "2-4 word label, Title Case",
+    "archetype_name": (
+        "2-4 word Title-Case label following ARCHETYPE NAMING RULES. "
+        "Customer-segment language only — never feature names, cluster numbers, "
+        "or statistical jargon. See system message for examples."
+    ),
     "archetype_description": (
-        "2 sentences. The second sentence MUST quote the eligibility_rule_prose "
-        "verbatim (or say 'no eligibility rule' when absent)."
+        "2 sentences. First sentence describes the customer segment in business "
+        "terms (no feature names). Second sentence MUST quote the "
+        "eligibility_rule_prose verbatim (or say 'no eligibility rule' when absent)."
     ),
     "contrast_with_sibling": (
         "1 sentence using the sibling_contrast phrases. Empty string when "

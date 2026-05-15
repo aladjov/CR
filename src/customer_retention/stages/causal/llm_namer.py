@@ -531,10 +531,42 @@ class DatabricksFoundationModelNamer:
             "   would apply IF its members showed risk.\n"
             "4. Return JSON only — no commentary, no markdown fences.\n\n"
 
+            "═══ ARCHETYPE NAMING RULES ═══\n"
+            "The archetype_name is the customer-facing label that appears in CSM\n"
+            "dashboards, intervention queues, and weekly reports. Humans read it\n"
+            "every day — quality matters more than the JSON envelope.\n\n"
+            "REQUIREMENTS:\n"
+            "  • 2-4 words, Title Case (e.g. \"Pre-Renewal Power Users\")\n"
+            "  • Names a CUSTOMER SEGMENT, not the data behind it — describe what\n"
+            "    these accounts ARE, not which features explain them\n"
+            "  • Uses CSM/retention vocabulary a non-technical operator recognises:\n"
+            "    Onboarding, Renewal, Win-Back, Expansion, At-Risk, Stable,\n"
+            "    Disengaged, High-Touch, Self-Serve, Power Users, Drop-Off,\n"
+            "    Long-Tenure, New, Pre-Cancel, Re-Engaging\n"
+            "  • Pattern: <CUSTOMER STATE adjective> + <CUSTOMER NOUN>\n\n"
+            "GOOD EXAMPLES:\n"
+            "  • \"New-Onboarding Adopters\"      (ramping engagement, recent start)\n"
+            "  • \"Pre-Renewal Power Users\"      (high engagement, renewal window)\n"
+            "  • \"Disengaged Long-Tenure\"       (low recent activity, established)\n"
+            "  • \"Cancellation Risk\"            (cancel-precursor patterns)\n"
+            "  • \"Stable Subscribers\"           (steady-state, low risk)\n"
+            "  • \"Re-Engaging Returners\"        (activity rebound after gap)\n"
+            "  • \"Single-Partner At-Risk\"       (concentration + cancel signal)\n\n"
+            "FORBIDDEN — these will be rejected at review:\n"
+            "  • \"Archetype 0\", \"Cluster 3\", or any reference to a numeric index\n"
+            "  • Raw feature names: \"High Recent Vs Overall Ratio\",\n"
+            "    \"Subscription Terminate Ratio Group\"\n"
+            "  • Statistical / modelling jargon: shap, centroid, cluster, segment\n"
+            "    (without a state adjective), cohort\n"
+            "  • Bloated descriptions: \"High Engagement Existing Customers With\n"
+            "    Subscription Activity\" — keep it ≤ 4 words\n"
+            "  • Pure feature mentions: \"Engagement Ratio Shift\" (it's a feature\n"
+            "    name; say what the customer IS, e.g. \"Re-Engaging Returners\")\n\n"
+
             "═══ OUTPUT SCHEMA (strict) ═══\n"
             '{\n'
-            '  "archetype_name": "<2-4 words capturing the dominant risk pattern>",\n'
-            '  "archetype_description": "<exactly 2 sentences>",\n'
+            '  "archetype_name": "<2-4 word customer-segment label per ARCHETYPE NAMING RULES>",\n'
+            '  "archetype_description": "<exactly 2 sentences; first describes the customer segment in business terms (no feature names)>",\n'
             '  "playbooks": [\n'
             '    {"playbook_id": "...", "fit_score": 0.0, "rationale": "<one sentence per the rubric>"}\n'
             f'    /* exactly {n_playbooks} entries, sorted by fit_score desc */\n'
