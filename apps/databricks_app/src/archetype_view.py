@@ -1,6 +1,18 @@
-"""L2 — Archetype breakdown for the selected playbook, click-to-drill.
+"""L2 — Playbook recommendations for the selected archetype, click-to-drill.
 
-Same pastel palette as L1, scoped to one playbook.
+Despite the filename (kept for git-history continuity), this view is
+about PLAYBOOKS now: once a CSM picks an archetype at L1, the L2
+treemap shows every playbook the eligibility policy mapped to that
+archetype, sized by the count of accounts in the slice, coloured by
+``fit_score`` -- the model's per-(playbook, archetype) goodness-of-fit
+score. The plum gradient is a deliberate sibling to L1's green/yellow/
+blue: same lightness/saturation envelope, distinct hue family, so the
+eye reads L2 as "this is a different split of the same cohort".
+
+When the L1 click pinned a risk_tier (user clicked a tier-leaf rather
+than the archetype tile), we pass that through so this view shows only
+that slice -- matching the "whatever tiers are visible at the upper
+level remain on all lower levels" intent.
 """
 from __future__ import annotations
 
@@ -8,34 +20,77 @@ import plotly.express as px
 import streamlit as st
 
 from . import data, state
-from .treemap import PASTEL_COLORSCALE
+from .treemap import PASTEL_FIT_COLORSCALE
 
 
 def render() -> None:
-    pb = state.get("selected_playbook")
-    if not pb:
+    archetype = state.get("selected_archetype")
+    if not archetype:
         return
-    df = data.archetypes_for_playbook(pb)
+    risk_tier = state.get("selected_risk_tier")
+    df = data.playbooks_for_archetype(archetype, risk_tier=risk_tier)
     if df.empty:
-        st.info(f"No archetypes found for playbook **{pb}**.")
+        # The view honours the (archetype, risk_tier) subset, so empty
+        # means "no playbooks matched this archetype at this tier" --
+        # explicit enough that the user understands it's a real zero,
+        # not a missing-data hiccup.
+        if risk_tier:
+            st.info(
+                f"No playbooks matched **{archetype}** at **{risk_tier}** risk in the latest run."
+            )
+        else:
+            st.info(f"No playbooks matched **{archetype}** in the latest run.")
         return
+
+    # Pre-fill missing fit_score / uplift values so the hover template
+    # never renders "None" -- the LEFT JOIN in the SQL leaves them NULL
+    # when an archetype-version isn't represented in eligibility_policy.
+    df = df.copy()
+    df["fit_score"] = df["fit_score"].fillna(0.0)
+    df["expected_uplift_pct"] = df["expected_uplift_pct"].fillna(0.0)
+
+    # The root tile carries the selected archetype's name so the tree
+    # reads as "archetype → playbook → tier" rather than "→ playbook →
+    # tier" floating in space. When the L1 click also pinned a tier we
+    # collapse the third level (everything is that tier already).
+    path = [px.Constant(archetype), "playbook_name"]
+    if not risk_tier:
+        path.append("risk_tier")
 
     fig = px.treemap(
         df,
-        path=[px.Constant(pb), "archetype_name", "risk_tier"],
-        values="account_count",
-        color="mean_churn_probability",
-        color_continuous_scale=PASTEL_COLORSCALE,
+        path=path,
+        values="eligible_count",
+        color="fit_score",
+        color_continuous_scale=PASTEL_FIT_COLORSCALE,
         range_color=(0.0, 1.0),
-        custom_data=["archetype_name", "risk_tier", "total_value_at_risk", "mean_churn_probability"],
+        custom_data=[
+            "playbook_name",
+            "risk_tier",
+            "total_value_at_risk",
+            "mean_churn_probability",
+            "fit_score",
+            "expected_uplift_pct",
+        ],
     )
+
+    # Tile label: name + accts + fit-score so the headline number is
+    # legible on the chart itself. The leaf rows (risk_tier tiles) get
+    # a slimmer label because they're narrow; the parent playbook tiles
+    # get the full readout.
     fig.update_traces(
         textposition="middle center",
-        texttemplate="<b>%{label}</b><br><span style='font-size:11px; opacity:0.75'>%{value:,} accts</span>",
+        texttemplate=(
+            "<b>%{label}</b>"
+            "<br><span style='font-size:11px; opacity:0.78'>%{value:,} accts</span>"
+            "<br><span style='font-size:10.5px; opacity:0.7'>fit %{customdata[4]:.2f} · +%{customdata[5]:.0%} uplift</span>"
+        ),
         textfont=dict(family="Geist, system-ui, sans-serif", size=12, color="#1b2230"),
         hovertemplate=(
             "<b>%{customdata[0]}</b> · %{customdata[1]}"
-            "<br>Accounts: %{value:,}"
+            "<br>Eligible accounts: %{value:,}"
+            "<br>Fit score: %{customdata[4]:.2f}"
+            "<br>Expected uplift: %{customdata[5]:.1%}"
             "<br>Value at risk: $%{customdata[2]:,.0f}"
             "<br>Mean churn prob: %{customdata[3]:.1%}<extra></extra>"
         ),
@@ -51,46 +106,61 @@ def render() -> None:
         plot_bgcolor="rgba(0,0,0,0)",
         font=dict(family="Geist, system-ui, sans-serif", size=12, color="#1b2230"),
         height=380,
-        coloraxis_showscale=False,
+        # Surface a slim colorbar on the right so the plum gradient is
+        # decoded: "darker = stronger fit". Same minimal styling as the
+        # L1 colorbar so the two charts feel like one report.
+        coloraxis_colorbar=dict(
+            title=dict(text="fit", font=dict(size=10, color="#98a0ac")),
+            thickness=6,
+            len=0.55,
+            tickfont=dict(
+                size=10, color="#98a0ac",
+                family="JetBrains Mono, ui-monospace, monospace",
+            ),
+            outlinewidth=0,
+            ticks="outside",
+            tickformat=".1f",
+            x=1.02,
+        ),
     )
 
     selected = st.plotly_chart(
         fig,
         use_container_width=True,
-        key=f"archetype_treemap_{pb}",
+        key=f"l2_playbook_treemap::{archetype}::{risk_tier or 'all'}",
         on_select="rerun",
         selection_mode="points",
     )
 
-    archetype, risk_tier = _extract_click(selected)
-    if archetype and archetype != pb:
-        # Update archetype if it changed; ALWAYS update risk_tier (None
-        # when the user clicked the archetype tile itself rather than a
-        # risk-tier leaf -- so re-clicking the parent archetype unfilters
-        # the previously-selected tier).
-        rerun = False
-        if archetype != state.get("selected_archetype"):
-            state.set_archetype(archetype)
-            rerun = True
-        if risk_tier != state.get("selected_risk_tier"):
-            state.set_risk_tier(risk_tier)
-            rerun = True
-        if rerun:
-            st.rerun()
+    playbook, tier_from_click = _extract_click(selected, archetype=archetype)
+    if not playbook or playbook == archetype:
+        return
+    rerun = False
+    if playbook != state.get("selected_playbook"):
+        state.set_playbook(playbook)
+        rerun = True
+    # The L1 click may already have pinned a risk_tier. If the user
+    # clicked a tier leaf here we override; otherwise we keep what L1
+    # set. Clicking the playbook tile itself (tier_from_click=None)
+    # while L1 already pinned a tier should leave the tier alone --
+    # they're narrowing within the same tier.
+    if tier_from_click and tier_from_click != state.get("selected_risk_tier"):
+        state.set_risk_tier(tier_from_click)
+        rerun = True
+    if rerun:
+        st.rerun()
 
 
 _RISK_TIER_LABELS = ("High", "Medium", "Low")
 
 
-def _extract_click(event) -> tuple[str | None, str | None]:
-    """Return ``(archetype_name, risk_tier_or_None)`` for the clicked tile.
+def _extract_click(event, *, archetype: str) -> tuple[str | None, str | None]:
+    """Return ``(playbook_name, risk_tier_or_None)`` for the clicked tile.
 
-    Tree layout: ``<playbook> → archetype_name → risk_tier``. Clicking the
-    risk-tier leaf must resolve BOTH to the parent archetype AND to the
-    leaf's risk_tier so the In-Scope table can filter by tier (the user
-    just told us which slice they care about). Clicking the archetype
-    tile itself returns ``(archetype, None)`` so the table shows every
-    tier under that archetype.
+    Tree layout: ``<archetype> → playbook_name → risk_tier``. Clicking
+    the risk-tier leaf must resolve BOTH to the parent playbook AND to
+    the tier so the L3 table narrows to that slice. Clicking the
+    playbook tile returns ``(playbook, None)``.
     """
     if not event:
         return None, None
@@ -102,19 +172,16 @@ def _extract_click(event) -> tuple[str | None, str | None]:
     parent = (p.get("parent") or "").strip()
     if not label:
         return None, None
-    pb = state.get("selected_playbook") or ""
-    # Root tile (playbook name used as synthetic root) — ignore
-    if label == pb:
+    # Root tile (archetype as synthetic root) — ignore.
+    if label == archetype:
         return None, None
-    # Top-level archetype tile — parent is the root (playbook name or "")
-    if parent in ("", pb) or parent.endswith(f"/{pb}") or parent == pb:
+    # Top-level playbook tile — parent is the archetype root.
+    if parent in ("", archetype) or parent.endswith(f"/{archetype}"):
         return label, None
-    # Risk-tier leaf — label is the tier, parent encodes the archetype
+    # Risk-tier leaf — label is the tier, parent encodes the playbook.
     if label in _RISK_TIER_LABELS:
-        archetype = parent.rsplit("/", 1)[-1] if "/" in parent else parent
-        return archetype, label
-    # Defensive fallback (unexpected layout): treat parent as archetype, no
-    # tier filter. Better to under-filter than to lose the click entirely.
+        playbook = parent.rsplit("/", 1)[-1] if "/" in parent else parent
+        return playbook, label
     if "/" in parent:
         return parent.rsplit("/", 1)[-1], None
     return parent, None

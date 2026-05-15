@@ -71,22 +71,20 @@ def _query(cfg: AppConfig, sql_text: str, params: Optional[dict[str, Any]] = Non
 
 
 @st.cache_data(ttl=60, show_spinner=False)
-def portfolio_by_playbook_risk_tier() -> pd.DataFrame:
-    """Per-(playbook, risk_tier) rollup for the L1 treemap.
+def portfolio_by_archetype_risk_tier() -> pd.DataFrame:
+    """Per-(archetype, risk_tier) rollup for the L1 treemap.
 
-    This is intentionally NOT entity-grain. ``v_portfolio_risk_matrix``
-    (and its source ``v_account_primary_recommendation``) collapses each
-    account to its single PRIMARY play -- so a playbook for which every
-    eligible account also matched a higher-fit play would render as a
-    zero-tile and be unclickable, even though it's an active filter
-    target.
+    Archetype is per-entity (one ``archetype_id`` per scored account in
+    ``eligibility_snapshot``), so this is entity-grain by construction —
+    tiles never overlap and summing across tiles equals the unique
+    eligible-account count. That's the right grain for an L1 "where
+    does the portfolio sit" view that doubles as a filter into the
+    Playbook-recommendations treemap below.
 
-    The treemap doubles as the level-2 selector, so we want every
-    *active* playbook to be visible. We read ``eligibility_snapshot``
-    directly and count every (entity, playbook) eligibility row -- an
-    account appearing in N plays appears in N tiles. The chart caption
-    below the treemap calls out the overlap so a CSM doesn't read a
-    tile-sum as a deduplicated account count.
+    Counts are taken once per (entity, archetype, risk_tier) using
+    ``policy_rank_among_eligible = 1`` -- otherwise an account matching
+    N playbooks would be counted N times even though its archetype
+    assignment is the same in every row.
     """
     cfg = load_config()
     return _query(cfg, f"""
@@ -98,25 +96,116 @@ def portfolio_by_playbook_risk_tier() -> pd.DataFrame:
             )
             LIMIT 1
         ),
+        archetype_names AS (
+            SELECT archetype_id, MAX(name) AS archetype_name
+            FROM {cfg.fqn_prefix}.archetype_catalog
+            WHERE status = 'active'
+            GROUP BY archetype_id
+        ),
+        primary_only AS (
+            SELECT s.entity_id, s.archetype_id, s.risk_tier,
+                   s.value_at_risk, s.churn_probability,
+                   s.recommended, s.is_holdout
+            FROM {cfg.fqn_prefix}.eligibility_snapshot s
+            JOIN latest_run lr ON s.scoring_run_id = lr.scoring_run_id
+            WHERE s.policy_rank_among_eligible = 1
+              AND COALESCE(s.is_dashboard_visible, TRUE) = TRUE
+        )
+        SELECT
+            COALESCE(an.archetype_name, p.archetype_id) AS archetype_name,
+            p.risk_tier,
+            COUNT(*)                                       AS eligible_count,
+            SUM(CASE WHEN p.recommended THEN 1 ELSE 0 END) AS recommended_count,
+            SUM(CASE WHEN p.is_holdout  THEN 1 ELSE 0 END) AS holdout_count,
+            SUM(COALESCE(p.value_at_risk, 0))              AS total_value_at_risk,
+            AVG(p.churn_probability)                       AS mean_churn_probability
+        FROM primary_only p
+        LEFT JOIN archetype_names an ON p.archetype_id = an.archetype_id
+        GROUP BY an.archetype_name, p.archetype_id, p.risk_tier
+    """)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def playbooks_for_archetype(archetype_name: str, risk_tier: Optional[str] = None) -> pd.DataFrame:
+    """Per-(playbook, risk_tier) rollup for the L2 treemap, scoped to an archetype.
+
+    Tile size = eligible accounts matching ``(archetype, playbook[, risk_tier])``;
+    colour = fit_score, the model's per-(playbook, archetype) goodness-
+    of-match value from ``eligibility_policy``. ``fit_score`` is joined
+    by archetype_version (the version stored in ``eligibility_policy.archetype_ids``,
+    NOT the logical archetype_id -- see the dashboard_views SQL for the
+    same dance).
+
+    When ``risk_tier`` is supplied the L1 click drilled into a specific
+    tier; we subset here so the L2 treemap shows only that slice across
+    every playbook -- matching the "whatever classes are visible on the
+    treemap remain on lower levels" intent.
+    """
+    cfg = load_config()
+    params: dict[str, Any] = {"archetype_name": archetype_name}
+    risk_tier_filter = ""
+    if risk_tier:
+        risk_tier_filter = "AND s.risk_tier = :risk_tier"
+        params["risk_tier"] = risk_tier
+    return _query(cfg, f"""
+        WITH latest_run AS (
+            SELECT scoring_run_id
+            FROM {cfg.fqn_prefix}.eligibility_snapshot
+            WHERE as_of_date = (
+                SELECT MAX(as_of_date) FROM {cfg.fqn_prefix}.eligibility_snapshot
+            )
+            LIMIT 1
+        ),
+        archetype_names AS (
+            SELECT archetype_id, MAX(name) AS archetype_name
+            FROM {cfg.fqn_prefix}.archetype_catalog
+            WHERE status = 'active'
+            GROUP BY archetype_id
+        ),
         playbook_names AS (
             SELECT playbook_id, MAX(name) AS playbook_name
             FROM {cfg.fqn_prefix}.playbook_catalog
             GROUP BY playbook_id
+        ),
+        active_policy_per_arch AS (
+            -- Fit score is per (playbook, archetype_version). Explode
+            -- the array column and pick the row with the highest
+            -- fit_score per (playbook, archetype_version) -- there's
+            -- typically only one active row but this stays robust.
+            SELECT
+                av AS archetype_version,
+                e.playbook_id,
+                MAX(e.fit_score) AS fit_score,
+                MAX(e.expected_uplift_pct) AS expected_uplift_pct
+            FROM {cfg.fqn_prefix}.eligibility_policy e
+            LATERAL VIEW EXPLODE(COALESCE(e.archetype_ids, ARRAY())) tbl AS av
+            WHERE e.status = 'active'
+            GROUP BY av, e.playbook_id
         )
         SELECT
-            COALESCE(pn.playbook_name, s.playbook_id) AS playbook_name,
+            COALESCE(an.archetype_name, s.archetype_id) AS archetype_name,
+            COALESCE(pn.playbook_name, s.playbook_id)   AS playbook_name,
+            s.playbook_id,
             s.risk_tier,
-            COUNT(*)                                                            AS eligible_count,
-            SUM(CASE WHEN s.recommended THEN 1 ELSE 0 END)                       AS recommended_count,
-            SUM(CASE WHEN s.is_holdout  THEN 1 ELSE 0 END)                       AS holdout_count,
-            SUM(COALESCE(s.value_at_risk, 0))                                    AS total_value_at_risk,
-            AVG(s.churn_probability)                                             AS mean_churn_probability
+            COUNT(*)                                            AS eligible_count,
+            SUM(CASE WHEN s.recommended THEN 1 ELSE 0 END)       AS recommended_count,
+            SUM(COALESCE(s.value_at_risk, 0))                    AS total_value_at_risk,
+            AVG(s.churn_probability)                             AS mean_churn_probability,
+            MAX(ap.fit_score)                                    AS fit_score,
+            MAX(ap.expected_uplift_pct)                          AS expected_uplift_pct
         FROM {cfg.fqn_prefix}.eligibility_snapshot s
         JOIN latest_run lr ON s.scoring_run_id = lr.scoring_run_id
-        LEFT JOIN playbook_names pn ON s.playbook_id = pn.playbook_id
+        LEFT JOIN archetype_names an ON s.archetype_id = an.archetype_id
+        LEFT JOIN playbook_names  pn ON s.playbook_id  = pn.playbook_id
+        LEFT JOIN active_policy_per_arch ap
+               ON ap.archetype_version = s.archetype_version
+              AND ap.playbook_id       = s.playbook_id
         WHERE COALESCE(s.is_dashboard_visible, TRUE) = TRUE
-        GROUP BY pn.playbook_name, s.playbook_id, s.risk_tier
-    """)
+          AND COALESCE(an.archetype_name, s.archetype_id) = :archetype_name
+          {risk_tier_filter}
+        GROUP BY an.archetype_name, s.archetype_id,
+                 pn.playbook_name, s.playbook_id, s.risk_tier
+    """, params)
 
 
 @st.cache_data(ttl=60, show_spinner=False)

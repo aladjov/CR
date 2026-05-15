@@ -448,12 +448,15 @@ with _tab_dashboard:
     _render_stat_row()
 
     _section_head(
-        eyebrow="Playbooks breakdown",
+        eyebrow="Archetypes breakdown",
         title="Where the cohort sits today",
         lead=(
-            "Every eligible customer across every active playbook. Tile size is the "
-            "eligible cohort; tile colour tracks mean churn probability — pale green "
-            "is safe, amber-yellow needs a look, deeper hues mean act first."
+            "Every eligible customer grouped by the model-derived archetype that "
+            "best describes their behaviour. Each account belongs to exactly one "
+            "archetype, so tiles never overlap — summing them across the chart "
+            "equals the total eligible cohort. Tile size is the cohort count; "
+            "tile colour tracks mean churn probability (pale green is safe, "
+            "amber-yellow needs a look, deeper hues mean act first)."
         ),
     )
 
@@ -466,48 +469,53 @@ with _tab_dashboard:
         '<p class="chart-caption">'
         '<span class="accent-green">▬</span>&nbsp;low risk · '
         '<span class="accent-yellow">▬</span>&nbsp;medium · '
-        '<span class="accent-blue">▬</span>&nbsp;high · click any playbook to drill'
-        '</p>'
-        '<p class="chart-caption chart-caption-note">'
-        'Tiles count every eligible (account, playbook) pair so each active play '
-        'is visible and clickable. An account that matches several playbooks '
-        'appears in each — so tile counts overlap and summing them across '
-        'playbooks will exceed the unique-account total in the figures above.'
+        '<span class="accent-blue">▬</span>&nbsp;high · click an archetype or a tier to drill'
         '</p>',
         unsafe_allow_html=True,
     )
 
-    # --- Level 2 · Playbook drill ------------------------------------------
-    _selected_playbook = state.get("selected_playbook")
-    if _selected_playbook:
+    # --- Level 2 · Playbook recommendations for selected archetype ---------
+    _selected_archetype = state.get("selected_archetype")
+    _selected_risk_tier = state.get("selected_risk_tier")
+    if _selected_archetype:
+        l2_title = escape(str(_selected_archetype))
+        if _selected_risk_tier:
+            l2_title = f"{l2_title} <span style='color:var(--muted);font-weight:400'>· {escape(_selected_risk_tier)} risk</span>"
         _level_header(
             level=2,
-            eyebrow="Level 02 · Playbook",
-            title_html=escape(str(_selected_playbook)),
+            eyebrow="Level 02 · Playbook recommendations",
+            title_html=l2_title,
             lead=(
-                "Archetypes within this playbook. Each tile is a behavioural cluster "
-                "of customers who share risk drivers. Click an archetype to narrow "
-                "the list below."
+                "Playbooks the model recommends for this archetype, ranked by "
+                "fit score (deeper plum = stronger match) and sized by the count "
+                "of accounts in the slice. Hover for the expected uplift the "
+                "policy associates with each pairing; click a tile to narrow the "
+                "list below."
             ),
         )
         try:
             archetype_view.render()
         except Exception as exc:
-            st.error(f"Archetype view failed: {exc}")
+            st.error(f"Playbook recommendations view failed: {exc}")
 
     # --- Level 3 · Customer list -------------------------------------------
-    if _selected_playbook:
-        _archetype = state.get("selected_archetype")
-        if _archetype:
+    if _selected_archetype:
+        _selected_playbook = state.get("selected_playbook")
+        scope_parts = [str(_selected_archetype)]
+        if _selected_playbook:
+            scope_parts.append(str(_selected_playbook))
+        if _selected_risk_tier:
+            scope_parts.append(f"{_selected_risk_tier} risk")
+        scope_str = " · ".join(scope_parts)
+        lead_l3 = (
+            f"Customers in {scope_str}, sorted by expected loss. "
+            "Click a row to open the profile below."
+        )
+        if not _selected_playbook:
             lead_l3 = (
-                f"Customers in {_selected_playbook} · {_archetype}, "
-                "sorted by expected loss. Click a row to open the profile below."
-            )
-        else:
-            lead_l3 = (
-                f"Customers in {_selected_playbook}, sorted by expected loss. "
+                f"Customers in {scope_str}, sorted by expected loss. "
                 "Click a row to open the profile below, or narrow further by "
-                "picking an archetype tile above."
+                "picking a playbook tile above."
             )
         _level_header(
             level=3,

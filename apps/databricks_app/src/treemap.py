@@ -1,8 +1,17 @@
-"""L1 — Playbook × risk-tier treemap, click-to-drill.
+"""L1 — Archetype × risk-tier treemap, click-to-drill.
 
 Pastel editorial palette: green (safe) → yellow (caution) → soft blue (focus),
-no red anywhere. Tile size encodes eligible-account count; colour tracks mean
-churn probability.
+no red anywhere. Tile size encodes the eligible-account count for the
+archetype; colour tracks mean churn probability for the cohort inside the
+tile.
+
+Archetype is per-entity (one ``archetype_id`` per scored account), so
+this treemap is entity-grain by construction — tiles never overlap and
+summing across the chart equals the unique-account total in the L1
+stat row. Clicking a tile sets ``selected_archetype`` (and
+``selected_risk_tier`` when the click landed on a risk-tier leaf), and
+the L2 treemap below renders the playbook recommendations for that
+exact slice.
 """
 from __future__ import annotations
 
@@ -20,6 +29,18 @@ PASTEL_COLORSCALE = [
     (1.00, "#8bb5d3"),   # blue-300   · high (ink-attention, no red)
 ]
 
+# L2 fit-score gradient (plum). Same lightness/saturation envelope as
+# the L1 palette so the two charts read as siblings, but a clearly
+# different hue family so the eye registers L2 as a "different split"
+# at a glance. Values mirror --plum-* in theme.css :root.
+PASTEL_FIT_COLORSCALE = [
+    (0.00, "#f4eff5"),   # plum-50    · pale lavender (low fit)
+    (0.30, "#e6d8ec"),   # plum-100   · soft tint
+    (0.60, "#cdb3da"),   # plum-200   · clear mauve
+    (0.85, "#a07cbb"),   # plum-400   · saturated plum
+    (1.00, "#6e4a8c"),   # plum-600   · deep mulberry (best fit)
+]
+
 
 _LAYOUT_COMMON = dict(
     margin=dict(t=44, l=0, r=60, b=0),
@@ -31,19 +52,27 @@ _LAYOUT_COMMON = dict(
 
 
 def render() -> None:
-    df = data.portfolio_by_playbook_risk_tier()
+    df = data.portfolio_by_archetype_risk_tier()
     if df.empty:
-        st.info("No portfolio data yet — run c05 (publish_dashboard_views) against a scored snapshot.")
+        st.info(
+            "No portfolio data yet — run c05 (publish_dashboard_views) against a "
+            "scored snapshot, and confirm c02/c03 have published active archetypes."
+        )
         return
 
     fig = px.treemap(
         df,
-        path=[px.Constant("All"), "playbook_name", "risk_tier"],
+        path=[px.Constant("All"), "archetype_name", "risk_tier"],
         values="eligible_count",
         color="mean_churn_probability",
         color_continuous_scale=PASTEL_COLORSCALE,
         range_color=(0.0, 1.0),
-        custom_data=["playbook_name", "risk_tier", "total_value_at_risk", "mean_churn_probability"],
+        custom_data=[
+            "archetype_name",
+            "risk_tier",
+            "total_value_at_risk",
+            "mean_churn_probability",
+        ],
     )
     fig.update_traces(
         textposition="middle center",
@@ -98,37 +127,53 @@ def render() -> None:
         selection_mode="points",
     )
 
-    clicked = _extract_click(selected)
-    if clicked and clicked != "All":
-        if clicked != state.get("selected_playbook"):
-            state.set_playbook(clicked)
+    archetype, risk_tier = _extract_click(selected)
+    if archetype and archetype != "All":
+        rerun = False
+        if archetype != state.get("selected_archetype"):
+            state.set_archetype(archetype)
+            rerun = True
+        # Clicking a risk-tier LEAF inside an archetype must pin the
+        # tier so L2 / L3 see the same slice. Clicking the archetype
+        # TILE itself (risk_tier=None) should clear any prior leaf
+        # selection so the L2 view shows every tier under the archetype.
+        if risk_tier != state.get("selected_risk_tier"):
+            state.set_risk_tier(risk_tier)
+            rerun = True
+        if rerun:
             st.rerun()
 
 
-def _extract_click(event) -> str | None:
-    """Return the clicked playbook name.
+_RISK_TIER_LABELS = ("High", "Medium", "Low")
 
-    Tree layout: All → playbook_name → risk_tier. Use `parent` so the drill-down
-    resolves to the playbook regardless of which level the user clicked — clicking
-    a risk-tier leaf must still select its parent playbook.
+
+def _extract_click(event) -> tuple[str | None, str | None]:
+    """Return ``(archetype_name, risk_tier_or_None)`` for the clicked tile.
+
+    Tree layout: ``All → archetype_name → risk_tier``. Clicking the
+    risk-tier leaf must resolve BOTH to the parent archetype AND to the
+    leaf's risk_tier so downstream views narrow to that slice. Clicking
+    the archetype tile returns ``(archetype, None)`` so the L2 treemap
+    shows every tier under that archetype.
     """
     if not event:
-        return None
+        return None, None
     points = (event.get("selection") or {}).get("points") or []
     if not points:
-        return None
+        return None, None
     p = points[0]
     label = (p.get("label") or "").strip()
     parent = (p.get("parent") or "").strip()
     if not label or label == "All":
-        return None
-    # Top-level playbook tile — parent is the synthetic root
+        return None, None
+    # Top-level archetype tile (parent is the synthetic root)
     if parent in ("", "All"):
-        return label
-    # Drilled into risk-tier leaf — parent IS the playbook
-    if parent == "All" or parent == "":
-        return label
-    # Leaf with parent = "All/<playbook>" (plotly sometimes prefixes with root)
-    if parent.startswith("All/"):
-        return parent.split("/", 1)[1]
-    return parent
+        return label, None
+    # Risk-tier leaf — label is the tier, parent encodes the archetype
+    if label in _RISK_TIER_LABELS:
+        archetype = parent.rsplit("/", 1)[-1] if "/" in parent else parent
+        return archetype, label
+    # Defensive: unexpected layout — treat parent as the archetype.
+    if "/" in parent:
+        return parent.rsplit("/", 1)[-1], None
+    return parent, None

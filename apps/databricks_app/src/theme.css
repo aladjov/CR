@@ -54,6 +54,18 @@
   --orange-600:  #b86f23;
   --orange-800:  #7a4a18;
 
+  /* Plums — the L2 fit-score gradient. Same lightness/saturation
+     envelope as the green / yellow / blue / orange family so the eye
+     reads it as a deliberate sibling palette, but a distinctly cool-
+     mauve hue family so L2 signals "different split" from L1's
+     mean-churn gradient at a glance. */
+  --plum-50:     #f4eff5;
+  --plum-100:    #e6d8ec;
+  --plum-200:    #cdb3da;
+  --plum-400:    #a07cbb;
+  --plum-600:    #6e4a8c;
+  --plum-800:    #432a59;
+
   /* Typography ---------------------------------------------------------- */
   --font-serif: 'Fraunces', 'Iowan Old Style', Georgia, serif;
   --font-sans:  'Geist', -apple-system, system-ui, sans-serif;
