@@ -235,7 +235,8 @@ def portfolio_totals() -> pd.DataFrame:
             LIMIT 1
         ),
         primary_only AS (
-            SELECT s.entity_id, s.recommended, s.value_at_risk, s.risk_tier
+            SELECT s.entity_id, s.recommended, s.value_at_risk, s.risk_tier,
+                   s.churn_probability
             FROM {cfg.fqn_prefix}.eligibility_snapshot s
             JOIN latest_run lr ON s.scoring_run_id = lr.scoring_run_id
             WHERE s.policy_rank_among_eligible = 1

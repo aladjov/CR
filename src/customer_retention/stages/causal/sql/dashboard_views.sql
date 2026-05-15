@@ -363,22 +363,31 @@ ranked AS (
         ) AS entity_rank
     FROM joined
 ),
+-- One row per entity_id (every entity in `ranked` shows up), so the
+-- downstream LEFT JOIN never produces a NULL `alternates`. Entities with
+-- no rank>1 row collect into an empty array. This removes the need for a
+-- `COALESCE(alts.alternates, ARRAY())` fallback in the outer SELECT --
+-- that fallback used an untyped empty array literal which Spark coerced
+-- to STRUCT with all-nullable fields, flipping the view's stored schema
+-- nullability across re-publishes and tripping
+-- `DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION` on subsequent queries.
 alternates_collected AS (
     SELECT
         entity_id,
-        COLLECT_LIST(NAMED_STRUCT(
-            'playbook_id',                playbook_id,
-            'playbook_name',              playbook_name,
-            'risk_tier',                  risk_tier,
-            'churn_probability',          churn_probability,
-            'expected_loss',              expected_loss,
-            'fit_score',                  fit_score,
-            'expected_uplift_pct',        expected_uplift_pct,
-            'policy_rank_among_eligible', policy_rank_among_eligible,
-            'recommended',                recommended
-        )) AS alternates
+        COLLECT_LIST(
+            IF(entity_rank > 1, NAMED_STRUCT(
+                'playbook_id',                playbook_id,
+                'playbook_name',              playbook_name,
+                'risk_tier',                  risk_tier,
+                'churn_probability',          churn_probability,
+                'expected_loss',              expected_loss,
+                'fit_score',                  fit_score,
+                'expected_uplift_pct',        expected_uplift_pct,
+                'policy_rank_among_eligible', policy_rank_among_eligible,
+                'recommended',                recommended
+            ), NULL)
+        ) AS alternates
     FROM ranked
-    WHERE entity_rank > 1
     GROUP BY entity_id
 )
 SELECT
@@ -409,8 +418,10 @@ SELECT
     p.model_version,
     -- Other plays the account also passed eligibility for, sorted by
     -- expected_loss DESC so the most-impactful alternate sits first.
+    -- `alts.alternates` is guaranteed non-NULL by `alternates_collected`
+    -- (one row per entity, possibly with an empty array).
     ARRAY_SORT(
-        COALESCE(alts.alternates, ARRAY()),
+        alts.alternates,
         (a1, a2) ->
             CASE
                 WHEN COALESCE(a1.expected_loss, -1.0) > COALESCE(a2.expected_loss, -1.0) THEN -1
@@ -418,7 +429,7 @@ SELECT
                 ELSE 0
             END
     ) AS alternates,
-    SIZE(COALESCE(alts.alternates, ARRAY())) AS alternate_count,
+    SIZE(alts.alternates) AS alternate_count,
     p.scoring_run_id,
     p.as_of_date
 FROM ranked p
