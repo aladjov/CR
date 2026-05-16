@@ -129,12 +129,19 @@ def portfolio_by_archetype_risk_tier() -> pd.DataFrame:
 def playbooks_for_archetype(archetype_name: str, risk_tier: Optional[str] = None) -> pd.DataFrame:
     """Per-(playbook, risk_tier) rollup for the L2 treemap, scoped to an archetype.
 
-    Tile size = eligible accounts matching ``(archetype, playbook[, risk_tier])``;
-    colour = fit_score, the model's per-(playbook, archetype) goodness-
-    of-match value from ``eligibility_policy``. ``fit_score`` is joined
-    by archetype_version (the version stored in ``eligibility_policy.archetype_ids``,
-    NOT the logical archetype_id -- see the dashboard_views SQL for the
-    same dance).
+    Tile size = number of ENTITIES in the archetype whose PRIMARY play
+    is this playbook. The earlier implementation counted rows of
+    ``eligibility_snapshot`` -- which has one row per (entity, playbook)
+    eligibility match -- so when every entity in an archetype was
+    eligible for every play, every tile under that archetype showed an
+    identical count (the full archetype's cohort), not its own. Sourcing
+    from ``v_account_primary_recommendation`` (one row per entity at
+    its primary play) restores the intended grain: summing tiles within
+    one archetype/tier equals the L1 archetype/tier count, never more.
+
+    Colour = ``fit_score``, the model's per-(playbook, archetype)
+    goodness-of-match value (already joined onto the source view, so we
+    don't need a separate ``eligibility_policy`` explode here).
 
     When ``risk_tier`` is supplied the L1 click drilled into a specific
     tier; we subset here so the L2 treemap shows only that slice across
@@ -145,66 +152,24 @@ def playbooks_for_archetype(archetype_name: str, risk_tier: Optional[str] = None
     params: dict[str, Any] = {"archetype_name": archetype_name}
     risk_tier_filter = ""
     if risk_tier:
-        risk_tier_filter = "AND s.risk_tier = :risk_tier"
+        risk_tier_filter = "AND p.risk_tier = :risk_tier"
         params["risk_tier"] = risk_tier
     return _query(cfg, f"""
-        WITH latest_run AS (
-            SELECT scoring_run_id
-            FROM {cfg.fqn_prefix}.eligibility_snapshot
-            WHERE as_of_date = (
-                SELECT MAX(as_of_date) FROM {cfg.fqn_prefix}.eligibility_snapshot
-            )
-            LIMIT 1
-        ),
-        archetype_names AS (
-            SELECT archetype_id, MAX(name) AS archetype_name
-            FROM {cfg.fqn_prefix}.archetype_catalog
-            WHERE status = 'active'
-            GROUP BY archetype_id
-        ),
-        playbook_names AS (
-            SELECT playbook_id, MAX(name) AS playbook_name
-            FROM {cfg.fqn_prefix}.playbook_catalog
-            GROUP BY playbook_id
-        ),
-        active_policy_per_arch AS (
-            -- Fit score is per (playbook, archetype_version). Explode
-            -- the array column and pick the row with the highest
-            -- fit_score per (playbook, archetype_version) -- there's
-            -- typically only one active row but this stays robust.
-            SELECT
-                av AS archetype_version,
-                e.playbook_id,
-                MAX(e.fit_score) AS fit_score,
-                MAX(e.expected_uplift_pct) AS expected_uplift_pct
-            FROM {cfg.fqn_prefix}.eligibility_policy e
-            LATERAL VIEW EXPLODE(COALESCE(e.archetype_ids, ARRAY())) tbl AS av
-            WHERE e.status = 'active'
-            GROUP BY av, e.playbook_id
-        )
         SELECT
-            COALESCE(an.archetype_name, s.archetype_id) AS archetype_name,
-            COALESCE(pn.playbook_name, s.playbook_id)   AS playbook_name,
-            s.playbook_id,
-            s.risk_tier,
+            p.archetype_name,
+            p.playbook_name,
+            p.playbook_id,
+            p.risk_tier,
             COUNT(*)                                            AS eligible_count,
-            SUM(CASE WHEN s.recommended THEN 1 ELSE 0 END)       AS recommended_count,
-            SUM(COALESCE(s.value_at_risk, 0))                    AS total_value_at_risk,
-            AVG(s.churn_probability)                             AS mean_churn_probability,
-            MAX(ap.fit_score)                                    AS fit_score,
-            MAX(ap.expected_uplift_pct)                          AS expected_uplift_pct
-        FROM {cfg.fqn_prefix}.eligibility_snapshot s
-        JOIN latest_run lr ON s.scoring_run_id = lr.scoring_run_id
-        LEFT JOIN archetype_names an ON s.archetype_id = an.archetype_id
-        LEFT JOIN playbook_names  pn ON s.playbook_id  = pn.playbook_id
-        LEFT JOIN active_policy_per_arch ap
-               ON ap.archetype_version = s.archetype_version
-              AND ap.playbook_id       = s.playbook_id
-        WHERE COALESCE(s.is_dashboard_visible, TRUE) = TRUE
-          AND COALESCE(an.archetype_name, s.archetype_id) = :archetype_name
+            SUM(CASE WHEN p.recommended THEN 1 ELSE 0 END)      AS recommended_count,
+            SUM(COALESCE(p.value_at_risk, 0))                   AS total_value_at_risk,
+            AVG(p.churn_probability)                            AS mean_churn_probability,
+            MAX(p.fit_score)                                    AS fit_score,
+            MAX(p.expected_uplift_pct)                          AS expected_uplift_pct
+        FROM {cfg.fqn_prefix}.v_account_primary_recommendation p
+        WHERE p.archetype_name = :archetype_name
           {risk_tier_filter}
-        GROUP BY an.archetype_name, s.archetype_id,
-                 pn.playbook_name, s.playbook_id, s.risk_tier
+        GROUP BY p.archetype_name, p.playbook_name, p.playbook_id, p.risk_tier
     """, params)
 
 
