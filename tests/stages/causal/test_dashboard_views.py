@@ -306,10 +306,23 @@ class TestPublishDashboardViews:
         # the materialization pass: per non-composite spec, three more calls
         # (CREATE OR REPLACE TABLE, OPTIMIZE ZORDER, CREATE OR REPLACE VIEW)
         # that snapshot the hot-path view into an indexed Delta table so the
-        # app's per-click reads collapse to point lookups.
-        assert spark.sql.call_count == (
-            expected + 2 + _MATERIALIZE_NONCOMPOSITE_SQL_CALLS
+        # app's per-click reads collapse to point lookups. Each CREATE VIEW
+        # statement is now preceded by a DROP VIEW IF EXISTS so stored view
+        # schemas reset cleanly on every publish (Unity Catalog otherwise
+        # holds onto stale nullability metadata that trips downstream casts).
+        view_create_count = (
+            len(DASHBOARD_VIEW_NAMES)
+            + len(DASHBOARD_PROVENANCE_VIEW_NAMES)
+            + len(DASHBOARD_TEMPLATE_VIEW_NAMES)
         )
+        assert spark.sql.call_count == (
+            expected + 2 + _MATERIALIZE_NONCOMPOSITE_SQL_CALLS + view_create_count
+        )
+        drop_calls = [
+            call for call in spark.sql.call_args_list
+            if call.args[0].startswith("DROP VIEW IF EXISTS")
+        ]
+        assert len(drop_calls) == view_create_count
         view_calls = [
             call for call in spark.sql.call_args_list
             if "CREATE OR REPLACE VIEW" in call.args[0]

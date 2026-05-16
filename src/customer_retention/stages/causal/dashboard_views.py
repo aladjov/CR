@@ -257,6 +257,23 @@ def _gold_all_columns(spark: "SparkSession", gold_fqn: str) -> List[str]:
     return [field.name for field in struct_type]
 
 
+_VIEW_NAME_RE = re.compile(
+    r"\bCREATE\s+(?:OR\s+REPLACE\s+)?VIEW\s+(?:IF\s+NOT\s+EXISTS\s+)?"
+    r"(`?[\w.]+`?(?:\.`?[\w.]+`?){0,2})",
+    re.IGNORECASE,
+)
+
+
+def _extract_view_fqn(stmt: str) -> Optional[str]:
+    """Return the fully-qualified view name from a CREATE [OR REPLACE] VIEW
+    statement, or ``None`` if the statement isn't a view creation. Used by
+    ``publish_dashboard_views`` to issue ``DROP VIEW IF EXISTS`` before the
+    CREATE so the stored view schema is reset on every publish.
+    """
+    match = _VIEW_NAME_RE.search(stmt)
+    return match.group(1) if match else None
+
+
 def split_view_statements(sql_text: str) -> List[str]:
     """Split a multi-statement SQL string on semicolons.
 
@@ -828,8 +845,24 @@ def publish_dashboard_views(
         gold_columns=gold_all_cols,
     )
     statements = split_view_statements(rendered)
+    # Drop each view before re-creating it so schema migrations actually
+    # take effect. `CREATE OR REPLACE VIEW` is documented as schema-safe,
+    # but on Unity Catalog the stored view schema is not always updated
+    # when the new body's column nullability differs from the stored one
+    # (e.g. an array-of-struct field flipping ``DOUBLE NOT NULL`` ↔
+    # ``DOUBLE`` between publishes). The stale stored schema then trips
+    # ``DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION`` at query time inside
+    # any downstream view that selects the column via ``base.*``. A
+    # ``DROP VIEW IF EXISTS`` per statement removes the stored schema
+    # before the CREATE writes the new one, and the publish loop is
+    # ordered so base views are recreated before dependents — Spark
+    # views don't cascade-invalidate, the next CREATE just compiles
+    # against whichever base view is current.
     submitted: List[str] = []
     for stmt in statements:
+        view_fqn = _extract_view_fqn(stmt)
+        if view_fqn is not None:
+            spark.sql(f"DROP VIEW IF EXISTS {view_fqn}")
         spark.sql(stmt)
         submitted.append(stmt)
         logger.info("published dashboard view (%d chars)", len(stmt))
