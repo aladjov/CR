@@ -196,9 +196,18 @@ def _apply_risk_tier_borders(fig, *, archetype: str, has_tier_level: bool) -> No
     if not fig.data:
         return
     trace = fig.data[0]
-    labels = list(getattr(trace, "labels", []) or [])
-    parents = list(getattr(trace, "parents", []) or [])
-    if not labels:
+    # ``trace.labels`` / ``.parents`` come back as numpy arrays from
+    # plotly. We can't use the ``getattr(...) or default`` pattern here
+    # because ``bool(ndarray)`` with len > 1 raises "truth value of an
+    # array with more than one element is ambiguous". Resolve to None
+    # explicitly, then convert via ``list(...)`` only when present.
+    labels_attr = getattr(trace, "labels", None)
+    parents_attr = getattr(trace, "parents", None)
+    if labels_attr is None or parents_attr is None:
+        return
+    labels = list(labels_attr)
+    parents = list(parents_attr)
+    if len(labels) == 0 or len(parents) == 0:
         return
 
     line_colors: list[str] = []
