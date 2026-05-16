@@ -100,6 +100,18 @@ def render() -> None:
         ),
         root=dict(color="rgba(0,0,0,0)"),
     )
+
+    # Per-tile risk-tier border. Plotly express flattens the tree into
+    # one trace, so `fig.data[0].labels` carries roots + parents + leaves
+    # in one array. We walk that array and stamp a tier-coloured border
+    # only on the tier-leaf nodes (label is one of High/Medium/Low AND
+    # parent is a playbook, not the synthetic archetype root). Parent
+    # playbook tiles and the archetype root keep the existing paper
+    # border. Width bumps to 4px on tier leaves so the colour is visible
+    # even on thin tiles -- the L1 risk palette (blue-300 / yellow-400 /
+    # green-400) is reused verbatim so the same colour means the same
+    # thing in both charts.
+    _apply_risk_tier_borders(fig, archetype=archetype, has_tier_level=not risk_tier)
     fig.update_layout(
         margin=dict(t=8, l=0, r=60, b=0),
         paper_bgcolor="rgba(0,0,0,0)",
@@ -152,6 +164,66 @@ def render() -> None:
 
 
 _RISK_TIER_LABELS = ("High", "Medium", "Low")
+
+# L1 risk-tier palette, re-used verbatim on the L2 tile borders so the
+# same hue means the same thing in both charts. Sourced from the
+# ``--blue-300 / --yellow-400 / --green-400`` tokens in ``theme.css``.
+_TIER_BORDER_COLORS = {
+    "High":   "#8bb5d3",   # blue-300
+    "Medium": "#e8c259",   # yellow-400
+    "Low":    "#6bac7a",   # green-400
+}
+_DEFAULT_BORDER_COLOR = "#faf9f4"  # --paper (the existing tile separator)
+
+
+def _apply_risk_tier_borders(fig, *, archetype: str, has_tier_level: bool) -> None:
+    """Stamp per-tile border colour by risk_tier on the leaf nodes.
+
+    Plotly express flattens the (archetype → playbook → tier) tree into
+    one trace where ``fig.data[0].labels`` / ``.parents`` carry every
+    node including roots and intermediate parents. We compute a colour
+    array the same length and width array of equal length, then assign
+    both onto ``marker.line``. Tier leaves get a 4-px tier-coloured
+    stroke; everything else keeps the existing paper-coloured 3-px
+    separator so the tree's visual rhythm doesn't change.
+
+    ``has_tier_level=False`` is the "L1 click already pinned a tier"
+    case: the tree collapses to two levels and there are no tier
+    leaves to stamp -- the function short-circuits.
+    """
+    if not has_tier_level:
+        return
+    if not fig.data:
+        return
+    trace = fig.data[0]
+    labels = list(getattr(trace, "labels", []) or [])
+    parents = list(getattr(trace, "parents", []) or [])
+    if not labels:
+        return
+
+    line_colors: list[str] = []
+    line_widths: list[float] = []
+    for label, parent in zip(labels, parents):
+        label_s = (label or "").strip()
+        parent_s = (parent or "").strip()
+        # A tier leaf has the tier name as its label AND a non-root,
+        # non-archetype parent (= the playbook that owns it). The
+        # synthetic archetype root sits at the top of the tree, so any
+        # parent that isn't blank and isn't the archetype must be the
+        # playbook owner.
+        is_tier_leaf = (
+            label_s in _RISK_TIER_LABELS
+            and parent_s
+            and parent_s != archetype
+        )
+        if is_tier_leaf:
+            line_colors.append(_TIER_BORDER_COLORS.get(label_s, _DEFAULT_BORDER_COLOR))
+            line_widths.append(4.0)
+        else:
+            line_colors.append(_DEFAULT_BORDER_COLOR)
+            line_widths.append(3.0)
+    trace.marker.line.color = line_colors
+    trace.marker.line.width = line_widths
 
 
 def _extract_click(event, *, archetype: str) -> tuple[str | None, str | None]:

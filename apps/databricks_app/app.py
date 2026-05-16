@@ -498,6 +498,18 @@ with _tab_dashboard:
         except Exception as exc:
             st.error(f"Playbook recommendations view failed: {exc}")
 
+        if not _selected_risk_tier:
+            st.markdown(
+                '<p class="chart-caption">'
+                'fill: fit score (deeper plum = stronger match) · '
+                'border: '
+                '<span class="accent-green">▬</span>&nbsp;low · '
+                '<span class="accent-yellow">▬</span>&nbsp;medium · '
+                '<span class="accent-blue">▬</span>&nbsp;high'
+                '</p>',
+                unsafe_allow_html=True,
+            )
+
     # --- Level 3 · Customer list -------------------------------------------
     if _selected_archetype:
         _selected_playbook = state.get("selected_playbook")
