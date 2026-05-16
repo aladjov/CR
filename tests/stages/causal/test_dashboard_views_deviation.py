@@ -41,20 +41,35 @@ _BASE_NON_DEVIATION_STATEMENTS = (
 #   - ``deviation`` specs only run when composite_name resolves to a
 #     non-None ``effective_composite`` (v_account_feature_deviation +
 #     v_account_feature_deviation_topn).
+# Each spec also produces one CREATE OR REPLACE VIEW per
+# ``refresh_dependents`` entry so downstream views' stored schema
+# metadata realigns with the now-Delta-backed source (otherwise reads
+# through the dependents throw CAST_WITHOUT_SUGGESTION on the relaxed
+# nullability of COALESCE-derived columns).
 _MATERIALIZE_NONCOMPOSITE_SPECS = sum(
     1 for s in _MATERIALIZED_VIEW_SPECS if not s.requires_composite
+)
+_MATERIALIZE_NONCOMPOSITE_REFRESHES = sum(
+    len(s.refresh_dependents)
+    for s in _MATERIALIZED_VIEW_SPECS if not s.requires_composite
 )
 _MATERIALIZE_DEVIATION_SPECS = sum(
     1 for s in _MATERIALIZED_VIEW_SPECS if s.requires_composite
 )
+_MATERIALIZE_DEVIATION_REFRESHES = sum(
+    len(s.refresh_dependents)
+    for s in _MATERIALIZED_VIEW_SPECS if s.requires_composite
+)
 # Subset that becomes a CREATE OR REPLACE VIEW (everything except the
 # template table's CREATE TABLE), including the materialization re-points
-# of the hot-path views.
+# of the hot-path views and the refresh-pass re-publishes of their
+# dependent views.
 _BASE_NON_DEVIATION_VIEW_CALLS = (
     len(DASHBOARD_VIEW_NAMES)
     + len(DASHBOARD_PROVENANCE_VIEW_NAMES)
     + len(DASHBOARD_TEMPLATE_VIEW_NAMES)
     + _MATERIALIZE_NONCOMPOSITE_SPECS
+    + _MATERIALIZE_NONCOMPOSITE_REFRESHES
 )
 
 
@@ -195,6 +210,7 @@ def test_publish_with_composite_name_runs_extra_statements():
         _BASE_NON_DEVIATION_VIEW_CALLS
         + len(DASHBOARD_DEVIATION_VIEW_NAMES)
         + _MATERIALIZE_DEVIATION_SPECS
+        + _MATERIALIZE_DEVIATION_REFRESHES
     )
     view_calls = [
         call for call in spark.sql.call_args_list

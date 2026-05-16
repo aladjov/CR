@@ -22,11 +22,20 @@ from customer_retention.stages.causal.dashboard_views import (
 # (i.e. specs whose ``requires_composite`` is False). Each spec adds three
 # spark.sql calls: CTAS, OPTIMIZE, and a final CREATE OR REPLACE VIEW that
 # re-points the public view at the materialized Delta table. Only the third
-# of those three is a CREATE OR REPLACE VIEW.
+# of those three is a CREATE OR REPLACE VIEW. After each spec, every
+# entry in ``refresh_dependents`` produces one extra CREATE OR REPLACE
+# VIEW so downstream views' stored schema metadata realigns with the
+# now-Delta-backed source.
 _MATERIALIZE_NONCOMPOSITE_SPECS = sum(
     1 for s in _MATERIALIZED_VIEW_SPECS if not s.requires_composite
 )
-_MATERIALIZE_NONCOMPOSITE_SQL_CALLS = _MATERIALIZE_NONCOMPOSITE_SPECS * 3
+_MATERIALIZE_NONCOMPOSITE_REFRESHES = sum(
+    len(s.refresh_dependents)
+    for s in _MATERIALIZED_VIEW_SPECS if not s.requires_composite
+)
+_MATERIALIZE_NONCOMPOSITE_SQL_CALLS = (
+    _MATERIALIZE_NONCOMPOSITE_SPECS * 3 + _MATERIALIZE_NONCOMPOSITE_REFRESHES
+)
 
 
 class TestResolveGoldDedupOrderBy:
@@ -332,6 +341,7 @@ class TestPublishDashboardViews:
             + len(DASHBOARD_PROVENANCE_VIEW_NAMES)
             + len(DASHBOARD_TEMPLATE_VIEW_NAMES)
             + _MATERIALIZE_NONCOMPOSITE_SPECS
+            + _MATERIALIZE_NONCOMPOSITE_REFRESHES
         )
 
     def test_ensures_run_context_table_before_publishing_views(self):

@@ -633,12 +633,24 @@ class _MaterializedViewSpec:
     through the view name keep working with identical semantics. The
     only observable change is read latency on a per-entity ``WHERE
     entity_id = :eid`` lookup.
+
+    ``refresh_dependents`` lists views downstream of the materialized
+    one (they reference ``view_name`` by name in their SELECT/FROM).
+    After step 3 we re-execute each dependent's CREATE OR REPLACE VIEW
+    statement so its stored schema metadata realigns with the now
+    table-backed source. Without this refresh, Spark fails reads
+    through the dependent with ``[DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION]``
+    because the dependent's metadata captured the pre-materialization
+    schema (e.g. ``DOUBLE NOT NULL`` on COALESCE'd columns inside an
+    ``ARRAY<STRUCT<...>>``) while the table-backed source emits the
+    relaxed type (Delta does not preserve NOT NULL by default).
     """
 
     view_name: str
     table_name: str
     zorder_col: str
     requires_composite: bool
+    refresh_dependents: tuple[str, ...] = ()
 
 
 # Hot-path views whose bodies are re-executed on every L1-L4 page click.
@@ -657,6 +669,20 @@ _MATERIALIZED_VIEW_SPECS: tuple[_MaterializedViewSpec, ...] = (
         table_name="dashboard_account_primary_recommendation",
         zorder_col="entity_id",
         requires_composite=False,
+        # v_portfolio_risk_matrix / v_playbook_archetype_rollup /
+        # v_eligible_all_playbooks all source from
+        # v_account_primary_recommendation. Their stored schemas capture
+        # the NOT NULL nullability of the COALESCE-derived columns
+        # (``expected_loss``, ``alternates[].expected_loss``) at the
+        # original publish. The materialization relaxes those columns
+        # to nullable (Delta default) -- without a follow-up refresh
+        # any read through these dependents throws
+        # CAST_WITHOUT_SUGGESTION.
+        refresh_dependents=(
+            "v_portfolio_risk_matrix",
+            "v_playbook_archetype_rollup",
+            "v_eligible_all_playbooks",
+        ),
     ),
     _MaterializedViewSpec(
         view_name="v_account_explanation",
@@ -669,6 +695,12 @@ _MATERIALIZED_VIEW_SPECS: tuple[_MaterializedViewSpec, ...] = (
         table_name="dashboard_account_feature_deviation",
         zorder_col="entity_id",
         requires_composite=True,
+        # v_account_feature_deviation_topn ranks rows of
+        # v_account_feature_deviation. Same metadata-refresh problem as
+        # above: the topn view's schema was recorded against the
+        # original (CTE-derived) source body; once the source becomes a
+        # Delta table the topn's metadata is stale.
+        refresh_dependents=("v_account_feature_deviation_topn",),
     ),
     _MaterializedViewSpec(
         view_name="v_account_feature_deviation_topn",
@@ -740,12 +772,85 @@ def _materialize_view_as_table(
     return True
 
 
+def _find_view_ddl(statements: Sequence[str], view_fqn: str) -> Optional[str]:
+    """Return the ``CREATE OR REPLACE VIEW <view_fqn>`` statement from a list.
+
+    ``statements`` is the rendered SQL split into per-statement strings
+    (the output of ``split_view_statements``). Each statement keeps its
+    leading ``--`` comment header (split_view_statements preserves
+    comments on the following statement so error messages stay readable),
+    so a bare ``startswith`` on the whole statement wouldn't match --
+    iterate line-by-line and skip ``--`` comments. Returns ``None`` when
+    no matching statement is found (e.g. the view wasn't part of the
+    published set on this run, or the block was stripped because its
+    prerequisites were missing).
+    """
+    needle = f"CREATE OR REPLACE VIEW {view_fqn}"
+    for stmt in statements:
+        for line in stmt.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("--"):
+                continue
+            if stripped.startswith(needle):
+                return stmt
+            # First executable line of the statement; if it didn't match
+            # the needle there's no point scanning the rest of the body.
+            break
+    return None
+
+
+def _refresh_dependent_views(
+    spark: "SparkSession",
+    catalog: str,
+    schema: str,
+    statements: Sequence[str],
+    dependent_view_names: Sequence[str],
+) -> None:
+    """Re-publish each dependent view to refresh its stored schema metadata.
+
+    Run after a materialization that changes the dependent's upstream
+    source from a CTE-derived view body to a Delta-backed view alias.
+    Without this refresh, Spark resolves the dependent's stored
+    metadata (captured at original publish time) against the now
+    table-backed source and errors out with
+    ``[DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION]`` whenever the
+    nullability differs (which happens reliably for COALESCE-derived
+    columns: NOT NULL before materialization, NULL-allowed after).
+
+    Each failure is logged but never propagates — the materialization
+    pass is best-effort and the publish call should not crash on a
+    single dependent's refresh.
+    """
+    for name in dependent_view_names:
+        fqn = f"{catalog}.{schema}.{name}"
+        ddl = _find_view_ddl(statements, fqn)
+        if ddl is None:
+            logger.warning(
+                "dependent view %s not found in rendered SQL; skipping refresh. "
+                "Reads through it may fail with CAST_WITHOUT_SUGGESTION until "
+                "the next publish.",
+                fqn,
+            )
+            continue
+        try:
+            spark.sql(ddl)
+            logger.info("refreshed dependent view %s after materialization", fqn)
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            logger.warning(
+                "refresh of dependent view %s failed: %s. "
+                "Reads through it may fail with CAST_WITHOUT_SUGGESTION until "
+                "the next publish.",
+                fqn, exc,
+            )
+
+
 def _materialize_hot_views(
     spark: "SparkSession",
     catalog: str,
     schema: str,
     *,
     include_deviation: bool,
+    statements: Sequence[str],
 ) -> List[str]:
     """Materialize every applicable spec; return the list of view names rewired.
 
@@ -753,6 +858,12 @@ def _materialize_hot_views(
     a composite_name + the upstream gold table). Specs whose individual
     materialization fails are silently skipped (with a warning log); the
     return value lets callers / tests observe which ones succeeded.
+
+    ``statements`` is the rendered SQL (output of
+    ``split_view_statements``) passed through so each spec's
+    ``refresh_dependents`` can be re-published from the same source as
+    the initial publish -- guaranteeing the refreshed view body matches
+    what was originally validated.
     """
     rewired: List[str] = []
     for spec in _MATERIALIZED_VIEW_SPECS:
@@ -760,6 +871,9 @@ def _materialize_hot_views(
             continue
         if _materialize_view_as_table(spark, catalog, schema, spec):
             rewired.append(spec.view_name)
+            _refresh_dependent_views(
+                spark, catalog, schema, statements, spec.refresh_dependents,
+            )
     return rewired
 
 
@@ -881,6 +995,7 @@ def publish_dashboard_views(
     rewired = _materialize_hot_views(
         spark, catalog, schema,
         include_deviation=effective_composite is not None,
+        statements=statements,
     )
     if rewired:
         logger.info(
