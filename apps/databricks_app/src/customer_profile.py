@@ -17,15 +17,12 @@ data.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 import pandas as pd
 import streamlit as st
-from databricks import sql
-from databricks.sdk.core import Config
 
 from . import data, state
-from .config import load_config
 from .template import DataSource, bundle_css, load_template_from_text, render_html
 
 
@@ -213,38 +210,42 @@ def _enrich_shap_with_meta(
     return cleaned
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def _fetch_data_source_cached(
+    source: str, join_key: str, entity_id: str,
+    order_by: Optional[str], limit: int,
+) -> pd.DataFrame:
+    """Cached, connection-shared backing for ``_fetch_data_source``.
+
+    Splitting the cacheable bit out of the orchestrator means a repeat
+    visit to the same account hits the in-process cache instead of
+    re-querying the warehouse. The shaping to dict / list-of-dicts is
+    done by the caller -- a pandas DataFrame is the cleanest hashable
+    return type for st.cache_data.
+    """
+    return data.fetch_template_data_source(
+        source, join_key, entity_id, order_by=order_by, limit=limit,
+    )
+
+
 def _fetch_data_source(ds: DataSource, entity_id: str):
     """Fetch rows of a data source joined on entity_id.
 
-    Returns an empty dict (or list, when ``ds.as_list``) when no matching row
-    exists so ``{{#if x}}`` / ``{{#each x}}`` treat it as falsy/empty.
+    Routes through ``data.fetch_template_data_source`` so the query
+    borrows the shared session-scoped SQL connection (see ``data.py``'s
+    ``_shared_warehouse_connection``) instead of opening a fresh
+    Databricks SQL handshake per render. Returns an empty dict (or list,
+    when ``ds.as_list``) when no matching row exists so ``{{#if x}}`` /
+    ``{{#each x}}`` treat it as falsy/empty.
     """
-    cfg = load_config()
-    sdk_cfg = Config()
-    order_clause = f"ORDER BY {ds.order_by}" if ds.order_by else ""
     default_limit = 50 if ds.as_list else 1
-    limit_clause = f"LIMIT {int(ds.limit or default_limit)}"
-    fqn = f"{cfg.fqn_prefix}.{ds.source}"
-
-    conn = sql.connect(
-        server_hostname=sdk_cfg.host.replace("https://", "").rstrip("/"),
-        http_path=f"/sql/1.0/warehouses/{cfg.warehouse_id}",
-        credentials_provider=lambda: sdk_cfg.authenticate,
-    )
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            f"SELECT * FROM {fqn} WHERE `{ds.join_key}` = :eid {order_clause} {limit_clause}",
-            {"eid": entity_id},
-        )
-        df = cur.fetchall_arrow().to_pandas()
-        if ds.as_list:
-            return _rows_to_context(df)
-        if df.empty:
-            return {}
-        return {k: _clean(v) for k, v in df.iloc[0].items()}
-    finally:
-        conn.close()
+    limit = int(ds.limit or default_limit)
+    df = _fetch_data_source_cached(ds.source, ds.join_key, entity_id, ds.order_by, limit)
+    if ds.as_list:
+        return _rows_to_context(df)
+    if df.empty:
+        return {}
+    return {k: _clean(v) for k, v in df.iloc[0].items()}
 
 
 def render(entity_id: str | None = None) -> None:

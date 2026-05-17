@@ -63,6 +63,23 @@ def _load_clean():
     mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
     mod.__dict__["pd"] = pd
     mod.__dict__["Any"] = object
+    mod.__dict__["Optional"] = object
+    # No-op ``st.cache_data`` so module-level decorations (e.g. the
+    # connection-shared ``_fetch_data_source_cached``) can evaluate
+    # without a real streamlit install. The decorator passes the
+    # function through unchanged, which is fine -- _clean and the other
+    # tested helpers don't depend on caching.
+    class _StStub:
+        @staticmethod
+        def cache_data(*_args, **_kwargs):
+            def _wrap(fn):
+                return fn
+            return _wrap
+    mod.__dict__["st"] = _StStub()
+    # ``data`` is referenced by the connection-shared fetcher.
+    mod.__dict__["data"] = types.SimpleNamespace(
+        fetch_template_data_source=lambda *a, **k: None,
+    )
     exec(compile(code, str(src_path), "exec"), mod.__dict__)
     return mod._clean
 
