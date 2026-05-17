@@ -94,11 +94,11 @@ footer,
 }
 
 .block-container {
-  max-width: none !important;
+  max-width: 1200px !important;
   padding-top: 2rem !important;
   padding-bottom: 8rem !important;
-  padding-left: 3rem !important;
-  padding-right: 3rem !important;
+  padding-left: 2rem !important;
+  padding-right: 2rem !important;
 }
 
 /* Kill section label gaps Streamlit injects */
