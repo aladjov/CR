@@ -69,12 +69,25 @@ class StabilityDecision:
 
 @dataclass
 class ApprovalGateResult:
-    """Aggregate output of one approval-gate run."""
+    """Aggregate output of one approval-gate run.
+
+    ``superseded_*`` counts the within-model-version SCD-2 closures (the new
+    archetype_version replaces a prior version of the same archetype_id).
+    ``retired_prior_model_*`` counts the cross-model-version sweep that
+    flips any leftover ``status='active'`` rows belonging to an older
+    ``model_version`` of the same ``model_name`` -- those would otherwise
+    linger forever because their ``archetype_id``s (hashed from
+    ``model_version``) never match the new run's ids, so the SCD-2
+    supersession never fires for them and the dashboard ends up showing
+    archetypes from every past model build at once.
+    """
 
     promoted: List[StabilityDecision] = field(default_factory=list)
     pending: List[StabilityDecision] = field(default_factory=list)
     superseded_archetypes: int = 0
     superseded_policies: int = 0
+    retired_prior_model_archetypes: int = 0
+    retired_prior_model_policies: int = 0
     threshold: float = DEFAULT_STABILITY_THRESHOLD
 
     @property
@@ -82,12 +95,18 @@ class ApprovalGateResult:
         return len(self.promoted) + len(self.pending)
 
     def summary(self) -> str:
-        return (
+        line = (
             f"Approval gate (threshold={self.threshold:.2f}): "
             f"{len(self.promoted)} auto-promoted, {len(self.pending)} pending review "
             f"(superseded {self.superseded_archetypes} archetypes, "
             f"{self.superseded_policies} policies)"
         )
+        if self.retired_prior_model_archetypes or self.retired_prior_model_policies:
+            line += (
+                f"; retired {self.retired_prior_model_archetypes} prior-model archetypes, "
+                f"{self.retired_prior_model_policies} prior-model policies"
+            )
+        return line
 
 
 # ---------------------------------------------------------------------------
@@ -170,11 +189,34 @@ def auto_promote_stable(
             force=force,
         )
 
+    # Cross-model-version sweep. ``archetype_id`` includes ``model_version`` in
+    # its hash (see ``_archetype_id`` in derivation.py), so a re-trained model
+    # produces brand-new ids; the SCD-2 supersession above only matches within
+    # the same id, leaving every prior model_version's rows ``status='active'``
+    # forever. We retire them here so the dashboard's ``status='active'`` filter
+    # surfaces only the newly-promoted set. Eligibility-snapshot history stays
+    # intact -- the catalog rows remain (status flips to ``superseded`` with
+    # ``valid_to`` set), so past scoring runs can still dereference them.
+    retired_archetypes = 0
+    retired_policies = 0
+    target_model = _resolve_target_model(candidates, [d for d in decisions if d.promoted])
+    if target_model:
+        model_name, model_version = target_model
+        retired_archetypes = _supersede_prior_model_versions(
+            spark, archetype_table_fqn, model_name, model_version, timestamp,
+        )
+        if _table_exists(spark, policy_table_fqn):
+            retired_policies = _supersede_prior_model_versions(
+                spark, policy_table_fqn, model_name, model_version, timestamp,
+            )
+
     result = ApprovalGateResult(
         promoted=[d for d in decisions if d.promoted],
         pending=[d for d in decisions if not d.promoted],
         superseded_archetypes=superseded_archetypes,
         superseded_policies=superseded_policies,
+        retired_prior_model_archetypes=retired_archetypes,
+        retired_prior_model_policies=retired_policies,
         threshold=threshold,
     )
     logger.info("%s", result.summary())
@@ -281,11 +323,14 @@ def _load_candidates_with_prior(
     The query joins each pending row to the latest active row sharing the
     same ``archetype_id`` (via a ``ROW_NUMBER`` window over
     ``valid_from``). One Spark job total, regardless of how many
-    candidates the derivation produced.
+    candidates the derivation produced. ``model_name`` and
+    ``model_version`` are projected so the cross-version sweep can target
+    the same model_name as the run being promoted without an extra round
+    trip.
     """
     query = f"""
         WITH pending AS (
-            SELECT archetype_id, archetype_version, centroid_vector
+            SELECT archetype_id, archetype_version, model_name, model_version, centroid_vector
             FROM {table_fqn}
             WHERE status = 'pending_review' AND derivation_run_id = ?
         ),
@@ -304,6 +349,8 @@ def _load_candidates_with_prior(
         SELECT
             p.archetype_id              AS archetype_id,
             p.archetype_version         AS archetype_version,
+            p.model_name                AS model_name,
+            p.model_version             AS model_version,
             p.centroid_vector           AS centroid_vector,
             a.archetype_version         AS prior_archetype_version,
             a.centroid_vector           AS prior_centroid_vector
@@ -312,6 +359,83 @@ def _load_candidates_with_prior(
     """
     rows = spark.sql(query, args=[derivation_run_id]).collect()
     return [row.asDict(recursive=True) for row in rows]
+
+
+def _resolve_target_model(
+    candidates: List[Dict[str, Any]],
+    promoted_decisions: List[StabilityDecision],
+) -> Optional[Tuple[str, str]]:
+    """Pick the ``(model_name, model_version)`` the cross-version sweep targets.
+
+    Returns ``None`` when there's nothing to sweep against -- either no
+    archetype was promoted in this run, the pending rows didn't carry
+    model identity (older catalogs from before the projection was added),
+    or the promoted rows don't agree on a single model identity (defensive
+    -- one c03 invocation is expected to target exactly one model build,
+    and mixing would make the sweep ambiguous).
+    """
+    if not promoted_decisions:
+        return None
+    promoted_versions = {d.archetype_version for d in promoted_decisions}
+    candidates_by_version = {
+        c.get("archetype_version"): c for c in candidates
+    }
+    targets: set[Tuple[str, str]] = set()
+    for av in promoted_versions:
+        cand = candidates_by_version.get(av)
+        if cand is None:
+            continue
+        mn = cand.get("model_name")
+        mv = cand.get("model_version")
+        if mn is None or mv is None:
+            continue
+        targets.add((str(mn), str(mv)))
+    if len(targets) != 1:
+        if len(targets) > 1:
+            logger.warning(
+                "Cross-version sweep skipped: promoted candidates span "
+                "multiple model identities %r",
+                sorted(targets),
+            )
+        return None
+    return next(iter(targets))
+
+
+def _supersede_prior_model_versions(
+    spark: "SparkSession",
+    table_fqn: str,
+    model_name: str,
+    keep_model_version: str,
+    timestamp: datetime,
+) -> int:
+    """Flip ``status='active'`` rows for older ``model_version``s to ``superseded``.
+
+    Scoped to the supplied ``model_name`` so independently-deployed models
+    (e.g. SPS churn vs email churn) stay isolated. ``valid_to`` is set so
+    SCD-2 history is preserved -- past ``eligibility_snapshot`` rows can
+    still dereference these archetype/policy rows via ``archetype_id``
+    even though the dashboard filter (``status='active'``) hides them.
+
+    Returns the number of rows flipped when the runtime surfaces
+    ``num_affected_rows`` (Delta on Spark 3.4+); 0 otherwise. Best-effort
+    -- the row count is logged for visibility but not relied upon by the
+    caller for correctness.
+    """
+    result_df = spark.sql(
+        f"UPDATE {table_fqn} "
+        f"SET status = 'superseded', valid_to = ? "
+        f"WHERE status = 'active' "
+        f"  AND model_name = ? "
+        f"  AND model_version != ?",
+        args=[timestamp, model_name, keep_model_version],
+    )
+    try:
+        first = result_df.collect()
+        if first and "num_affected_rows" in first[0].asDict():
+            return int(first[0]["num_affected_rows"])
+    except Exception:  # noqa: BLE001 -- best-effort row count
+        pass
+    return 0
 
 
 def _decide(

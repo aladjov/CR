@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock
 
 import pytest
@@ -104,6 +104,7 @@ def _make_fake_spark(
     prior_rows_by_id: Dict[str, List[Dict[str, Any]]],
     table_exists: bool = True,
     superseded_count: int = 0,
+    sweep_affected_rows: Optional[Dict[str, int]] = None,
 ):
     """Build a fake SparkSession that mimics the parameterized SQL contract.
 
@@ -111,7 +112,13 @@ def _make_fake_spark(
     no ``spark.table().filter()`` chains anymore. The fake matches the
     real query patterns by substring and returns the right canned rows
     for each: ``WITH pending`` ⇒ join of pending × prior; ``COUNT(*)``
-    ⇒ supersession count; everything else (UPDATE statements) ⇒ empty.
+    ⇒ supersession count; cross-version sweep UPDATE ⇒ an optional
+    ``num_affected_rows`` row when ``sweep_affected_rows`` is supplied
+    (keyed by table FQN); everything else (UPDATE statements) ⇒ empty.
+
+    Pending rows that omit ``model_name`` / ``model_version`` get a default
+    pair so the cross-version sweep has something concrete to target. Tests
+    that exercise the multi-model-identity guard supply the columns explicitly.
     """
     spark = MagicMock(name="SparkSession")
     spark.catalog = MagicMock()
@@ -130,6 +137,8 @@ def _make_fake_spark(
                 {
                     "archetype_id": archetype_id,
                     "archetype_version": pending["archetype_version"],
+                    "model_name": pending.get("model_name", "model_a"),
+                    "model_version": pending.get("model_version", "model_v1"),
                     "centroid_vector": pending.get("centroid_vector"),
                     "prior_archetype_version": prior["archetype_version"] if prior else None,
                     "prior_centroid_vector": prior.get("centroid_vector") if prior else None,
@@ -137,12 +146,27 @@ def _make_fake_spark(
             )
         return joined
 
+    def _sweep_response(query: str) -> Optional[_FakeResultDF]:
+        if "SET status = 'superseded'" not in query:
+            return None
+        if "model_version !=" not in query:
+            return None
+        if not sweep_affected_rows:
+            return None
+        for table_fqn, count in sweep_affected_rows.items():
+            if f"UPDATE {table_fqn}" in query:
+                return _FakeResultDF([{"num_affected_rows": int(count)}])
+        return None
+
     def _sql(query: str, args: List[Any] | None = None) -> _FakeResultDF:
         sql_calls.append(_SqlCall(query=query, args=list(args) if args else []))
         if "WITH pending AS" in query:
             return _FakeResultDF(_join_pending_with_prior())
         if "SELECT COUNT(*) AS c FROM" in query:
             return _FakeResultDF([{"c": superseded_count}])
+        swept = _sweep_response(query)
+        if swept is not None:
+            return swept
         return _FakeResultDF([])
 
     spark.sql.side_effect = _sql
@@ -362,10 +386,18 @@ class TestAutoPromoteStable:
             call for call in spark.__sql_calls__
             if "UPDATE cat.sch.archetype_catalog" in call.query
         ]
-        # Two updates: one promotes v_222 to active, one supersedes v_111
-        assert len(archetype_updates) == 2
-        promote_call = next(c for c in archetype_updates if "status = 'active'" in c.query)
-        supersede_call = next(c for c in archetype_updates if "superseded" in c.query)
+        # Three updates: promote v_222 to active, supersede the matching prior
+        # v_111 (within-archetype_id SCD-2), then retire any leftover active
+        # rows from older model_versions (the cross-version sweep).
+        assert len(archetype_updates) == 3
+        promote_call = next(
+            c for c in archetype_updates
+            if "status = 'active'" in c.query and "archetype_version IN" in c.query
+        )
+        supersede_call = next(
+            c for c in archetype_updates
+            if "status = 'superseded'" in c.query and "archetype_id = ?" in c.query
+        )
         # Promotion binds the auto-approver and the new version via args
         assert AUTO_APPROVER in promote_call.args
         assert "v_222" in promote_call.args
@@ -396,9 +428,11 @@ class TestAutoPromoteStable:
             call for call in spark.__sql_calls__
             if "UPDATE cat.sch.eligibility_policy" in call.query
         ]
-        assert len(policy_updates) == 1
-        cascade = policy_updates[0]
-        assert "arrays_overlap(archetype_ids, array(" in cascade.query
+        # Two updates against eligibility_policy: the within-run cascade
+        # (arrays_overlap) and the cross-model-version retirement sweep.
+        cascade = next(
+            c for c in policy_updates if "arrays_overlap(archetype_ids, array(" in c.query
+        )
         # Promoted archetype version is bound, not interpolated
         assert "v_222" in cascade.args
         assert "v_222" not in cascade.query
@@ -439,6 +473,201 @@ class TestAutoPromoteStable:
             call for call in spark.__sql_calls__ if "WITH pending AS" in call.query
         ]
         assert len(loader_calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Cross-model-version sweep
+# ---------------------------------------------------------------------------
+
+
+def _find_sweep_call(spark, table_fqn: str) -> Optional[_SqlCall]:
+    """Pick the cross-model-version sweep UPDATE off the recorded calls.
+
+    The sweep is the only UPDATE against ``table_fqn`` that sets
+    ``status = 'superseded'`` while filtering on
+    ``model_version != ?``, so the two clauses are enough to disambiguate
+    it from the within-archetype_id supersession (which keys on
+    ``archetype_id`` and ``archetype_version``).
+    """
+    for call in spark.__sql_calls__:
+        if (
+            f"UPDATE {table_fqn}" in call.query
+            and "SET status = 'superseded'" in call.query
+            and "model_version !=" in call.query
+        ):
+            return call
+    return None
+
+
+class TestCrossVersionSweep:
+    """When a re-trained model promotes new archetypes, prior model_versions'
+    leftover ``status='active'`` rows must be retired.
+
+    The archetype_id is hashed from ``(model_name, model_version, cluster_index)``
+    (see ``_archetype_id`` in derivation.py), so the within-id SCD-2
+    supersession never matches across model_versions. Without this sweep, every
+    past model build's archetype rows linger in ``v_archetype_overview`` and the
+    dashboard shows duplicate / stale archetypes for the same cluster slot.
+    """
+
+    def test_sweep_targets_archetype_and_policy_tables(self):
+        pending = [
+            {
+                "archetype_id": "arch_1_new",
+                "archetype_version": "v_new",
+                "model_name": "sps_churn",
+                "model_version": "2026.05.01",
+                "centroid_vector": [1.0, 2.0, 3.0],
+            }
+        ]
+        spark = _make_fake_spark(pending, prior_rows_by_id={})
+        auto_promote_stable(
+            spark=spark,
+            archetype_table_fqn="cat.sch.archetype_catalog",
+            policy_table_fqn="cat.sch.eligibility_policy",
+            derivation_run_id="deriv_sweep",
+            now=datetime(2026, 5, 1),
+        )
+        arch_sweep = _find_sweep_call(spark, "cat.sch.archetype_catalog")
+        policy_sweep = _find_sweep_call(spark, "cat.sch.eligibility_policy")
+        assert arch_sweep is not None, "archetype sweep UPDATE missing"
+        assert policy_sweep is not None, "policy sweep UPDATE missing"
+        # Both UPDATEs must scope to the same model_name and exclude the
+        # model_version being promoted -- otherwise we'd either nuke unrelated
+        # models or wipe the run we just promoted.
+        for call in (arch_sweep, policy_sweep):
+            assert "model_name = ?" in call.query
+            assert "model_version != ?" in call.query
+            assert "sps_churn" in call.args
+            assert "2026.05.01" in call.args
+            # No literal interpolation -- args carry the values.
+            assert "sps_churn" not in call.query
+            assert "2026.05.01" not in call.query
+
+    def test_sweep_skipped_when_nothing_promoted(self):
+        # Unstable centroid + no force ⇒ pending review, no promotion ⇒
+        # no sweep (we must never retire prior-model rows unless a new
+        # active set has actually replaced them).
+        pending = [
+            {
+                "archetype_id": "arch_1_aaa",
+                "archetype_version": "v_222",
+                "centroid_vector": [1.0, 0.0, 0.0],
+            }
+        ]
+        prior = {"arch_1_aaa": [{"archetype_version": "v_111", "centroid_vector": [0.0, 1.0, 0.0]}]}
+        spark = _make_fake_spark(pending, prior_rows_by_id=prior)
+        result = auto_promote_stable(
+            spark=spark,
+            archetype_table_fqn="cat.sch.archetype_catalog",
+            policy_table_fqn="cat.sch.eligibility_policy",
+            derivation_run_id="deriv_no_promo",
+            now=datetime(2026, 5, 1),
+        )
+        assert result.promoted == []
+        assert _find_sweep_call(spark, "cat.sch.archetype_catalog") is None
+        assert _find_sweep_call(spark, "cat.sch.eligibility_policy") is None
+        assert result.retired_prior_model_archetypes == 0
+        assert result.retired_prior_model_policies == 0
+
+    def test_sweep_skipped_when_policy_table_missing(self):
+        # The archetype sweep should still fire, but the policy sweep must
+        # not be attempted against a missing table.
+        pending = [
+            {
+                "archetype_id": "arch_1_new",
+                "archetype_version": "v_new",
+                "model_name": "sps_churn",
+                "model_version": "2026.05.01",
+                "centroid_vector": [1.0, 2.0, 3.0],
+            }
+        ]
+        spark = _make_fake_spark(pending, prior_rows_by_id={})
+        # First call (archetype table existence check) → True; subsequent
+        # checks for the policy table → False.
+        spark.catalog.tableExists.side_effect = [True, False, False]
+        auto_promote_stable(
+            spark=spark,
+            archetype_table_fqn="cat.sch.archetype_catalog",
+            policy_table_fqn="cat.sch.eligibility_policy",
+            derivation_run_id="deriv_no_policy_table",
+            now=datetime(2026, 5, 1),
+        )
+        assert _find_sweep_call(spark, "cat.sch.archetype_catalog") is not None
+        assert _find_sweep_call(spark, "cat.sch.eligibility_policy") is None
+
+    def test_sweep_skipped_when_promoted_rows_span_multiple_models(self):
+        # Defensive: one c03 invocation is expected to target exactly one
+        # (model_name, model_version). If the pending set somehow spans
+        # more than one, refuse to sweep rather than retiring rows from
+        # whichever model we'd pick arbitrarily.
+        pending = [
+            {
+                "archetype_id": "arch_1_aaa",
+                "archetype_version": "v_a",
+                "model_name": "sps_churn",
+                "model_version": "2026.05.01",
+                "centroid_vector": [1.0, 2.0, 3.0],
+            },
+            {
+                "archetype_id": "arch_1_bbb",
+                "archetype_version": "v_b",
+                "model_name": "email_churn",
+                "model_version": "2026.05.01",
+                "centroid_vector": [1.0, 0.0, 0.0],
+            },
+        ]
+        spark = _make_fake_spark(pending, prior_rows_by_id={})
+        auto_promote_stable(
+            spark=spark,
+            archetype_table_fqn="cat.sch.archetype_catalog",
+            policy_table_fqn="cat.sch.eligibility_policy",
+            derivation_run_id="deriv_mixed",
+            now=datetime(2026, 5, 1),
+        )
+        assert _find_sweep_call(spark, "cat.sch.archetype_catalog") is None
+        assert _find_sweep_call(spark, "cat.sch.eligibility_policy") is None
+
+    def test_sweep_returns_affected_row_count_when_runtime_reports_it(self):
+        pending = [
+            {
+                "archetype_id": "arch_1_new",
+                "archetype_version": "v_new",
+                "model_name": "sps_churn",
+                "model_version": "2026.05.01",
+                "centroid_vector": [1.0, 2.0, 3.0],
+            }
+        ]
+        spark = _make_fake_spark(
+            pending,
+            prior_rows_by_id={},
+            sweep_affected_rows={
+                "cat.sch.archetype_catalog": 7,
+                "cat.sch.eligibility_policy": 12,
+            },
+        )
+        result = auto_promote_stable(
+            spark=spark,
+            archetype_table_fqn="cat.sch.archetype_catalog",
+            policy_table_fqn="cat.sch.eligibility_policy",
+            derivation_run_id="deriv_counted",
+            now=datetime(2026, 5, 1),
+        )
+        assert result.retired_prior_model_archetypes == 7
+        assert result.retired_prior_model_policies == 12
+
+    def test_summary_mentions_retired_counts_when_nonzero(self):
+        result = ApprovalGateResult(
+            promoted=[],
+            pending=[],
+            superseded_archetypes=0,
+            superseded_policies=0,
+            retired_prior_model_archetypes=4,
+            retired_prior_model_policies=9,
+        )
+        text = result.summary()
+        assert "retired 4 prior-model archetypes" in text
+        assert "9 prior-model policies" in text
 
 
 # ---------------------------------------------------------------------------
