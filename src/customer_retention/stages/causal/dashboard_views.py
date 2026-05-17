@@ -877,6 +877,67 @@ def _materialize_hot_views(
     return rewired
 
 
+def refresh_dashboard_view_materializations(
+    spark: "SparkSession",
+    catalog: str,
+    schema: str,
+    *,
+    composite_name: Optional[str] = None,
+) -> List[str]:
+    """Re-run only the CTAS + OPTIMIZE pass for the materialized hot-path views.
+
+    ``publish_dashboard_views`` captures a CTAS snapshot of
+    ``v_account_primary_recommendation`` / ``v_account_explanation`` /
+    ``v_account_feature_deviation`` / ``_topn`` into Delta tables that
+    the L1-L4 views then read from. Any data change to
+    ``eligibility_snapshot`` AFTER the publish (custom backfills,
+    out-of-band updates) is therefore invisible to the dashboard until
+    the next full publish.
+
+    This helper re-runs ONLY the materialization pass -- no view DDLs are
+    re-published, no prerequisite checks fire, no provenance / deviation
+    block gating logic re-evaluates. Useful when:
+
+    - A deployment patches ``eligibility_snapshot`` after the framework
+      c05 publish (e.g. the SPS override that backfills
+      ``value_at_risk`` from ``contract_arr`` / opportunity bookings).
+    - An operator re-runs a single column's recomputation without
+      wanting the full publish cycle.
+
+    The dependent-view refresh step from the publisher is still needed
+    because the dependent views' stored schema metadata captures the
+    nullability of the COALESCE-derived columns at the *previous*
+    materialization. We re-render the SQL once just to extract those
+    dependent CREATE OR REPLACE VIEW statements -- the catalog isn't
+    re-published; we only execute the dependents whose source we just
+    re-CTAS'd.
+
+    Returns the list of view names whose materialized table was
+    refreshed. ``composite_name`` gates the deviation-block specs the
+    same way ``publish_dashboard_views`` does -- supply it when the
+    refresh should also re-snapshot the per-feature deviation tables.
+    """
+    rendered = render_dashboard_view_sql(
+        catalog,
+        schema,
+        composite_name=composite_name,
+        include_provenance=True,
+        gold_struct_cols=None,
+        gold_columns=None,
+    )
+    statements = split_view_statements(rendered)
+    rewired = _materialize_hot_views(
+        spark, catalog, schema,
+        include_deviation=composite_name is not None,
+        statements=statements,
+    )
+    if rewired:
+        logger.info(
+            "refreshed materializations for: %s", ", ".join(rewired),
+        )
+    return rewired
+
+
 def publish_dashboard_views(
     spark: "SparkSession",
     catalog: str,

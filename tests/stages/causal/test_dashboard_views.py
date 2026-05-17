@@ -14,6 +14,7 @@ from customer_retention.stages.causal.dashboard_views import (
     _synthetic_placeholder_column_descriptions,
     load_dashboard_view_sql,
     publish_dashboard_views,
+    refresh_dashboard_view_materializations,
     render_dashboard_view_sql,
     split_view_statements,
 )
@@ -529,5 +530,179 @@ class TestMaterializeHotViews:
         # the downstream steps).
         assert not any(
             "OPTIMIZE c.s.dashboard_account_primary_recommendation" in s
+            for s in sqls
+        )
+
+
+class TestRefreshDashboardViewMaterializations:
+    """``refresh_dashboard_view_materializations`` re-runs ONLY the CTAS +
+    OPTIMIZE pass without re-publishing every view DDL.
+
+    Use case: a deployment patches ``eligibility_snapshot`` (e.g. the SPS
+    override that backfills ``value_at_risk`` from ``contract_arr`` /
+    opportunity bookings) AFTER the framework's ``publish_dashboard_views``
+    has already materialized the hot-path tables. Without the refresh,
+    the materialized snapshot is stale and the dashboard shows
+    pre-backfill values forever.
+    """
+
+    def _sqls(self, spark) -> list[str]:
+        return [call.args[0] for call in spark.sql.call_args_list]
+
+    def test_does_not_republish_full_view_catalog(self):
+        # The whole point of the helper: skip the ~13 framework view DDLs
+        # so we're not paying for a full publish just to refresh the four
+        # hot-path Delta snapshots. The only CREATE OR REPLACE VIEW
+        # statements that fire are (a) the per-spec view re-point and
+        # (b) the per-spec dependent refresh.
+        pytest.importorskip("pyspark")
+        spark = MagicMock()
+        refresh_dashboard_view_materializations(spark, "c", "s")
+        sqls = self._sqls(spark)
+        # No DDL for unrelated framework views like v_run_context,
+        # v_dashboard_template_active, v_archetype_overview, etc. -- only
+        # the per-spec re-points and the listed dependents are republished.
+        republished_view_names = {
+            "v_account_primary_recommendation",  # re-point of materialized spec
+            "v_account_explanation",             # re-point of materialized spec
+            # Dependents of v_account_primary_recommendation:
+            "v_portfolio_risk_matrix",
+            "v_playbook_archetype_rollup",
+            "v_eligible_all_playbooks",
+        }
+        # Statements may carry leading comment headers (split_view_statements
+        # keeps the ``--`` block on the following statement so error messages
+        # stay readable), so scan every line for the CREATE OR REPLACE VIEW
+        # signature instead of asserting on ``s.startswith``.
+        for s in sqls:
+            for line in s.splitlines():
+                stripped = line.strip()
+                if not stripped.startswith("CREATE OR REPLACE VIEW "):
+                    continue
+                # "CREATE OR REPLACE VIEW <fqn> AS ..." -- fqn is token 4.
+                fqn = stripped.split()[4]
+                view_name = fqn.rsplit(".", 1)[-1]
+                assert view_name in republished_view_names, (
+                    f"unexpected view republished by refresh helper: {fqn}"
+                )
+
+    def test_does_not_run_publish_preflight(self):
+        # Prerequisite checks + run_context table creation belong to
+        # publish_dashboard_views, not to the refresh helper. The refresh
+        # should be a pure materialization replay.
+        pytest.importorskip("pyspark")
+        spark = MagicMock()
+        refresh_dashboard_view_materializations(spark, "c", "s")
+        sqls = self._sqls(spark)
+        # ensure_run_context_table emits a CREATE TABLE IF NOT EXISTS for
+        # run_context. The refresh helper must not.
+        assert not any(
+            "CREATE TABLE IF NOT EXISTS c.s.run_context" in s for s in sqls
+        )
+        # DROP VIEW IF EXISTS is emitted by the publish loop before every
+        # CREATE OR REPLACE VIEW. The refresh path doesn't iterate the
+        # full view set, so there should be no drops at all.
+        assert not any(s.startswith("DROP VIEW IF EXISTS") for s in sqls)
+
+    def test_emits_ctas_for_each_noncomposite_spec(self):
+        pytest.importorskip("pyspark")
+        spark = MagicMock()
+        refresh_dashboard_view_materializations(spark, "c", "s")
+        sqls = self._sqls(spark)
+        ctas = [s for s in sqls if "CREATE OR REPLACE TABLE c.s.dashboard_" in s]
+        assert len(ctas) == 2
+        assert any(
+            "dashboard_account_primary_recommendation USING DELTA" in s for s in ctas
+        )
+        assert any(
+            "dashboard_account_explanation USING DELTA" in s for s in ctas
+        )
+
+    def test_emits_optimize_zorder_on_entity_id(self):
+        pytest.importorskip("pyspark")
+        spark = MagicMock()
+        refresh_dashboard_view_materializations(spark, "c", "s")
+        zorders = [
+            s for s in self._sqls(spark)
+            if s.startswith("OPTIMIZE c.s.dashboard_") and "ZORDER BY (`entity_id`)" in s
+        ]
+        assert len(zorders) == 2
+
+    def test_includes_deviation_specs_when_composite_supplied(self):
+        pytest.importorskip("pyspark")
+        spark = MagicMock()
+        refresh_dashboard_view_materializations(spark, "c", "s", composite_name="cn1")
+        ctas = [
+            s for s in self._sqls(spark)
+            if "CREATE OR REPLACE TABLE c.s.dashboard_" in s
+        ]
+        # All four specs ran: two non-composite + two deviation.
+        assert len(ctas) == 4
+        assert any("dashboard_account_feature_deviation USING DELTA" in s for s in ctas)
+        assert any("dashboard_account_feature_deviation_topn USING DELTA" in s for s in ctas)
+
+    def test_skips_deviation_specs_without_composite(self):
+        pytest.importorskip("pyspark")
+        spark = MagicMock()
+        refresh_dashboard_view_materializations(spark, "c", "s")
+        sqls = self._sqls(spark)
+        assert not any("dashboard_account_feature_deviation" in s for s in sqls)
+
+    def test_refreshes_dependents_after_each_spec(self):
+        # Each spec's ``refresh_dependents`` list must be re-published
+        # right after the spec's CTAS + OPTIMIZE + view re-point pass --
+        # otherwise dependents that capture COALESCE-derived NOT NULL
+        # columns in their stored schema metadata throw
+        # DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION at query time. The
+        # statements may carry leading ``--`` comment headers so use a
+        # substring match rather than ``startswith``.
+        pytest.importorskip("pyspark")
+        spark = MagicMock()
+        refresh_dashboard_view_materializations(spark, "c", "s")
+        sqls = self._sqls(spark)
+        # v_account_primary_recommendation has three dependents.
+        for dep in (
+            "v_portfolio_risk_matrix",
+            "v_playbook_archetype_rollup",
+            "v_eligible_all_playbooks",
+        ):
+            needle = f"CREATE OR REPLACE VIEW c.s.{dep}"
+            assert any(needle in s for s in sqls), (
+                f"dependent {dep!r} was not refreshed"
+            )
+
+    def test_returns_list_of_rewired_view_names(self):
+        pytest.importorskip("pyspark")
+        spark = MagicMock()
+        rewired = refresh_dashboard_view_materializations(spark, "c", "s")
+        # Two non-composite specs materialized successfully on a happy-path
+        # MagicMock (no exceptions raised by spark.sql).
+        assert set(rewired) == {
+            "v_account_primary_recommendation",
+            "v_account_explanation",
+        }
+
+    def test_ctas_failure_does_not_block_remaining_specs(self):
+        # Mirrors publish_dashboard_views' behavior -- a CTAS failure on
+        # one spec leaves it at its pre-call body but does not block the
+        # other specs.
+        pytest.importorskip("pyspark")
+        spark = MagicMock()
+
+        def _side_effect(stmt):
+            if (
+                stmt.startswith("CREATE OR REPLACE TABLE ")
+                and "dashboard_account_primary_recommendation" in stmt
+            ):
+                raise RuntimeError("simulated CTAS failure")
+            return MagicMock()
+
+        spark.sql.side_effect = _side_effect
+        rewired = refresh_dashboard_view_materializations(spark, "c", "s")
+        sqls = [call.args[0] for call in spark.sql.call_args_list]
+        assert "v_account_primary_recommendation" not in rewired
+        assert "v_account_explanation" in rewired
+        assert any(
+            "CREATE OR REPLACE TABLE c.s.dashboard_account_explanation" in s
             for s in sqls
         )
