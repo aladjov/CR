@@ -550,6 +550,19 @@ hr, [data-testid="stHorizontalBlock"] + div { border: none; }
 .chart-caption .accent-green  { color: var(--green-600); }
 .chart-caption .accent-yellow { color: var(--yellow-600); }
 .chart-caption .accent-blue   { color: var(--blue-500); }
+/* Square swatch used inline inside chart captions to show the corner
+   cells of the L2 priority matrix (high-risk + best-fit deepest plum,
+   gray-ish low-risk, pale weak-fit). Same height as the surrounding
+   mono caption text so it reads as one line. */
+.prio-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  border: 1px solid var(--line);
+  vertical-align: -1px;
+}
+
 /* Secondary caption -- explanatory prose under a chart, no upper-case
    mono. Sits below the legend line as a soft note (e.g. the L1 treemap
    overlap disclaimer). */

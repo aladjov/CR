@@ -3,18 +3,21 @@
 Despite the filename (kept for git-history continuity), this view is
 about PLAYBOOKS now: once a CSM picks an archetype at L1, the L2
 treemap shows every playbook the eligibility policy mapped to that
-archetype, sized by the count of accounts in the slice, coloured by
-``fit_score`` -- the model's per-(playbook, archetype) goodness-of-fit
-score. The plum gradient is a deliberate sibling to L1's green/yellow/
-blue: same lightness/saturation envelope, distinct hue family, so the
-eye reads L2 as "this is a different split of the same cohort".
+archetype, sized by the count of accounts in the slice, coloured by a
+DUAL encoding: tile depth tracks ``fit_score`` (deeper plum = stronger
+match) and tile saturation tracks ``risk_tier`` (vivid plum = High
+risk, gray-ish plum = Low). Combined, the most vivid AND deepest tile
+is the top-priority recommendation — one visual cell = one decision.
 
 When the L1 click pinned a risk_tier (user clicked a tier-leaf rather
 than the archetype tile), we pass that through so this view shows only
 that slice -- matching the "whatever tiers are visible at the upper
-level remain on all lower levels" intent.
+level remain on all lower levels" intent. In that mode the saturation
+of every tile is fixed by the pinned tier and only the depth varies.
 """
 from __future__ import annotations
+
+import colorsys
 
 import plotly.express as px
 import streamlit as st
@@ -101,40 +104,22 @@ def render() -> None:
         root=dict(color="rgba(0,0,0,0)"),
     )
 
-    # Per-tile risk-tier border. Plotly express flattens the tree into
-    # one trace, so `fig.data[0].labels` carries roots + parents + leaves
-    # in one array. We walk that array and stamp a tier-coloured border
-    # only on the tier-leaf nodes (label is one of High/Medium/Low AND
-    # parent is a playbook, not the synthetic archetype root). Parent
-    # playbook tiles and the archetype root keep the existing paper
-    # border. Width bumps to 4px on tier leaves so the colour is visible
-    # even on thin tiles -- the L1 risk palette (blue-300 / yellow-400 /
-    # green-400) is reused verbatim so the same colour means the same
-    # thing in both charts.
-    _apply_risk_tier_borders(fig, archetype=archetype, has_tier_level=not risk_tier)
+    # Per-tile fill that combines fit_score (depth) and risk_tier
+    # (saturation) into one visual cue. See ``_apply_priority_fill``
+    # for the math. The single white separator (3 px paper colour)
+    # stays so adjacent tiles remain visually distinct.
+    _apply_priority_fill(fig, df, archetype=archetype, pinned_tier=risk_tier)
     fig.update_layout(
-        margin=dict(t=8, l=0, r=60, b=0),
+        margin=dict(t=8, l=0, r=20, b=0),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         font=dict(family="Geist, system-ui, sans-serif", size=12, color="#1b2230"),
         height=380,
-        # Surface a slim colorbar on the right so the plum gradient is
-        # decoded: "darker = stronger fit". Same minimal styling as the
-        # L1 colorbar so the two charts feel like one report.
-        coloraxis_colorbar=dict(
-            title=dict(text="fit", font=dict(size=10, color="#98a0ac")),
-            thickness=6,
-            len=0.55,
-            tickfont=dict(
-                size=10, color="#98a0ac",
-                family="JetBrains Mono, ui-monospace, monospace",
-            ),
-            outlinewidth=0,
-            ticks="outside",
-            tickformat=".1f",
-            x=1.02,
-        ),
     )
+    # Continuous colorbar is misleading now -- fit and tier are encoded
+    # jointly per-tile, not on a single axis. Hide it; the visual legend
+    # below the chart documents the dual encoding instead.
+    fig.update_coloraxes(showscale=False)
 
     selected = st.plotly_chart(
         fig,
@@ -165,42 +150,93 @@ def render() -> None:
 
 _RISK_TIER_LABELS = ("High", "Medium", "Low")
 
-# L1 risk-tier palette, re-used verbatim on the L2 tile borders so the
-# same hue means the same thing in both charts. Sourced from the
-# ``--blue-300 / --yellow-400 / --green-400`` tokens in ``theme.css``.
-_TIER_BORDER_COLORS = {
-    "High":   "#8bb5d3",   # blue-300
-    "Medium": "#e8c259",   # yellow-400
-    "Low":    "#6bac7a",   # green-400
+# Per-tier saturation multipliers applied to the plum fill. 1.0 leaves
+# the original plum gradient untouched (High); 0.18 collapses the
+# colour almost to gray (Low). Combined with the existing depth
+# gradient on fit_score this produces a 2D priority cue: vividness ×
+# depth = where to act first. Tuned to keep the visual envelope BELOW
+# the original max-saturation plum (per user direction) so saturation
+# only ever subtracts.
+_TIER_SATURATION = {
+    "High":   1.0,
+    "Medium": 0.5,
+    "Low":    0.18,
 }
-_DEFAULT_BORDER_COLOR = "#faf9f4"  # --paper (the existing tile separator)
+
+# Same stops as PASTEL_FIT_COLORSCALE in treemap.py. Kept locally so
+# we can interpolate continuous RGB without paying a plotly round-trip
+# for every tile.
+_PLUM_STOPS: tuple[tuple[float, str], ...] = (
+    (0.00, "#f4eff5"),
+    (0.30, "#e6d8ec"),
+    (0.60, "#cdb3da"),
+    (0.85, "#a07cbb"),
+    (1.00, "#6e4a8c"),
+)
 
 
-def _apply_risk_tier_borders(fig, *, archetype: str, has_tier_level: bool) -> None:
-    """Stamp per-tile border colour by risk_tier on the leaf nodes.
+def _hex_to_rgb(h: str) -> tuple[int, int, int]:
+    h = h.lstrip("#")
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
 
-    Plotly express flattens the (archetype → playbook → tier) tree into
-    one trace where ``fig.data[0].labels`` / ``.parents`` carry every
-    node including roots and intermediate parents. We compute a colour
-    array the same length and width array of equal length, then assign
-    both onto ``marker.line``. Tier leaves get a 4-px tier-coloured
-    stroke; everything else keeps the existing paper-coloured 3-px
-    separator so the tree's visual rhythm doesn't change.
 
-    ``has_tier_level=False`` is the "L1 click already pinned a tier"
-    case: the tree collapses to two levels and there are no tier
-    leaves to stamp -- the function short-circuits.
+def _rgb_to_hex(rgb: tuple[int, int, int]) -> str:
+    return f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
+
+
+def _interpolate_plum_rgb(fit_score: float) -> tuple[int, int, int]:
+    """Linear interpolation between adjacent ``_PLUM_STOPS`` pairs."""
+    try:
+        f = float(fit_score)
+    except (TypeError, ValueError):
+        f = 0.0
+    f = max(0.0, min(1.0, f))
+    for i in range(len(_PLUM_STOPS) - 1):
+        lo_pos, lo_hex = _PLUM_STOPS[i]
+        hi_pos, hi_hex = _PLUM_STOPS[i + 1]
+        if f <= hi_pos:
+            span = max(hi_pos - lo_pos, 1e-9)
+            t = (f - lo_pos) / span
+            lo = _hex_to_rgb(lo_hex)
+            hi = _hex_to_rgb(hi_hex)
+            return tuple(int(round(lo[k] + t * (hi[k] - lo[k]))) for k in range(3))
+    return _hex_to_rgb(_PLUM_STOPS[-1][1])
+
+
+def _desaturate_rgb(rgb: tuple[int, int, int], factor: float) -> tuple[int, int, int]:
+    """Scale saturation in HLS space. ``factor`` 1.0 = unchanged; 0.0 = gray."""
+    r, g, b = (c / 255 for c in rgb)
+    hue, light, sat = colorsys.rgb_to_hls(r, g, b)
+    sat *= max(0.0, min(1.0, factor))
+    r, g, b = colorsys.hls_to_rgb(hue, light, sat)
+    return (int(round(r * 255)), int(round(g * 255)), int(round(b * 255)))
+
+
+def _priority_color(fit_score: float, tier_sat: float) -> str:
+    return _rgb_to_hex(_desaturate_rgb(_interpolate_plum_rgb(fit_score), tier_sat))
+
+
+def _apply_priority_fill(
+    fig, df, *, archetype: str, pinned_tier: str | None
+) -> None:
+    """Stamp the per-tile fill colour that combines fit and risk tier.
+
+    Tier leaves: colour = ``plum(fit_score)`` desaturated by the leaf's
+    own tier factor. Playbook parents (only present when the tree has a
+    tier level): colour = ``plum(weighted_mean_fit)`` at full saturation
+    so the parent reads as a neutral aggregate while the tier-saturated
+    children sit beneath it. When the L1 click already pinned a tier
+    the tree collapses to (archetype → playbook); every playbook tile
+    IS the tier-fixed slice and we apply the pinned tier's saturation
+    factor directly to it.
+
+    Defensive against numpy-truthiness: ``trace.labels`` / ``.parents``
+    come back as numpy arrays, so we resolve to None explicitly before
+    converting.
     """
-    if not has_tier_level:
-        return
     if not fig.data:
         return
     trace = fig.data[0]
-    # ``trace.labels`` / ``.parents`` come back as numpy arrays from
-    # plotly. We can't use the ``getattr(...) or default`` pattern here
-    # because ``bool(ndarray)`` with len > 1 raises "truth value of an
-    # array with more than one element is ambiguous". Resolve to None
-    # explicitly, then convert via ``list(...)`` only when present.
     labels_attr = getattr(trace, "labels", None)
     parents_attr = getattr(trace, "parents", None)
     if labels_attr is None or parents_attr is None:
@@ -210,29 +246,66 @@ def _apply_risk_tier_borders(fig, *, archetype: str, has_tier_level: bool) -> No
     if len(labels) == 0 or len(parents) == 0:
         return
 
-    line_colors: list[str] = []
-    line_widths: list[float] = []
+    # (playbook, tier) -> fit_score lookups from the source frame.
+    leaf_fit: dict[tuple[str, str], float] = {}
+    pb_fit_num: dict[str, float] = {}
+    pb_fit_den: dict[str, float] = {}
+    for _, row in df.iterrows():
+        pb = str(row.get("playbook_name") or "")
+        rt = str(row.get("risk_tier") or "")
+        try:
+            fit = float(row.get("fit_score") or 0.0)
+        except (TypeError, ValueError):
+            fit = 0.0
+        try:
+            n = float(row.get("eligible_count") or 0.0)
+        except (TypeError, ValueError):
+            n = 0.0
+        leaf_fit[(pb, rt)] = fit
+        pb_fit_num[pb] = pb_fit_num.get(pb, 0.0) + fit * n
+        pb_fit_den[pb] = pb_fit_den.get(pb, 0.0) + n
+    pb_avg_fit = {
+        pb: (pb_fit_num[pb] / pb_fit_den[pb] if pb_fit_den[pb] else 0.0)
+        for pb in pb_fit_num
+    }
+
+    transparent = "rgba(0,0,0,0)"
+    colors: list[str] = []
     for label, parent in zip(labels, parents):
-        label_s = (label or "").strip()
-        parent_s = (parent or "").strip()
-        # A tier leaf has the tier name as its label AND a non-root,
-        # non-archetype parent (= the playbook that owns it). The
-        # synthetic archetype root sits at the top of the tree, so any
-        # parent that isn't blank and isn't the archetype must be the
-        # playbook owner.
+        label_s = str(label).strip()
+        parent_s = str(parent).strip()
+
+        if pinned_tier:
+            # Tree is [archetype -> playbook]; every playbook tile is
+            # the tier-fixed slice.
+            if label_s in pb_avg_fit:
+                colors.append(_priority_color(
+                    pb_avg_fit[label_s],
+                    _TIER_SATURATION.get(pinned_tier, 1.0),
+                ))
+            else:
+                colors.append(transparent)
+            continue
+
+        # Tree is [archetype -> playbook -> tier].
         is_tier_leaf = (
             label_s in _RISK_TIER_LABELS
             and parent_s
             and parent_s != archetype
         )
         if is_tier_leaf:
-            line_colors.append(_TIER_BORDER_COLORS.get(label_s, _DEFAULT_BORDER_COLOR))
-            line_widths.append(4.0)
+            pb = parent_s.rsplit("/", 1)[-1] if "/" in parent_s else parent_s
+            colors.append(_priority_color(
+                leaf_fit.get((pb, label_s), 0.0),
+                _TIER_SATURATION.get(label_s, 1.0),
+            ))
+        elif label_s in pb_avg_fit:
+            # Parent playbook tile -- aggregate fit at full saturation.
+            colors.append(_priority_color(pb_avg_fit[label_s], 1.0))
         else:
-            line_colors.append(_DEFAULT_BORDER_COLOR)
-            line_widths.append(3.0)
-    trace.marker.line.color = line_colors
-    trace.marker.line.width = line_widths
+            colors.append(transparent)
+
+    trace.marker.colors = colors
 
 
 def _extract_click(event, *, archetype: str) -> tuple[str | None, str | None]:

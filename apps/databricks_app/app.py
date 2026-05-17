@@ -499,13 +499,28 @@ with _tab_dashboard:
             st.error(f"Playbook recommendations view failed: {exc}")
 
         if not _selected_risk_tier:
+            # Inline swatches: top-right corner of the priority matrix
+            # ("best fit × highest risk" = the brightest deepest plum)
+            # vs the diagonals so the operator sees what to look for.
+            # Hex values mirror _priority_color() outputs for the
+            # corner cells (fit=1.0 paired with tier sat 1.0/0.5/0.18
+            # and fit=0.0 paired with tier sat 1.0).
+            # Swatch hexes are the exact output of archetype_view._priority_color
+            # for the corner cells of the matrix (fit=1.0 paired with the three
+            # tier saturations, plus fit=0.0 at full saturation). Keep them in
+            # sync with _TIER_SATURATION / _PLUM_STOPS if either is retuned.
             st.markdown(
                 '<p class="chart-caption">'
-                'fill: fit score (deeper plum = stronger match) · '
-                'border: '
-                '<span class="accent-green">▬</span>&nbsp;low · '
-                '<span class="accent-yellow">▬</span>&nbsp;medium · '
-                '<span class="accent-blue">▬</span>&nbsp;high'
+                'tile colour = priority &nbsp;·&nbsp; '
+                '<span class="prio-swatch" style="background:#6e4a8c"></span>&nbsp;high risk + best fit&nbsp; '
+                '<span class="prio-swatch" style="background:#6c5a7c"></span>&nbsp;medium &nbsp; '
+                '<span class="prio-swatch" style="background:#6c6571"></span>&nbsp;low &nbsp;·&nbsp; '
+                '<span class="prio-swatch" style="background:#f4eff5"></span>&nbsp;weak fit'
+                '</p>'
+                '<p class="chart-caption chart-caption-note">'
+                'Depth of plum tracks how well the playbook fits the archetype; '
+                'vividness tracks the risk tier (gray-ish = Low, vivid = High). '
+                'The most vivid AND deepest tile is the top-priority recommendation.'
                 '</p>',
                 unsafe_allow_html=True,
             )
