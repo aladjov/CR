@@ -50,6 +50,8 @@ def _load_clean():
     for line in raw.splitlines(keepends=True):
         if line.startswith("import streamlit") or line.startswith("from databricks"):
             continue
+        if line.startswith("from . import data, diagnostics, state"):
+            continue
         if line.startswith("from . import data, state"):
             continue
         if line.startswith("from .config import load_config"):
@@ -79,6 +81,10 @@ def _load_clean():
     # ``data`` is referenced by the connection-shared fetcher.
     mod.__dict__["data"] = types.SimpleNamespace(
         fetch_template_data_source=lambda *a, **k: None,
+    )
+    # ``diagnostics`` is referenced by the L4 render markers.
+    mod.__dict__["diagnostics"] = types.SimpleNamespace(
+        record=lambda *a, **k: None,
     )
     exec(compile(code, str(src_path), "exec"), mod.__dict__)
     return mod._clean

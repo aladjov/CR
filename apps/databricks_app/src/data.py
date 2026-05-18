@@ -21,6 +21,7 @@ The queries here mirror the Unity Catalog views we already publish from
 """
 from __future__ import annotations
 
+import time
 from contextlib import contextmanager
 from typing import Any, Optional
 
@@ -29,11 +30,32 @@ import streamlit as st
 from databricks import sql
 from databricks.sdk.core import Config
 
+from . import diagnostics
 from .config import AppConfig, load_config
 
 
 def _warehouse_http_path(warehouse_id: str) -> str:
     return f"/sql/1.0/warehouses/{warehouse_id}"
+
+
+# ---------------------------------------------------------------------------
+# Diagnostics helpers
+# ---------------------------------------------------------------------------
+# Every query in this module flows through ``_query`` and emits a
+# ``diagnostics.record(...)`` event with timing + sql preview + attempt
+# number. Connection rebuilds, stale-hint matches, and retries get their
+# own events so the operator can see the full picture in the Diagnostics
+# tab. ``diagnostics.record`` short-circuits when CR_SHOW_DIAGNOSTICS is
+# off, so this instrumentation costs nothing in production.
+
+
+def _ms(t0: float) -> int:
+    return int((time.perf_counter() - t0) * 1000)
+
+
+def _short_sql(sql_text: str, limit: int = 100) -> str:
+    one_line = " ".join(sql_text.split())
+    return one_line[:limit] + ("..." if len(one_line) > limit else "")
 
 
 # Substrings of the driver's exception messages that mean "the cached
@@ -58,7 +80,15 @@ _STALE_CONNECTION_HINTS: tuple[str, ...] = (
 
 def _looks_like_stale_connection(exc: BaseException) -> bool:
     msg = str(exc).lower()
-    return any(hint in msg for hint in _STALE_CONNECTION_HINTS)
+    for hint in _STALE_CONNECTION_HINTS:
+        if hint in msg:
+            diagnostics.record(
+                "stale_hint_matched",
+                hint=hint,
+                exc_type=type(exc).__name__,
+            )
+            return True
+    return False
 
 
 @st.cache_resource(show_spinner=False)
@@ -77,12 +107,15 @@ def _shared_warehouse_connection(warehouse_id: str) -> Any:
     cursor raises a "session closed" / "broken pipe" error we clear this
     cache entry and retry once against a fresh connection.
     """
+    t0 = time.perf_counter()
     sdk_cfg = Config()
-    return sql.connect(
+    conn = sql.connect(
         server_hostname=sdk_cfg.host.replace("https://", "").rstrip("/"),
         http_path=_warehouse_http_path(warehouse_id),
         credentials_provider=lambda: sdk_cfg.authenticate,
     )
+    diagnostics.record("conn_rebuild", elapsed_ms=_ms(t0), reason="cache_miss")
+    return conn
 
 
 @contextmanager
@@ -110,9 +143,16 @@ def _query(cfg: AppConfig, sql_text: str, params: Optional[dict[str, Any]] = Non
     freshly-handshaken one. Any other failure -- syntax error,
     permission denied, dataset missing -- propagates immediately so the
     caller can surface a real error instead of silently retrying.
+
+    Tracing: when CR_QUERY_TRACE=1 in the environment, each attempt
+    logs ``elapsed_ms``, attempt number, retry status, and the first
+    100 chars of the SQL so the operator can see where an L4 render's
+    time actually goes.
     """
     last_exc: Optional[BaseException] = None
+    overall_t0 = time.perf_counter()
     for attempt in (0, 1):
+        attempt_t0 = time.perf_counter()
         with _connect(cfg) as conn:
             cur = conn.cursor()
             try:
@@ -120,10 +160,29 @@ def _query(cfg: AppConfig, sql_text: str, params: Optional[dict[str, Any]] = Non
                     cur.execute(sql_text, params)
                 else:
                     cur.execute(sql_text)
-                return cur.fetchall_arrow().to_pandas()
+                df = cur.fetchall_arrow().to_pandas()
+                diagnostics.record(
+                    "query_ok",
+                    elapsed_ms=_ms(attempt_t0),
+                    total_ms=_ms(overall_t0),
+                    attempt=attempt,
+                    rows=len(df),
+                    sql=_short_sql(sql_text),
+                )
+                return df
             except Exception as exc:  # noqa: BLE001 -- classified below
                 last_exc = exc
-                if attempt == 0 and _looks_like_stale_connection(exc):
+                stale = attempt == 0 and _looks_like_stale_connection(exc)
+                diagnostics.record(
+                    "query_fail",
+                    elapsed_ms=_ms(attempt_t0),
+                    attempt=attempt,
+                    will_retry=stale,
+                    exc_type=type(exc).__name__,
+                    sql=_short_sql(sql_text),
+                )
+                if stale:
+                    diagnostics.record("conn_clear", reason="stale_hint")
                     _shared_warehouse_connection.clear()
                     continue
                 raise

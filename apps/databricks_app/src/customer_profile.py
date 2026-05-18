@@ -17,12 +17,13 @@ data.
 """
 from __future__ import annotations
 
+import time
 from typing import Any, Optional
 
 import pandas as pd
 import streamlit as st
 
-from . import data, state
+from . import data, diagnostics, state
 from .template import DataSource, bundle_css, load_template_from_text, render_html
 
 
@@ -261,8 +262,17 @@ def render(entity_id: str | None = None) -> None:
     if not entity:
         return
 
+    _render_t0 = time.perf_counter()
+    diagnostics.record("L4_begin", entity=entity)
+
     detail_df = data.account_explanation(entity)
     if detail_df.empty:
+        diagnostics.record(
+            "L4_end",
+            entity=entity,
+            elapsed_ms=int((time.perf_counter() - _render_t0) * 1000),
+            outcome="no_detail",
+        )
         st.warning(f"No detail row found for entity **{entity}**.")
         return
 
@@ -337,6 +347,13 @@ def render(entity_id: str | None = None) -> None:
     except Exception as exc:
         st.error(f"Template render failed ({exc}). Showing raw data instead.")
         _render_pivoted_fallback(detail_df.iloc[0])
+
+    diagnostics.record(
+        "L4_end",
+        entity=entity,
+        elapsed_ms=int((time.perf_counter() - _render_t0) * 1000),
+        data_sources=len(template.data_sources),
+    )
 
 
 def _render_pivoted_fallback(row: pd.Series) -> None:

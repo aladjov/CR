@@ -10,6 +10,7 @@ Nothing downstream is ever rendered until the upstream decision has been made.
 """
 from __future__ import annotations
 
+import time
 from html import escape
 from pathlib import Path
 
@@ -24,6 +25,7 @@ from src import (
     auth,
     customer_profile,
     data,
+    diagnostics,
     playbooks_view,
     state,
     treemap,
@@ -433,13 +435,22 @@ def _render_l4_panel(entity_id: str, *, lead: str, key_namespace: str) -> None:
 # State keys are intentionally distinct (`selected_entity` vs `searched_entity`
 # vs `pb_detail_id` / `arch_detail_id`) so switching tabs doesn't fold one
 # selection into another's breadcrumb / drill state.
-_tab_dashboard, _tab_playbooks, _tab_archetypes, _tab_search = st.tabs(
-    ["Dashboard", "Playbooks", "Archetypes", "Search"]
-)
+# Diagnostics tab is opt-in via CR_SHOW_DIAGNOSTICS=1 in the app env. When
+# off (production default), the tab is not even added to the tab strip --
+# zero visual footprint, zero per-event cost (diagnostics.record short-
+# circuits at the env-var check before touching session_state).
+_tab_labels = ["Dashboard", "Playbooks", "Archetypes", "Search"]
+if diagnostics.is_enabled():
+    _tab_labels.append("Diagnostics")
+_tabs = st.tabs(_tab_labels)
+_tab_dashboard, _tab_playbooks, _tab_archetypes, _tab_search = _tabs[:4]
+_tab_diagnostics = _tabs[4] if diagnostics.is_enabled() else None
 
 
 with _tab_dashboard:
     # --- Level 1 · Portfolio ------------------------------------------------
+    _l1_t0 = time.perf_counter()
+    diagnostics.record("L1_begin")
     _level_header(
         level=1,
         eyebrow="Level 01 · Portfolio",
@@ -464,6 +475,7 @@ with _tab_dashboard:
         treemap.render()
     except Exception as exc:
         st.error(f"Treemap failed: {exc}")
+    diagnostics.record("L1_end", elapsed_ms=int((time.perf_counter() - _l1_t0) * 1000))
 
     st.markdown(
         '<p class="chart-caption">'
@@ -478,6 +490,12 @@ with _tab_dashboard:
     _selected_archetype = state.get("selected_archetype")
     _selected_risk_tier = state.get("selected_risk_tier")
     if _selected_archetype:
+        _l2_t0 = time.perf_counter()
+        diagnostics.record(
+            "L2_begin",
+            archetype=str(_selected_archetype),
+            risk_tier=str(_selected_risk_tier) if _selected_risk_tier else None,
+        )
         l2_title = escape(str(_selected_archetype))
         if _selected_risk_tier:
             l2_title = f"{l2_title} <span style='color:var(--muted);font-weight:400'>· {escape(_selected_risk_tier)} risk</span>"
@@ -497,6 +515,7 @@ with _tab_dashboard:
             archetype_view.render()
         except Exception as exc:
             st.error(f"Playbook recommendations view failed: {exc}")
+        diagnostics.record("L2_end", elapsed_ms=int((time.perf_counter() - _l2_t0) * 1000))
 
         if not _selected_risk_tier:
             # Inline swatches: top-right corner of the priority matrix
@@ -527,7 +546,14 @@ with _tab_dashboard:
 
     # --- Level 3 · Customer list -------------------------------------------
     if _selected_archetype:
+        _l3_t0 = time.perf_counter()
         _selected_playbook = state.get("selected_playbook")
+        diagnostics.record(
+            "L3_begin",
+            archetype=str(_selected_archetype),
+            playbook=str(_selected_playbook) if _selected_playbook else None,
+            risk_tier=str(_selected_risk_tier) if _selected_risk_tier else None,
+        )
         scope_parts = [str(_selected_archetype)]
         if _selected_playbook:
             scope_parts.append(str(_selected_playbook))
@@ -554,6 +580,7 @@ with _tab_dashboard:
             accounts_view.render()
         except Exception as exc:
             st.error(f"Accounts list failed: {exc}")
+        diagnostics.record("L3_end", elapsed_ms=int((time.perf_counter() - _l3_t0) * 1000))
 
     # --- Level 4 · Customer profile ----------------------------------------
     _selected_entity = state.get("selected_entity")
@@ -657,3 +684,21 @@ with _tab_search:
             ),
             key_namespace="search",
         )
+
+
+# Hidden diagnostics tab — only rendered when CR_SHOW_DIAGNOSTICS=1 is set
+# in the app environment. Surfaces the per-session timing log captured by
+# diagnostics.record() throughout data.py and customer_profile.py.
+if _tab_diagnostics is not None:
+    with _tab_diagnostics:
+        _section_head(
+            eyebrow="Diagnostics",
+            title="Per-session query + render timing log",
+            lead=(
+                "Every data-layer query and L1-L4 render boundary writes a row here. "
+                "Use this to see where a slow page click is actually spending its time "
+                "(connection rebuilds, retry cascades, slow individual queries) without "
+                "leaving the app."
+            ),
+        )
+        diagnostics.render()
