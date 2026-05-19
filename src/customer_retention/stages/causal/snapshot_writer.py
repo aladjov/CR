@@ -610,6 +610,10 @@ def build_eligibility_snapshot(config: SnapshotConfig) -> SnapshotResult:
     if config.top_shap_drivers_fqn:
         eligible_df = _join_top_shap_drivers(spark, eligible_df, config)
 
+    eligible_df = _scratch_eligible_round_trip(
+        spark, eligible_df, config.snapshot_table_fqn
+    )
+
     risk_tier_high, risk_tier_medium = _resolve_risk_tier_thresholds(
         config, definitions.decision_policy
     )
@@ -698,6 +702,44 @@ def _compute_snapshot_counts_from_table(
 # ---------------------------------------------------------------------------
 # Internal helpers — single responsibility, no side effects beyond Spark queries
 # ---------------------------------------------------------------------------
+
+
+def _scratch_eligible_round_trip(
+    spark: "SparkSession", eligible_df: "DataFrame", snapshot_table_fqn: str
+) -> "DataFrame":
+    """Materialize ``eligible_df`` to a scratch Delta table and read it back.
+
+    Why this exists: ``evaluate_eligibility`` builds one filter branch per
+    active policy and ``unionByName``-s them together. Every branch holds
+    a reference to the upstream ``enriched_df`` subtree (gold join +
+    ``assign_archetype``'s K-archetype ``F.when`` chain), so the logical
+    plan that reaches ``apply_decision_policy`` has |policies| fanout in
+    its tree. With policy counts in the hundreds (observed in production
+    at 614 active policies), the resulting plan is multi-MB of
+    ``explain()`` text and tens of MB of Spark Connect protobuf.
+
+    The first downstream ``.columns`` access in ``apply_decision_policy``
+    triggers an ``AnalyzePlan`` RPC that serializes the full protobuf and
+    ships it to the server for schema analysis. The Python protobuf
+    library walks the tree, allocates message objects for every operator
+    across every branch, and OOMs the driver kernel (SIGKILL 137) before
+    the bytes ever leave the process.
+
+    Writing ``eligible_df`` to a scratch Delta table and reading it back
+    collapses the upstream tree to a single shallow read. Downstream
+    stages (apply_decision_policy, _shape_snapshot_rows, write_snapshot)
+    then plan against an O(KB) source instead of an O(tens-of-MB) tree.
+    Cost: one Delta write the size of ``matching_entities × matched_policies``
+    rows. Win: deterministic survival on any policy count.
+    """
+    scratch_fqn = f"{snapshot_table_fqn}__eligible_scratch"
+    (
+        eligible_df.write.format("delta")
+        .mode("overwrite")
+        .option("overwriteSchema", "true")
+        .saveAsTable(scratch_fqn)
+    )
+    return spark.table(scratch_fqn)
 
 
 def _load_active_definitions(spark: "SparkSession", config: SnapshotConfig) -> _LoadedDefinitions:

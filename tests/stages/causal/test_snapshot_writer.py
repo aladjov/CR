@@ -752,6 +752,10 @@ class TestBuildEligibilitySnapshotE2E:
         with (
             patch.object(sw, "_load_active_definitions", return_value=self._definitions()),
             patch.object(sw, "_load_latest_predictions", return_value=predictions_df),
+            patch.object(
+                sw, "_scratch_eligible_round_trip",
+                side_effect=lambda spark, df, fqn: df,
+            ),
             patch.object(sw, "write_snapshot", side_effect=fake_write_snapshot),
             patch.object(
                 sw, "_compute_snapshot_counts_from_table",
@@ -838,6 +842,10 @@ class TestBuildEligibilitySnapshotE2E:
             patch.object(type(predictions_df), "cache", _tripwire_cache),
             patch.object(sw, "_load_active_definitions", return_value=self._definitions()),
             patch.object(sw, "_load_latest_predictions", return_value=predictions_df),
+            patch.object(
+                sw, "_scratch_eligible_round_trip",
+                side_effect=lambda spark, df, fqn: df,
+            ),
             patch.object(sw, "write_snapshot", side_effect=fake_write_snapshot),
             patch.object(sw, "_compute_snapshot_counts_from_table", side_effect=fake_count_from_table),
         ):
@@ -856,6 +864,62 @@ class TestBuildEligibilitySnapshotE2E:
             "second concurrent c05 doesn't double-count rows in the same table."
         )
         assert result.total_eligible_rows == 2
+
+    def test_scratch_round_trip_called_between_evaluate_and_decision(self, spark_session):
+        """Regression guard: build_eligibility_snapshot must collapse the
+        ``evaluate_eligibility`` union plan via a scratch-Delta round-trip
+        before ``apply_decision_policy`` runs. Without this break, the first
+        ``.columns`` access in apply_decision_policy triggers a Spark Connect
+        AnalyzePlan RPC that serializes the full N-policy unioned protobuf
+        and OOMs the driver kernel on high policy counts (observed at 614)."""
+        from unittest.mock import patch
+
+        import customer_retention.stages.causal.snapshot_writer as sw
+
+        config = SnapshotConfig(
+            spark=spark_session,
+            predictions_fqn="mock.predictions",
+            archetype_catalog_fqn="mock.archetype_catalog",
+            eligibility_policy_fqn="mock.eligibility_policy",
+            decision_policy_fqn="mock.decision_policy",
+            snapshot_table_fqn="mock.eligibility_snapshot",
+            model_name="m", model_version="v1",
+            as_of_date=datetime(2026, 4, 9, 0, 0, 0, tzinfo=timezone.utc),
+        )
+        predictions_df = spark_session.createDataFrame(
+            [("a1", 0.9, 10.0, 100.0), ("a2", 0.4, 5.0, 50.0)],
+            ["entity_id", "churn_probability", "f1", "f2"],
+        )
+
+        captured: Dict[str, Any] = {}
+        round_trip_calls: list[tuple] = []
+
+        def fake_round_trip(spark, df, snapshot_table_fqn):
+            round_trip_calls.append((id(df), snapshot_table_fqn))
+            return df
+
+        def fake_write_snapshot(spark, snapshot_df, table_fqn):
+            captured["snapshot_df"] = snapshot_df
+            return {"target": table_fqn}
+
+        def fake_count_from_table(spark, table_fqn, scoring_run_id):  # noqa: ARG001
+            return sw._compute_snapshot_counts(captured["snapshot_df"])
+
+        with (
+            patch.object(sw, "_load_active_definitions", return_value=self._definitions()),
+            patch.object(sw, "_load_latest_predictions", return_value=predictions_df),
+            patch.object(sw, "_scratch_eligible_round_trip", side_effect=fake_round_trip),
+            patch.object(sw, "write_snapshot", side_effect=fake_write_snapshot),
+            patch.object(sw, "_compute_snapshot_counts_from_table", side_effect=fake_count_from_table),
+        ):
+            build_eligibility_snapshot(config)
+
+        assert len(round_trip_calls) == 1, (
+            f"_scratch_eligible_round_trip must be called exactly once between "
+            f"evaluate_eligibility and apply_decision_policy; got {len(round_trip_calls)} call(s)."
+        )
+        _, called_fqn = round_trip_calls[0]
+        assert called_fqn == "mock.eligibility_snapshot"
 
 
 # ---------------------------------------------------------------------------
