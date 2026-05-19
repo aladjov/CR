@@ -43,6 +43,22 @@ from .clusterer import (
     cluster_target_means,
     select_top_shap_features,
 )
+from .dashboard_profile_override import (
+    ProfileOverrideResult,
+    apply_profile_override,
+    render_profile_sql,
+)
+from .dashboard_views import (
+    DASHBOARD_DEVIATION_VIEW_NAMES,
+    DASHBOARD_PROVENANCE_VIEW_NAMES,
+    DASHBOARD_TEMPLATE_TABLE_NAMES,
+    DASHBOARD_TEMPLATE_VIEW_NAMES,
+    DASHBOARD_VIEW_NAMES,
+    MaterializedViewSpec,
+    materialize_view_as_table,
+    publish_dashboard_views,
+    refresh_dashboard_view_materializations,
+)
 from .derivation import (
     DEFAULT_FIT_AUTO_THRESHOLD,
     DEFAULT_FIT_REVIEW_THRESHOLD,
@@ -106,6 +122,11 @@ from .top_drivers_writer import (
 )
 
 __all__ = [
+    "DASHBOARD_DEVIATION_VIEW_NAMES",
+    "DASHBOARD_PROVENANCE_VIEW_NAMES",
+    "DASHBOARD_TEMPLATE_TABLE_NAMES",
+    "DASHBOARD_TEMPLATE_VIEW_NAMES",
+    "DASHBOARD_VIEW_NAMES",
     "DEFAULT_FEATURE_CAP",
     "ApprovalGateResult",
     "ArchetypeContext",
@@ -115,6 +136,8 @@ __all__ = [
     "ClusterCandidate",
     "ClusteringResult",
     "DatabricksFoundationModelNamer",
+    "MaterializedViewSpec",
+    "ProfileOverrideResult",
     "DEFAULT_FIT_AUTO_THRESHOLD",
     "DEFAULT_FIT_REVIEW_THRESHOLD",
     "FIT_TIER_AUTO",
@@ -136,6 +159,7 @@ __all__ = [
     "TopDriversResult",
     "ProseOverlapMatcher",
     "apply_decision_policy",
+    "apply_profile_override",
     "assign_archetype",
     "auto_promote_stable",
     "build_eligibility_snapshot",
@@ -161,7 +185,11 @@ __all__ = [
     "from_project_context",
     "list_pending_review",
     "map_archetypes_to_playbooks",
+    "materialize_view_as_table",
     "predicate_to_sql",
+    "publish_dashboard_views",
+    "refresh_dashboard_view_materializations",
+    "render_profile_sql",
     "prose_overlap_score",
     "select_top_shap_features",
     "unwrap_tree_model",

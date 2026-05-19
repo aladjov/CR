@@ -17,6 +17,7 @@ from customer_retention.stages.causal.dashboard_profile_override import (
     apply_profile_override,
     render_profile_sql,
 )
+from customer_retention.stages.causal.dashboard_views import MaterializedViewSpec
 
 
 def test_render_profile_sql_substitutes_catalog_and_schema():
@@ -200,6 +201,61 @@ def test_apply_is_no_op_when_spark_is_none():
     )
     assert res.published_views == []
     assert res.template_table_fqn == ""
+
+
+def test_apply_runs_ctas_and_zorder_for_materialize_views():
+    """When ``materialize_views`` is supplied, apply_profile_override must run
+    the CTAS + OPTIMIZE ZORDER + view re-point sequence for each spec so the
+    L4 per-account lookups become point reads instead of multi-join scans."""
+    pytest.importorskip("pyspark")
+    spark, _ = _spark_mock_with_writer()
+    res = apply_profile_override(
+        spark, "cat", "sch",
+        profile_sql="CREATE OR REPLACE VIEW {catalog}.{schema}.v_account_profile_sps AS SELECT 1;",
+        profile_html="x",
+        composite_name="cn1",
+        materialize_views=[
+            MaterializedViewSpec(
+                view_name="v_account_profile_sps",
+                table_name="dashboard_account_profile_sps",
+                zorder_col="entity_id",
+                requires_composite=False,
+            )
+        ],
+    )
+    submitted = [c.args[0] for c in spark.sql.call_args_list if c.args]
+    assert any(
+        "CREATE OR REPLACE TABLE cat.sch.dashboard_account_profile_sps" in s
+        and "FROM cat.sch.v_account_profile_sps" in s
+        for s in submitted
+    ), f"CTAS not submitted; got: {submitted}"
+    assert any(
+        "OPTIMIZE cat.sch.dashboard_account_profile_sps" in s
+        and "ZORDER BY (`entity_id`)" in s
+        for s in submitted
+    ), f"OPTIMIZE ZORDER not submitted; got: {submitted}"
+    assert any(
+        "CREATE OR REPLACE VIEW cat.sch.v_account_profile_sps AS SELECT * FROM cat.sch.dashboard_account_profile_sps"
+        in s for s in submitted
+    ), f"view re-point not submitted; got: {submitted}"
+    assert res.materialized_views == ["v_account_profile_sps"]
+
+
+def test_apply_with_no_materialize_views_kwarg_returns_empty_list():
+    """Default path: no materialization requested → result.materialized_views=[]
+    and no CTAS/OPTIMIZE statements are submitted."""
+    pytest.importorskip("pyspark")
+    spark, _ = _spark_mock_with_writer()
+    res = apply_profile_override(
+        spark, "c", "s",
+        profile_sql="CREATE OR REPLACE VIEW {catalog}.{schema}.v AS SELECT 1;",
+        profile_html="x",
+        composite_name="cn1",
+    )
+    submitted = [c.args[0] for c in spark.sql.call_args_list if c.args]
+    assert not any("CREATE OR REPLACE TABLE" in s for s in submitted)
+    assert not any("OPTIMIZE" in s for s in submitted)
+    assert res.materialized_views == []
 
 
 def test_result_str_lists_views_and_uc_table():

@@ -32,9 +32,13 @@ from __future__ import annotations
 import datetime as _dt
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional, Sequence
 
-from .dashboard_views import split_view_statements
+from .dashboard_views import (
+    MaterializedViewSpec,
+    materialize_view_as_table,
+    split_view_statements,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,11 +58,22 @@ class ProfileOverrideResult:
     composite_name:         str
     updated_at:             str
     updated_by:             str
+    materialized_views:     List[str] = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.materialized_views is None:
+            self.materialized_views = []
 
     def __str__(self) -> str:
         lines = [f"published {len(self.published_views)} profile view(s):"]
         for v in self.published_views:
             lines.append(f"  - {v}")
+        if self.materialized_views:
+            lines.append(
+                f"materialized {len(self.materialized_views)} view(s) as Delta tables:"
+            )
+            for v in self.materialized_views:
+                lines.append(f"  - {v}")
         lines.append(
             f"appended template row to {self.template_table_fqn} "
             f"(composite_name={self.composite_name!r}, updated_by={self.updated_by!r}, "
@@ -185,6 +200,7 @@ def apply_profile_override(
     composite_name: str,
     placeholders: Optional[Dict[str, str]] = None,
     template_volume_path: Optional[str] = None,
+    materialize_views: Optional[Sequence[MaterializedViewSpec]] = None,
 ) -> ProfileOverrideResult:
     """Publish a project-side profile view set and append the HTML row.
 
@@ -225,6 +241,16 @@ def apply_profile_override(
         which is reliable from Databricks Apps; the Volume route was not.
         Pass ``None`` (or omit) in new cells; the parameter will be removed
         in a future release.
+    materialize_views
+        Optional sequence of ``MaterializedViewSpec``. For each spec, after
+        the view DDLs in ``profile_sql`` are published, a
+        ``CREATE OR REPLACE TABLE <table_name> USING DELTA AS SELECT * FROM
+        <view_name>`` + ``OPTIMIZE ZORDER BY (<zorder_col>)`` + view re-point
+        pass collapses per-click reads from re-executing the view body into
+        a point lookup on a Z-ORDER'd Delta table. Use this for project-side
+        views that the dashboard reads on every L4 click (e.g. per-account
+        profile views) -- without it, each click re-runs the full multi-join
+        view body and stalls in the tens of seconds.
     """
     if template_volume_path is not None:
         logger.warning(
@@ -287,10 +313,16 @@ def apply_profile_override(
         table_fqn, composite_name, len(profile_html),
     )
 
+    materialized: List[str] = []
+    for spec in (materialize_views or ()):
+        if materialize_view_as_table(spark, catalog, schema, spec):
+            materialized.append(spec.view_name)
+
     return ProfileOverrideResult(
         published_views=_extract_view_names(statements),
         template_table_fqn=table_fqn,
         composite_name=composite_name,
         updated_at=updated_at.isoformat(timespec="seconds"),
         updated_by=updated_by,
+        materialized_views=materialized,
     )
