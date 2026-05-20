@@ -1078,6 +1078,44 @@ def entity_exists_in_latest_run(entity_id: str) -> bool:
     return not df.empty
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def sample_entity_id_for_placeholder() -> Optional[str]:
+    """Return one real ``entity_id`` from the latest scoring run, or ``None``.
+
+    Used as the Search-tab placeholder so the operator sees a working ID
+    they can copy verbatim instead of a fabricated example that won't
+    resolve. Long-cached (10 min) -- the placeholder is decorative; it
+    doesn't need to track the snapshot in real time. Returns ``None`` when
+    the snapshot is empty or the query fails so the caller can fall back
+    to a generic placeholder.
+    """
+    cfg = load_config()
+    try:
+        df = _query(cfg, f"""
+            WITH latest_run AS (
+                SELECT scoring_run_id
+                FROM {cfg.fqn_prefix}.eligibility_snapshot
+                WHERE as_of_date = (
+                    SELECT MAX(as_of_date) FROM {cfg.fqn_prefix}.eligibility_snapshot
+                )
+                LIMIT 1
+            )
+            SELECT s.entity_id
+            FROM {cfg.fqn_prefix}.eligibility_snapshot s
+            JOIN latest_run lr ON s.scoring_run_id = lr.scoring_run_id
+            ORDER BY s.entity_id
+            LIMIT 1
+        """)
+    except Exception:
+        return None
+    if df.empty:
+        return None
+    eid = df.iloc[0]["entity_id"]
+    if eid is None:
+        return None
+    return str(eid)
+
+
 def account_is_holdout(entity_id: str) -> bool:
     """Return ``True`` when ``entity_id`` is a holdout row.
 

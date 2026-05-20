@@ -638,13 +638,26 @@ with _tab_search:
         ),
     )
 
+    # Pull one real entity_id from the latest snapshot so the placeholder
+    # text is something the operator can paste verbatim. Cached for 10 min
+    # in data.sample_entity_id_for_placeholder so this is a single tiny
+    # query per app load. Fall back to a generic hint if the snapshot is
+    # unreachable / empty.
+    try:
+        _placeholder_eid = data.sample_entity_id_for_placeholder()
+    except Exception:
+        _placeholder_eid = None
+    _search_placeholder = (
+        f"e.g. {_placeholder_eid}" if _placeholder_eid else "e.g. entity ID"
+    )
+
     with st.form("entity_search_form", clear_on_submit=False):
         _input_col, _submit_col = st.columns([6, 1], vertical_alignment="bottom")
         with _input_col:
             _raw_search = st.text_input(
                 "Entity ID",
                 key="entity_search_input",
-                placeholder="e.g. 1D70F6",
+                placeholder=_search_placeholder,
                 label_visibility="collapsed",
             )
         with _submit_col:

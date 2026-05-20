@@ -136,6 +136,69 @@ class TestEntityExistenceLookup:
         assert "@st.cache_data(ttl=60" in between
 
 
+class TestSampleEntityIdPlaceholder:
+    """The Search-tab input placeholder must be a real entity_id sampled from
+    the latest scoring run, not a fabricated example that won't resolve when
+    the operator pastes it back in."""
+
+    @pytest.fixture(scope="class")
+    def data_src(self) -> str:
+        return _DATA_PY.read_text(encoding="utf-8")
+
+    @pytest.fixture(scope="class")
+    def app_src(self) -> str:
+        return _APP_PY.read_text(encoding="utf-8")
+
+    def test_helper_exists(self, data_src):
+        assert "def sample_entity_id_for_placeholder(" in data_src
+
+    def test_helper_targets_eligibility_snapshot_pinned_to_latest_run(self, data_src):
+        body = _function_body(_DATA_PY, "sample_entity_id_for_placeholder")
+        assert "eligibility_snapshot" in body
+        assert "MAX(as_of_date)" in body
+        assert "scoring_run_id" in body
+
+    def test_helper_returns_one_row(self, data_src):
+        body = _function_body(_DATA_PY, "sample_entity_id_for_placeholder")
+        assert "LIMIT 1" in body
+
+    def test_helper_returns_none_on_empty_or_failure(self, data_src):
+        body = _function_body(_DATA_PY, "sample_entity_id_for_placeholder")
+        # Failure path must not propagate exceptions -- the placeholder is
+        # decorative; a flaky snapshot query should not crash the Search tab.
+        assert "return None" in body
+        assert "except Exception" in body
+
+    def test_helper_is_cached_long_ttl(self, data_src):
+        # 10-min TTL: the placeholder is decorative, not data, so we don't
+        # need it to track the snapshot in real time. Keeps the cost to one
+        # tiny query per app load (give or take warehouse cache evictions).
+        idx = data_src.find("def sample_entity_id_for_placeholder(")
+        assert idx > 0
+        before = data_src[:idx]
+        last_decorator = before.rfind("@st.cache_data")
+        assert last_decorator > 0
+        between = data_src[last_decorator:idx]
+        assert "@st.cache_data(ttl=600" in between
+
+    def test_search_tab_wires_helper_into_placeholder(self, app_src):
+        search_idx = app_src.find("with _tab_search:")
+        assert search_idx > 0
+        block = app_src[search_idx:]
+        # The helper is called and its return value flows into the
+        # text_input's placeholder kwarg.
+        assert "data.sample_entity_id_for_placeholder(" in block
+        assert "placeholder=_search_placeholder" in block
+
+    def test_placeholder_has_generic_fallback(self, app_src):
+        # If the helper returns None (snapshot unreachable, empty, etc.)
+        # the Search box must still render with a non-empty placeholder
+        # rather than a literal "None" string or an empty hint.
+        search_idx = app_src.find("with _tab_search:")
+        block = app_src[search_idx:]
+        assert 'if _placeholder_eid else "e.g. entity ID"' in block
+
+
 class TestAppTabsLayout:
     @pytest.fixture(scope="class")
     def src(self) -> str:
