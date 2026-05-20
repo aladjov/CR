@@ -132,6 +132,17 @@ def render() -> None:
     # Styler-applied row tint for entries owned by the current user.
     # ``st.dataframe`` accepts a Styler and still respects column_config and
     # selection events (the events index back into the underlying frame).
+    #
+    # The explicit ``key`` is load-bearing: without it Streamlit hashes the
+    # widget identity from the (Styler, kwargs) tuple. ``display.style.apply``
+    # returns a fresh Styler on every rerun, so the auto-key changes each
+    # time, the widget is re-created from scratch, and the user's row
+    # selection is lost on the rerun the click itself triggers. That makes
+    # the L3 click look like a no-op: ``event.selection.rows`` comes back
+    # empty after the rerun, ``set_entity`` never fires, and the L4 panel's
+    # ``if _selected_entity:`` guard stays False so the profile never
+    # renders. A stable ``key`` pins the widget identity so the selection
+    # survives the rerun.
     styled = display.style.apply(_row_style, axis=1)
     event = st.dataframe(
         styled,
@@ -141,6 +152,7 @@ def render() -> None:
         on_select="rerun",
         selection_mode="single-row",
         height=480,
+        key="dashboard_accounts_table",
     )
 
     rows = (event.selection or {}).get("rows") if event else None

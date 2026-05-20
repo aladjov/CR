@@ -118,6 +118,16 @@ class TestSourceShape:
         assert 'on_select="rerun"' in src
         assert 'selection_mode="single-row"' in src
 
+    def test_dataframe_has_explicit_key_to_preserve_selection_across_reruns(self, src):
+        # Without an explicit key, Streamlit auto-keys the widget from the
+        # (Styler, kwargs) tuple. ``display.style.apply`` returns a fresh
+        # Styler every rerun, so the auto-key changes, the widget is
+        # re-created from scratch, and the row selection is lost on the
+        # rerun the click itself triggers. The L4 panel's
+        # ``if _selected_entity:`` guard then stays False and the profile
+        # never renders. Pin the key so the selection survives the rerun.
+        assert 'key="dashboard_accounts_table"' in src
+
 
 class TestRowStyle:
     def test_mine_row_gets_tint_in_every_cell(self):
