@@ -34,8 +34,15 @@ _MATERIALIZE_NONCOMPOSITE_REFRESHES = sum(
     len(s.refresh_dependents)
     for s in _MATERIALIZED_VIEW_SPECS if not s.requires_composite
 )
+# Per spec, four SQL calls fire during the materialization pass:
+# 1. CREATE OR REPLACE VIEW <view> AS <original CTE body>  -- restores the
+#    view from any prior table-backed pass-through so the CTAS below reads
+#    live upstream rows instead of stale materialized rows.
+# 2. CREATE OR REPLACE TABLE <table> USING DELTA AS SELECT * FROM <view>
+# 3. OPTIMIZE <table> ZORDER BY (...)
+# 4. CREATE OR REPLACE VIEW <view> AS SELECT * FROM <table>  -- re-point.
 _MATERIALIZE_NONCOMPOSITE_SQL_CALLS = (
-    _MATERIALIZE_NONCOMPOSITE_SPECS * 3 + _MATERIALIZE_NONCOMPOSITE_REFRESHES
+    _MATERIALIZE_NONCOMPOSITE_SPECS * 4 + _MATERIALIZE_NONCOMPOSITE_REFRESHES
 )
 
 
@@ -337,11 +344,15 @@ class TestPublishDashboardViews:
             call for call in spark.sql.call_args_list
             if "CREATE OR REPLACE VIEW" in call.args[0]
         ]
+        # Each materialized spec contributes TWO CREATE OR REPLACE VIEW
+        # statements: the original-body re-publish that precedes its CTAS
+        # (so the source isn't a stale table-backed pass-through view)
+        # plus the post-CTAS re-point onto the materialized table.
         assert len(view_calls) == (
             len(DASHBOARD_VIEW_NAMES)
             + len(DASHBOARD_PROVENANCE_VIEW_NAMES)
             + len(DASHBOARD_TEMPLATE_VIEW_NAMES)
-            + _MATERIALIZE_NONCOMPOSITE_SPECS
+            + _MATERIALIZE_NONCOMPOSITE_SPECS * 2
             + _MATERIALIZE_NONCOMPOSITE_REFRESHES
         )
 
@@ -682,7 +693,53 @@ class TestRefreshDashboardViewMaterializations:
             "v_account_explanation",
         }
 
-    def test_ctas_failure_does_not_block_remaining_specs(self):
+    def test_republishes_original_view_body_before_each_ctas(self):
+        """Regression guard: before re-running each spec's CTAS, the original
+        view DDL (the CTE body sourced from ``eligibility_snapshot``) must be
+        re-executed.
+
+        After the FIRST materialization, the view is left pointed at
+        ``SELECT * FROM dashboard_account_primary_recommendation``. If the
+        refresh CTAS were issued against THAT view, Spark would read the
+        stale table contents (via the pass-through view) and write them
+        back -- so any project-side ``value_at_risk`` backfill applied
+        to ``eligibility_snapshot`` between publishes would never reach
+        the materialized table the dashboard reads from.
+        """
+        pytest.importorskip("pyspark")
+        spark = MagicMock()
+        refresh_dashboard_view_materializations(spark, "c", "s")
+        sqls = self._sqls(spark)
+        for spec_view, spec_table in (
+            ("v_account_primary_recommendation", "dashboard_account_primary_recommendation"),
+            ("v_account_explanation", "dashboard_account_explanation"),
+        ):
+            original_idx = -1
+            ctas_idx = -1
+            for i, s in enumerate(sqls):
+                if (
+                    f"CREATE OR REPLACE VIEW c.s.{spec_view}" in s
+                    and f"SELECT * FROM c.s.{spec_table}" not in s
+                ):
+                    if original_idx == -1:
+                        original_idx = i
+                if (
+                    f"CREATE OR REPLACE TABLE c.s.{spec_table}" in s
+                    and ctas_idx == -1
+                ):
+                    ctas_idx = i
+            assert original_idx >= 0, (
+                f"{spec_view} original-body DDL was not re-published before refresh; "
+                "the CTAS would read from the stale table-backed pass-through view."
+            )
+            assert ctas_idx >= 0, f"no CTAS recorded for {spec_table}"
+            assert original_idx < ctas_idx, (
+                f"original-body DDL for {spec_view} (#{original_idx}) must precede "
+                f"the CTAS for {spec_table} (#{ctas_idx}); otherwise the CTAS reads "
+                "the previously-materialized table via the pass-through view."
+            )
+
+    def test_refresh_ctas_failure_does_not_block_remaining_specs(self):
         # Mirrors publish_dashboard_views' behavior -- a CTAS failure on
         # one spec leaves it at its pre-call body but does not block the
         # other specs.

@@ -61,14 +61,17 @@ _MATERIALIZE_DEVIATION_REFRESHES = sum(
     for s in _MATERIALIZED_VIEW_SPECS if s.requires_composite
 )
 # Subset that becomes a CREATE OR REPLACE VIEW (everything except the
-# template table's CREATE TABLE), including the materialization re-points
-# of the hot-path views and the refresh-pass re-publishes of their
-# dependent views.
+# template table's CREATE TABLE). Each materialized spec produces TWO
+# CREATE OR REPLACE VIEW statements: one to restore the original CTE body
+# right before its CTAS (so the CTAS reads live upstream rows, not the
+# stale table-backed pass-through view left by a prior materialization)
+# and one to re-point at the freshly-written Delta table. Dependent
+# refresh statements add one extra CREATE OR REPLACE VIEW per dependent.
 _BASE_NON_DEVIATION_VIEW_CALLS = (
     len(DASHBOARD_VIEW_NAMES)
     + len(DASHBOARD_PROVENANCE_VIEW_NAMES)
     + len(DASHBOARD_TEMPLATE_VIEW_NAMES)
-    + _MATERIALIZE_NONCOMPOSITE_SPECS
+    + _MATERIALIZE_NONCOMPOSITE_SPECS * 2
     + _MATERIALIZE_NONCOMPOSITE_REFRESHES
 )
 
@@ -209,7 +212,10 @@ def test_publish_with_composite_name_runs_extra_statements():
     expected = (
         _BASE_NON_DEVIATION_VIEW_CALLS
         + len(DASHBOARD_DEVIATION_VIEW_NAMES)
-        + _MATERIALIZE_DEVIATION_SPECS
+        # Each deviation spec contributes TWO CREATE OR REPLACE VIEW: the
+        # original-body re-publish that precedes its CTAS plus the post-CTAS
+        # re-point onto the materialized table.
+        + _MATERIALIZE_DEVIATION_SPECS * 2
         + _MATERIALIZE_DEVIATION_REFRESHES
     )
     view_calls = [

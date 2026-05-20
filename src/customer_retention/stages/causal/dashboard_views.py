@@ -864,11 +864,35 @@ def _materialize_hot_views(
     ``refresh_dependents`` can be re-published from the same source as
     the initial publish -- guaranteeing the refreshed view body matches
     what was originally validated.
+
+    Each spec's OWN view DDL is also re-published before its CTAS pass.
+    After a prior materialization, the view body is the trivial
+    ``SELECT * FROM <table_name>`` pass-through; re-running the CTAS as-is
+    would read from the stale table (via that pass-through view) and
+    write the same stale rows back, never picking up upstream changes to
+    ``eligibility_snapshot`` (e.g. project-side ``value_at_risk``
+    backfills run between publishes). Re-publishing the original CTE body
+    immediately before the CTAS forces the source to be the live
+    upstream tables. Idempotent on first publish (the view is already at
+    its original body).
     """
     rewired: List[str] = []
     for spec in _MATERIALIZED_VIEW_SPECS:
         if spec.requires_composite and not include_deviation:
             continue
+        view_fqn = f"{catalog}.{schema}.{spec.view_name}"
+        original_ddl = _find_view_ddl(statements, view_fqn)
+        if original_ddl is not None:
+            try:
+                spark.sql(original_ddl)
+            except Exception as exc:  # noqa: BLE001 -- best-effort, fall
+                # through to the CTAS even when re-publish fails so the
+                # operator at least sees the warning surface in logs.
+                logger.warning(
+                    "could not re-publish %s before its CTAS; the refresh "
+                    "may read stale rows from the previously-materialized "
+                    "table: %s", view_fqn, exc,
+                )
         if materialize_view_as_table(spark, catalog, schema, spec):
             rewired.append(spec.view_name)
             _refresh_dependent_views(

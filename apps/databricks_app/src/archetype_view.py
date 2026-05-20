@@ -136,13 +136,16 @@ def render() -> None:
     if playbook != state.get("selected_playbook"):
         state.set_playbook(playbook)
         rerun = True
-    # The L1 click may already have pinned a risk_tier. If the user
-    # clicked a tier leaf here we override; otherwise we keep what L1
-    # set. Clicking the playbook tile itself (tier_from_click=None)
-    # while L1 already pinned a tier should leave the tier alone --
-    # they're narrowing within the same tier.
-    if tier_from_click and tier_from_click != state.get("selected_risk_tier"):
-        state.set_risk_tier(tier_from_click)
+    # Playbook-frame click (``tier_from_click is None``) widens the L3
+    # cohort to every tier under the chosen playbook -- so an inherited
+    # L1 tier pin is cleared. Tier-leaf click pins that specific tier.
+    # This matches the rule "click the playbook to see all tiers; click
+    # a tier within the playbook to narrow to that tier" and gives the
+    # operator a reliable way to widen back out without losing the
+    # archetype context.
+    target_tier = tier_from_click  # may be None
+    if target_tier != state.get("selected_risk_tier"):
+        state.set_risk_tier(target_tier)
         rerun = True
     if rerun:
         st.rerun()
