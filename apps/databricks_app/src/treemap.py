@@ -128,20 +128,42 @@ def render() -> None:
     )
 
     archetype, risk_tier = _extract_click(selected)
-    if archetype and archetype != "All":
-        rerun = False
-        if archetype != state.get("selected_archetype"):
-            state.set_archetype(archetype)
-            rerun = True
-        # Clicking a risk-tier LEAF inside an archetype must pin the
-        # tier so L2 / L3 see the same slice. Clicking the archetype
-        # TILE itself (risk_tier=None) should clear any prior leaf
-        # selection so the L2 view shows every tier under the archetype.
-        if risk_tier != state.get("selected_risk_tier"):
-            state.set_risk_tier(risk_tier)
-            rerun = True
-        if rerun:
-            st.rerun()
+    if not archetype or archetype == "All":
+        return
+
+    # Plotly preserves each chart's selection across reruns via its stable
+    # widget key. Without per-chart consumption tracking, treemap.render()
+    # AND archetype_view.render() both re-fire their state writes on every
+    # rerun -- whichever runs second wins. The classic symptom: user pins a
+    # risk tier at L2, the rerun fires L1's handler whose chart still has
+    # an archetype-tile-only selection (risk_tier=None), and L1 calls
+    # set_risk_tier(None), wiping the freshly-set L2 tier within ~10ms.
+    #
+    # Fix: store the most recent selection this chart actually consumed.
+    # Skip the write when the current selection equals what we already
+    # consumed, even when shared state was mutated elsewhere. The chart
+    # only updates state when its OWN selection moved.
+    current = (archetype, risk_tier)
+    last_consumed = st.session_state.get("_l1_consumed_selection")
+    if current == last_consumed:
+        return
+
+    rerun = False
+    if archetype != state.get("selected_archetype"):
+        state.set_archetype(archetype)
+        rerun = True
+    # Clicking a risk-tier LEAF inside an archetype pins that tier.
+    # Clicking the archetype TILE itself (risk_tier=None) clears any
+    # prior leaf selection so the L2 view widens to every tier under the
+    # archetype. With the consumption-tracking guard above, this only
+    # runs when L1 itself was the source of the click -- it no longer
+    # races against L2's tier writes.
+    if risk_tier != state.get("selected_risk_tier"):
+        state.set_risk_tier(risk_tier)
+        rerun = True
+    st.session_state["_l1_consumed_selection"] = current
+    if rerun:
+        st.rerun()
 
 
 _RISK_TIER_LABELS = ("High", "Medium", "Low")

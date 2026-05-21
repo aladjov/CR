@@ -132,6 +132,17 @@ def render() -> None:
     playbook, tier_from_click = _extract_click(selected, archetype=archetype)
     if not playbook or playbook == archetype:
         return
+
+    # Same consumption-tracking guard as treemap.render() (L1). Plotly
+    # keeps each chart's selection across reruns via its widget key, so
+    # without this both L1 and L2 re-fire their state writes on every
+    # rerun and whichever runs second clobbers the other. Per-chart
+    # "last consumed" tracking confines each handler to its OWN clicks.
+    current = (playbook, tier_from_click)
+    last_consumed = st.session_state.get("_l2_consumed_selection")
+    if current == last_consumed:
+        return
+
     rerun = False
     if playbook != state.get("selected_playbook"):
         state.set_playbook(playbook)
@@ -147,6 +158,7 @@ def render() -> None:
     if target_tier != state.get("selected_risk_tier"):
         state.set_risk_tier(target_tier)
         rerun = True
+    st.session_state["_l2_consumed_selection"] = current
     if rerun:
         st.rerun()
 
