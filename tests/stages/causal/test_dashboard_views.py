@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -369,6 +369,93 @@ class TestPublishDashboardViews:
         publish_dashboard_views(spark, "alpha", "beta")
         joined = "\n".join(call.args[0] for call in spark.sql.call_args_list)
         assert "alpha.beta." in joined
+
+
+class TestExperimentsDirThreading:
+    """Regression guard for the population-stats / feature-meta /
+    column-descriptions auto-materialization path on Databricks.
+
+    On Databricks multi-task jobs env vars don't propagate between
+    notebook tasks, so the default ``RunNamespace.from_env_or_latest()``
+    lookup returns ``None`` and the sidecar-to-UC auto-materialization
+    silently skips -- which strips the deviation block and the
+    provenance view from the published dashboard.
+
+    Passing ``experiments_dir`` to ``publish_dashboard_views`` must
+    propagate as ``root=<experiments_dir>`` to every
+    ``RunNamespace.from_env_or_latest`` call inside the helpers so the
+    in-root sentinel / latest-marker discovery tiers can find the run.
+    """
+
+    def _captured_roots(self, mocked_from_env_or_latest) -> list:
+        """Pull the ``root`` kwarg out of every call site, defaulting to
+        ``None`` so we can spot helpers that forgot to thread the arg."""
+        roots = []
+        for call in mocked_from_env_or_latest.call_args_list:
+            roots.append(call.kwargs.get("root"))
+        return roots
+
+    def test_experiments_dir_threads_to_population_stats_materializer(self):
+        pytest.importorskip("pyspark")
+        from pathlib import Path
+
+        import customer_retention.stages.causal.dashboard_views as dv
+
+        spark = MagicMock()
+        # Pretend the population-stats UC table is missing so the
+        # auto-materialization code path actually runs (otherwise it
+        # short-circuits on tableExists).
+        spark.catalog.tableExists.return_value = False
+
+        captured_roots = []
+        captured_sigs = []
+
+        class _FakeNS:
+            run_id = "rid"
+            feature_population_stats_dir = Path("/tmp/nope")
+            feature_meta_dir = Path("/tmp/nope")
+
+        # Patch RunNamespace.from_env_or_latest in the module the helper
+        # imports it from.
+        from customer_retention.analysis.auto_explorer import run_namespace as _rn_mod
+
+        def _fake_from_env_or_latest(*args, **kwargs):
+            captured_roots.append(kwargs.get("root"))
+            return _FakeNS()
+
+        captured_sigs.append(_fake_from_env_or_latest)
+        with patch.object(_rn_mod.RunNamespace, "from_env_or_latest", side_effect=_fake_from_env_or_latest):
+            try:
+                dv._try_materialize_population_stats_from_sidecar(
+                    spark, "c", "s", experiments_dir="/Volumes/x/y/experiments",
+                )
+            except Exception:
+                # Sidecar doesn't actually exist; we just care that the
+                # discovery call received the explicit root.
+                pass
+
+        assert captured_roots, "from_env_or_latest was never called"
+        assert captured_roots[0] == Path("/Volumes/x/y/experiments"), (
+            "experiments_dir did not propagate to RunNamespace.from_env_or_latest "
+            f"as the root kwarg; got {captured_roots[0]!r}"
+        )
+
+    def test_publish_dashboard_views_accepts_experiments_dir_kwarg(self):
+        """The ``experiments_dir`` kwarg must exist on the public signature
+        so the c05 caller can pass it without an AttributeError. The kwarg
+        is what unblocks Databricks where env vars don't propagate."""
+        import inspect
+
+        from customer_retention.stages.causal.dashboard_views import (
+            publish_dashboard_views,
+        )
+        sig = inspect.signature(publish_dashboard_views)
+        assert "experiments_dir" in sig.parameters, (
+            "publish_dashboard_views must accept experiments_dir so callers "
+            "can pass the resolved RunNamespace root explicitly"
+        )
+        # Default must be None so older callers stay backward-compatible.
+        assert sig.parameters["experiments_dir"].default is None
 
 
 class TestMaterializeHotViews:

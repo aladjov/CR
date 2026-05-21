@@ -22,6 +22,8 @@ from typing import TYPE_CHECKING, List, Optional, Sequence
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # pragma: no cover
+    from pathlib import Path  # noqa: F401 -- referenced in annotations
+
     from pyspark.sql import SparkSession
 
 
@@ -357,7 +359,10 @@ _POPULATION_STATS_SIDECAR_FILENAME = "feature_population_stats.json"
 
 
 def _try_materialize_population_stats_from_sidecar(
-    spark: "SparkSession", catalog: str, schema: str
+    spark: "SparkSession",
+    catalog: str,
+    schema: str,
+    experiments_dir: "Optional[Path | str]" = None,
 ) -> bool:
     """Best-effort: materialize the population-stats JSON sidecar into UC.
 
@@ -365,6 +370,12 @@ def _try_materialize_population_stats_from_sidecar(
     namespace; the deviation views read a UC Delta table. When the table
     is missing but the sidecar exists, materializing it on the fly lets
     ``publish_dashboard_views`` continue without operator intervention.
+
+    ``experiments_dir`` is the run-namespace root. On Databricks
+    multi-task jobs env vars don't propagate between notebook tasks, so
+    ``RunNamespace.from_env_or_latest()`` returns None and the sidecar
+    is never located. Passing an explicit root unblocks the in-root
+    sentinel / latest-marker discovery tiers that don't require env vars.
 
     Returns ``True`` when the table now exists (whether already-present
     or just-materialized), ``False`` when neither the table nor a
@@ -377,8 +388,12 @@ def _try_materialize_population_stats_from_sidecar(
         from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
     except ImportError:
         return False
+    root_path: "Optional[Path]" = None
+    if experiments_dir is not None:
+        from pathlib import Path as _Path
+        root_path = _Path(str(experiments_dir))
     try:
-        ns = RunNamespace.from_env_or_latest()
+        ns = RunNamespace.from_env_or_latest(root=root_path)
     except Exception:  # noqa: BLE001 -- best-effort, never fail the publish
         ns = None
     if ns is None:
@@ -407,7 +422,10 @@ _PROVENANCE_PREREQ_TABLES: tuple[str, ...] = (
 
 
 def _try_materialize_feature_meta_from_sidecar(
-    spark: "SparkSession", catalog: str, schema: str
+    spark: "SparkSession",
+    catalog: str,
+    schema: str,
+    experiments_dir: "Optional[Path | str]" = None,
 ) -> bool:
     """Best-effort: materialize the ``feature_meta`` JSON sidecar into UC.
 
@@ -416,8 +434,10 @@ def _try_materialize_feature_meta_from_sidecar(
     namespace at gold-materialization time; the provenance view reads a
     UC Delta table. When the table is missing but the sidecar exists,
     materializing it on the fly lets ``publish_dashboard_views`` continue
-    without operator intervention. Returns ``True`` when the table now
-    exists, ``False`` when neither table nor sidecar is reachable.
+    without operator intervention. ``experiments_dir`` is the run-
+    namespace root (see the population-stats helper for why this is load-
+    bearing on Databricks). Returns ``True`` when the table now exists,
+    ``False`` when neither table nor sidecar is reachable.
     """
     fqn = f"{catalog}.{schema}.feature_meta"
     if spark.catalog.tableExists(fqn):
@@ -433,8 +453,12 @@ def _try_materialize_feature_meta_from_sidecar(
         )
     except ImportError:
         return False
+    root_path: "Optional[Path]" = None
+    if experiments_dir is not None:
+        from pathlib import Path as _Path
+        root_path = _Path(str(experiments_dir))
     try:
-        ns = RunNamespace.from_env_or_latest()
+        ns = RunNamespace.from_env_or_latest(root=root_path)
     except Exception:  # noqa: BLE001 -- best-effort, never fail the publish
         ns = None
     if ns is None:
@@ -525,14 +549,18 @@ def _seed_synthetic_column_descriptions(
 
 
 def _try_materialize_column_descriptions_from_sidecar(
-    spark: "SparkSession", catalog: str, schema: str
+    spark: "SparkSession",
+    catalog: str,
+    schema: str,
+    experiments_dir: "Optional[Path | str]" = None,
 ) -> bool:
     """Best-effort: materialize the ``column_descriptions`` JSON sidecar into UC.
 
     Always seeds the synthetic placeholder rows for ``event`` / ``event_gap``
     too — those are required so the dashboard's Feature dictionary panel
     shows a business definition for event-derived features (which use those
-    tokens as their source_column placeholders).
+    tokens as their source_column placeholders). ``experiments_dir`` is the
+    run-namespace root (see population-stats helper docstring).
     """
     fqn = f"{catalog}.{schema}.column_descriptions"
     if spark.catalog.tableExists(fqn):
@@ -551,8 +579,12 @@ def _try_materialize_column_descriptions_from_sidecar(
         )
     except ImportError:
         return False
+    root_path: "Optional[Path]" = None
+    if experiments_dir is not None:
+        from pathlib import Path as _Path
+        root_path = _Path(str(experiments_dir))
     try:
-        ns = RunNamespace.from_env_or_latest()
+        ns = RunNamespace.from_env_or_latest(root=root_path)
     except Exception:  # noqa: BLE001
         ns = None
     sidecar = load_column_descriptions_sidecar(ns) if ns is not None else {}
@@ -573,7 +605,10 @@ def _try_materialize_column_descriptions_from_sidecar(
 
 
 def _provenance_prerequisites_present(
-    spark: "SparkSession", catalog: str, schema: str
+    spark: "SparkSession",
+    catalog: str,
+    schema: str,
+    experiments_dir: "Optional[Path | str]" = None,
 ) -> tuple[bool, list[str]]:
     """Return ``(ok, missing)`` for tables ``v_feature_provenance`` reads.
 
@@ -584,15 +619,23 @@ def _provenance_prerequisites_present(
     Older causal-track builds with neither table nor sidecar fall back to
     skipping the provenance view so the rest of the dashboard publishes.
     """
-    if not _try_materialize_feature_meta_from_sidecar(spark, catalog, schema):
+    if not _try_materialize_feature_meta_from_sidecar(
+        spark, catalog, schema, experiments_dir=experiments_dir,
+    ):
         return False, [f"{catalog}.{schema}.feature_meta"]
-    if not _try_materialize_column_descriptions_from_sidecar(spark, catalog, schema):
+    if not _try_materialize_column_descriptions_from_sidecar(
+        spark, catalog, schema, experiments_dir=experiments_dir,
+    ):
         return False, [f"{catalog}.{schema}.column_descriptions"]
     return True, []
 
 
 def _deviation_prerequisites_present(
-    spark: "SparkSession", catalog: str, schema: str, composite_name: str
+    spark: "SparkSession",
+    catalog: str,
+    schema: str,
+    composite_name: str,
+    experiments_dir: "Optional[Path | str]" = None,
 ) -> tuple[bool, list[str]]:
     """Return ``(ok, missing)`` for the tables the deviation views read.
 
@@ -606,7 +649,9 @@ def _deviation_prerequisites_present(
     the whole call with ``[TABLE_OR_VIEW_NOT_FOUND]`` at DDL parse time.
     """
     missing: list[str] = []
-    if not _try_materialize_population_stats_from_sidecar(spark, catalog, schema):
+    if not _try_materialize_population_stats_from_sidecar(
+        spark, catalog, schema, experiments_dir=experiments_dir,
+    ):
         missing.append(f"{catalog}.{schema}.feature_population_stats")
     gold_fqn = f"{catalog}.{schema}.gold_features_{composite_name}"
     if not spark.catalog.tableExists(gold_fqn):
@@ -968,6 +1013,7 @@ def publish_dashboard_views(
     schema: str,
     *,
     composite_name: Optional[str] = None,
+    experiments_dir: "Optional[Path | str]" = None,
 ) -> List[str]:
     """Execute every dashboard view DDL in order.
 
@@ -988,6 +1034,17 @@ def publish_dashboard_views(
     (e.g. population stats live as a JSON sidecar on Volume rather than a
     UC table), the deviation block is skipped with a logged warning so
     the rest of the dashboard publishes successfully.
+
+    ``experiments_dir`` is the run-namespace root used by the
+    sidecar-to-UC auto-materialization helpers (population_stats,
+    feature_meta, column_descriptions). On Databricks multi-task jobs
+    env vars do not propagate between notebook tasks, so the framework's
+    default ``RunNamespace.from_env_or_latest()`` lookup returns None
+    and the sidecars are never located -- the deviation block and the
+    provenance view both end up skipped despite the sidecars existing.
+    Pass the explicit experiments-dir from the caller's resolved
+    ``RunNamespace.root`` and the auto-materialization works without
+    relying on env vars.
     """
     from .run_context_writer import ensure_run_context_table
 
@@ -997,7 +1054,10 @@ def publish_dashboard_views(
     gold_numeric_cols: List[str] = []
     gold_all_cols: List[str] = []
     if composite_name:
-        ok, missing = _deviation_prerequisites_present(spark, catalog, schema, composite_name)
+        ok, missing = _deviation_prerequisites_present(
+            spark, catalog, schema, composite_name,
+            experiments_dir=experiments_dir,
+        )
         if not ok:
             logger.warning(
                 "deviation views skipped: missing prerequisite table(s) %s; "
@@ -1026,7 +1086,9 @@ def publish_dashboard_views(
                     len(gold_numeric_cols), gold_fqn,
                 )
 
-    include_provenance, prov_missing = _provenance_prerequisites_present(spark, catalog, schema)
+    include_provenance, prov_missing = _provenance_prerequisites_present(
+        spark, catalog, schema, experiments_dir=experiments_dir,
+    )
     if not include_provenance:
         logger.warning(
             "v_feature_provenance skipped: missing prerequisite table(s) %s; "
