@@ -18,6 +18,9 @@ consuming a new selection.
 """
 from __future__ import annotations
 
+import importlib.util
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -25,6 +28,32 @@ import pytest
 _APP_DIR = Path(__file__).resolve().parents[3] / "apps" / "databricks_app"
 _TREEMAP_PY = _APP_DIR / "src" / "treemap.py"
 _ARCHETYPE_VIEW_PY = _APP_DIR / "src" / "archetype_view.py"
+_STATE_PY = _APP_DIR / "src" / "state.py"
+
+
+class _SessionStateDict(dict):
+    """Streamlit's session_state behaves like both a dict and a namespace.
+    The state module uses attribute-style writes (``st.session_state.x = v``)
+    and ``.get(...)`` reads, so we shim both surfaces from a plain dict."""
+
+    def __getattr__(self, key):
+        return self.get(key)
+
+    def __setattr__(self, key, value):
+        self[key] = value
+
+
+def _load_state_module() -> tuple[object, _SessionStateDict]:
+    """Load the project's ``state.py`` against a fake streamlit module so
+    its calls into ``st.session_state`` mutate a dict we can inspect."""
+    fake = types.ModuleType("streamlit")
+    fake.session_state = _SessionStateDict()
+    fake.cache_data = lambda *a, **k: (lambda f: f)
+    sys.modules["streamlit"] = fake
+    spec = importlib.util.spec_from_file_location("_state_under_test", _STATE_PY)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod, fake.session_state
 
 
 @pytest.fixture(scope="module")
@@ -100,3 +129,83 @@ class TestSentinelKeysDoNotCollide:
         assert "_l1_consumed_selection" not in archetype_src
         assert "_l2_consumed_selection" in archetype_src
         assert "_l2_consumed_selection" not in treemap_src
+
+
+class TestExplorationCycle:
+    """End-to-end trace of the natural exploration cycle the user
+    described: click L1 → drill L2 → pick a row → see L4 → switch L2 →
+    L4 follows → switch L1 → cohort resets but tier follows → Reset
+    drill button clears everything (including the click-consumption
+    sentinels). Exercises the ``state`` setters in the order the
+    handlers call them and pins each step's resulting session state.
+    """
+
+    def test_full_exploration_cycle_leaves_session_state_consistent(self):
+        state, session = _load_state_module()
+        state.init()
+
+        # Step 1: L1 archetype click. New archetype, no tier specified.
+        # set_archetype clears any prior playbook + entity but leaves
+        # selected_risk_tier alone (callers explicitly call set_risk_tier
+        # when needed).
+        state.set_archetype("NOA")
+        assert session["selected_archetype"] == "NOA"
+        assert session["selected_playbook"] is None
+        assert session["selected_entity"] is None
+
+        # Step 2: L2 playbook frame click. Playbook is set, the entity
+        # the operator might already have open at L4 stays put (fixed
+        # in this iteration -- earlier behaviour wiped it here, which is
+        # what made L4 "stop loading" the moment the operator clicked
+        # any L2 tile).
+        state.set_playbook("R")
+        assert session["selected_playbook"] == "R"
+        assert session["selected_entity"] is None  # not yet picked
+
+        # Step 3: L3 row click → entity is set, L4 renders.
+        state.set_entity("E5")
+        assert session["selected_entity"] == "E5"
+
+        # Step 4: Switch L2 playbook (same archetype). Playbook flips
+        # but the open L4 profile is preserved.
+        state.set_playbook("O")
+        assert session["selected_playbook"] == "O"
+        assert session["selected_entity"] == "E5", (
+            "switching L2 playbook must not close the open L4 profile"
+        )
+
+        # Step 5: Pin a tier at L2 (tier-leaf click inside the playbook).
+        # Tier is set; L4 profile still preserved.
+        state.set_risk_tier("Low")
+        assert session["selected_risk_tier"] == "Low"
+        assert session["selected_entity"] == "E5"
+
+        # Step 6: Switch L1 archetype. set_archetype clears playbook
+        # and entity (top-level context shift) but leaves tier alone --
+        # the chart's handler decides whether to also reset tier based
+        # on what the user actually clicked at L1.
+        state.set_archetype("NOA2")
+        assert session["selected_archetype"] == "NOA2"
+        assert session["selected_playbook"] is None
+        assert session["selected_entity"] is None
+        assert session["selected_risk_tier"] == "Low"  # left alone
+
+        # Step 7: Reset drill -- the "go back to everything" action.
+        # Must clear both the public selectors AND the private
+        # consumption sentinels, otherwise the next click on a tile the
+        # chart had previously selected would short-circuit as
+        # "already consumed" and silently do nothing.
+        session["_l1_consumed_selection"] = ("NOA2", None)
+        session["_l2_consumed_selection"] = ("O", "Low")
+        state.clear_all()
+        for k in (
+            "selected_archetype", "selected_playbook",
+            "selected_risk_tier", "selected_entity", "searched_entity",
+        ):
+            assert session[k] is None, f"clear_all left {k} populated"
+        assert session["_l1_consumed_selection"] is None, (
+            "clear_all must wipe the L1 chart's last-consumed sentinel"
+        )
+        assert session["_l2_consumed_selection"] is None, (
+            "clear_all must wipe the L2 chart's last-consumed sentinel"
+        )

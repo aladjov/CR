@@ -105,6 +105,15 @@ def set_searched_entity(name: Optional[str]) -> None:
 def clear_all() -> None:
     for k in _KEYS:
         st.session_state[k] = None
+    # The L1/L2 treemap click handlers track their last-consumed
+    # selection in private session-state keys so a chart only writes to
+    # shared state when its own selection has moved (see ``treemap.py``
+    # and ``archetype_view.py``). Reset those alongside the public
+    # selectors so a "Reset drill" leaves no stale sentinels that would
+    # cause the next click on a previously-consumed tile to be a no-op.
+    for sentinel in ("_l1_consumed_selection", "_l2_consumed_selection"):
+        if sentinel in st.session_state:
+            st.session_state[sentinel] = None
 
 
 def breadcrumb_parts() -> list[tuple[str, str]]:
