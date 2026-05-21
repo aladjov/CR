@@ -76,6 +76,27 @@ class TestStateSeparation:
                 f"set_searched_entity must not mutate {k}"
             )
 
+    def test_set_playbook_does_not_clear_selected_entity(self, src):
+        """Clicking an L2 playbook tile re-scopes the L3 cohort but must
+        NOT yank an already-open L4 profile out from under the operator.
+        Earlier behaviour cleared ``selected_entity`` here, which made
+        every L2 filter click visually close the profile -- exactly the
+        regression this guard catches."""
+        body = _function_body(_STATE_PY, "set_playbook")
+        code_only = re.sub(r'""".*?"""', "", body, count=1, flags=re.DOTALL)
+        assert "st.session_state.selected_entity" not in code_only, (
+            "set_playbook must not mutate selected_entity"
+        )
+
+    def test_set_risk_tier_does_not_clear_selected_entity(self, src):
+        """Same contract as ``set_playbook``: pinning / clearing a risk
+        tier filter must leave the open L4 profile alone."""
+        body = _function_body(_STATE_PY, "set_risk_tier")
+        code_only = re.sub(r'""".*?"""', "", body, count=1, flags=re.DOTALL)
+        assert "st.session_state.selected_entity" not in code_only, (
+            "set_risk_tier must not mutate selected_entity"
+        )
+
 
 class TestProfileParameterisation:
     @pytest.fixture(scope="class")

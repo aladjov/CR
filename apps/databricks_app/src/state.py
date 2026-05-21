@@ -61,9 +61,15 @@ def set_playbook(name: Optional[str]) -> None:
     have pre-pinned a tier and we want to honour it down the
     cascade; ``archetype_view.render`` will overwrite the tier when
     the L2 click landed on a risk_tier leaf.
+
+    Does NOT clear ``selected_entity``. Re-scoping the L3 cohort to a
+    specific playbook should not yank an already-open L4 profile out
+    from under the operator; if the previously-selected entity falls
+    outside the new filter the L3 selection simply no longer
+    highlights it. The operator picks a new row when they want to
+    switch profiles.
     """
     st.session_state.selected_playbook = name
-    st.session_state.selected_entity = None
 
 
 def set_risk_tier(tier: Optional[str]) -> None:
@@ -74,9 +80,12 @@ def set_risk_tier(tier: Optional[str]) -> None:
     subset uniformly. Setting ``tier=None`` clears the pin so the
     drill widens back to every tier under the current archetype +
     playbook selection.
+
+    Does NOT clear ``selected_entity`` -- same reasoning as
+    ``set_playbook``: a filter change should narrow the L3 cohort but
+    leave the open L4 profile intact.
     """
     st.session_state.selected_risk_tier = tier
-    st.session_state.selected_entity = None
 
 
 def set_entity(name: Optional[str]) -> None:
