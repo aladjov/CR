@@ -189,6 +189,22 @@ def render_dashboard_view_sql(
     text = load_dashboard_view_sql()
     if composite_name:
         text = _strip_deviation_markers(text).replace("{composite_name}", composite_name)
+        # ``gold_struct_cols`` being empty silently substitutes ``STRUCT(1)``
+        # which makes the deviation view return zero rows for every entity
+        # (the JOIN ``feature_name = "col1"`` matches nothing in
+        # ``feature_population_stats``). Warn loudly when callers omit it
+        # despite asking for the deviation block -- this is exactly the
+        # regression that took ``refresh_dashboard_view_materializations``
+        # offline for the SPS engagement until we caught it via probe.
+        if not gold_struct_cols:
+            logger.warning(
+                "render_dashboard_view_sql: composite_name=%r supplied without "
+                "gold_struct_cols. The deviation view body will substitute "
+                "STRUCT(1) and produce zero rows. Callers should introspect "
+                "gold_features_%s and pass gold_struct_cols (numeric columns) "
+                "+ gold_columns (all columns).",
+                composite_name, composite_name,
+            )
         struct_args = ", ".join(f"`{c}`" for c in (gold_struct_cols or [])) or "1"
         text = text.replace("{gold_struct_cols}", struct_args)
         text = text.replace(
@@ -981,18 +997,40 @@ def refresh_dashboard_view_materializations(
     re-published; we only execute the dependents whose source we just
     re-CTAS'd.
 
+    When ``composite_name`` is supplied, the function introspects
+    ``gold_features_<composite_name>`` to recover the numeric column
+    list + full column list that the deviation view body needs
+    substituted into ``STRUCT(...)`` and ``ORDER BY``. Without this the
+    re-published deviation view body collapses to ``STRUCT(1)`` and the
+    materialization captures zero rows -- a silent regression that
+    masquerades as missing data (this is what shipped accidentally and
+    broke the L4 "Vs. training population" panel for SPS).
+
     Returns the list of view names whose materialized table was
     refreshed. ``composite_name`` gates the deviation-block specs the
     same way ``publish_dashboard_views`` does -- supply it when the
     refresh should also re-snapshot the per-feature deviation tables.
     """
+    gold_numeric_cols: List[str] = []
+    gold_all_cols: List[str] = []
+    if composite_name:
+        gold_fqn = f"{catalog}.{schema}.gold_features_{composite_name}"
+        if spark.catalog.tableExists(gold_fqn):
+            gold_numeric_cols = _gold_numeric_columns(spark, gold_fqn)
+            gold_all_cols = _gold_all_columns(spark, gold_fqn)
+        else:
+            logger.warning(
+                "refresh: gold table %s does not exist; the deviation view body "
+                "will not pick up STRUCT() columns and will return zero rows. "
+                "Re-run gold materialization first.", gold_fqn,
+            )
     rendered = render_dashboard_view_sql(
         catalog,
         schema,
         composite_name=composite_name,
         include_provenance=True,
-        gold_struct_cols=None,
-        gold_columns=None,
+        gold_struct_cols=gold_numeric_cols,
+        gold_columns=gold_all_cols,
     )
     statements = split_view_statements(rendered)
     rewired = _materialize_hot_views(

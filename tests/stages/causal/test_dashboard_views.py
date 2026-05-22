@@ -632,6 +632,116 @@ class TestMaterializeHotViews:
         )
 
 
+class TestRefreshPassesGoldStructColsToDeviationView:
+    """Regression guard for the silent STRUCT(1) substitution bug.
+
+    Background: ``render_dashboard_view_sql`` substitutes
+    ``{gold_struct_cols}`` into the deviation view's
+    ``FROM_JSON(TO_JSON(STRUCT(...)), 'MAP<STRING,DOUBLE>')`` unpivot.
+    When the substitution is the literal ``"1"`` (its empty-list
+    fallback), the view body becomes ``STRUCT(1)`` -- a single literal
+    column whose key after JSON round-trip is ``"col1"`` -- and the
+    downstream JOIN on ``feature_name`` matches nothing in
+    ``feature_population_stats``. The view returns 0 rows for every
+    entity, every time, until somebody republishes with the real list.
+
+    ``refresh_dashboard_view_materializations`` previously called
+    ``render_dashboard_view_sql`` with ``gold_struct_cols=None``,
+    silently re-publishing the deviation view in this broken state on
+    every refresh. The fix has refresh introspect the gold schema the
+    same way ``publish_dashboard_views`` does. These tests pin both
+    halves: refresh must call ``_gold_numeric_columns`` AND the
+    rendered SQL it submits must contain real column names rather than
+    the ``STRUCT(1)`` sentinel.
+    """
+
+    def test_refresh_introspects_gold_when_composite_name_is_supplied(self):
+        pytest.importorskip("pyspark")
+        from pyspark.sql.types import DoubleType, StringType, StructField, StructType
+
+        spark = MagicMock()
+        # Gold schema with two real numeric columns and one ignored string
+        # column so the framework's filter has work to do.
+        spark.table.return_value.schema = StructType([
+            StructField("entity_id", StringType()),
+            StructField("active_span_days", DoubleType()),
+            StructField("event_frequency", DoubleType()),
+            StructField("created_at", StringType()),
+        ])
+
+        refresh_dashboard_view_materializations(
+            spark, "c", "s", composite_name="cn1",
+        )
+        sqls = [c.args[0] for c in spark.sql.call_args_list]
+        # The deviation view should appear in the re-published statements
+        # AND it must reference the real numeric columns, not STRUCT(1).
+        deviation_sql = next(
+            (s for s in sqls if "v_account_feature_deviation" in s
+             and "FROM_JSON" in s),
+            None,
+        )
+        assert deviation_sql is not None, (
+            "refresh did not re-publish v_account_feature_deviation; the "
+            "materialization step needs the live CTE body so its CTAS reads "
+            "from the original source, not the stale table-backed view"
+        )
+        assert "STRUCT(1)" not in deviation_sql, (
+            "refresh re-published deviation view with the STRUCT(1) sentinel; "
+            "gold_struct_cols was not threaded through render_dashboard_view_sql. "
+            "This is the regression that silently zeros out the L4 deviation panel."
+        )
+        assert "`active_span_days`" in deviation_sql, (
+            "refresh did not introspect gold for numeric columns; the deviation "
+            "view STRUCT() must list the real numeric columns"
+        )
+        assert "`event_frequency`" in deviation_sql, (
+            "refresh did not introspect gold for numeric columns; the deviation "
+            "view STRUCT() must list every numeric column"
+        )
+        # The excluded metadata columns must NOT be inside STRUCT(...) --
+        # they're not double-castable and would silently NULL the map.
+        # The published body still contains the string "entity_id" elsewhere
+        # (CTE joins reference it), so target the STRUCT block specifically.
+        struct_open = deviation_sql.find("STRUCT(")
+        assert struct_open >= 0
+        struct_close = deviation_sql.index(")", struct_open)
+        struct_body = deviation_sql[struct_open:struct_close]
+        assert "`entity_id`" not in struct_body, (
+            "entity_id leaked into STRUCT(...) -- it's a metadata column "
+            "and would nuke the MAP<STRING,DOUBLE> parse"
+        )
+
+    def test_refresh_without_composite_name_skips_gold_introspection(self):
+        """When ``composite_name`` is None the deviation block is stripped
+        from the rendered SQL altogether, so the helper must not touch
+        ``spark.table`` for the gold table -- which probably doesn't even
+        exist at that point."""
+        pytest.importorskip("pyspark")
+        spark = MagicMock()
+        refresh_dashboard_view_materializations(spark, "c", "s", composite_name=None)
+        # spark.table should not have been called for gold_features
+        # (it's only called for run_context table existence checks via
+        # tableExists, not for schema introspection via table().schema).
+        for call in spark.table.call_args_list:
+            assert "gold_features" not in str(call.args[0]), (
+                f"refresh introspected gold despite composite_name=None: {call}"
+            )
+
+    def test_render_warns_when_composite_supplied_without_gold_struct_cols(self, caplog):
+        """Defensive guard. ``render_dashboard_view_sql`` does substitute
+        ``STRUCT(1)`` in this case (legacy fallback), but it must log a
+        loud warning so the regression doesn't go silent. Callers that
+        legitimately want an empty struct (none today) get the same
+        warning -- which is the right ergonomic tradeoff."""
+        import logging
+        with caplog.at_level(logging.WARNING, logger="customer_retention.stages.causal.dashboard_views"):
+            render_dashboard_view_sql("c", "s", composite_name="cn1")
+        assert any(
+            "STRUCT(1)" in rec.getMessage() or "produce zero rows" in rec.getMessage()
+            for rec in caplog.records
+        ), "render_dashboard_view_sql must warn when composite_name is set but gold_struct_cols is empty"
+
+
 class TestRefreshDashboardViewMaterializations:
     """``refresh_dashboard_view_materializations`` re-runs ONLY the CTAS +
     OPTIMIZE pass without re-publishing every view DDL.
