@@ -58,12 +58,18 @@ def _short_sql(sql_text: str, limit: int = 100) -> str:
     return one_line[:limit] + ("..." if len(one_line) > limit else "")
 
 
-# Substrings of the driver's exception messages that mean "the cached
-# connection is no longer usable" -- Databricks SQL warehouses close
-# idle connections after ~10 minutes and any cursor opened on a closed
-# transport raises one of these. On match we drop the cached connection
-# and let ``_query`` re-run once against a fresh one.
+# Substrings of the driver's exception messages that historically mean
+# "the cached connection is no longer usable" -- Thrift-level closures
+# from idle timeouts. After ``_query`` switched to a blanket retry on
+# any first-attempt failure (see its docstring), these hints are no
+# longer used as a retry GATE; they're kept for diagnostic labeling so
+# the Diagnostics tab can distinguish "the obvious stale-conn" cases
+# from blanket retries. Expanded with the longer-idle failure modes
+# we observed empirically (token expiration, warehouse cold-start,
+# cluster terminations, generic network) so the diagnostic events
+# stay readable across all of them.
 _STALE_CONNECTION_HINTS: tuple[str, ...] = (
+    # Thrift / driver transport.
     "session was closed",
     "session is closed",
     "connection is closed",
@@ -75,6 +81,37 @@ _STALE_CONNECTION_HINTS: tuple[str, ...] = (
     "thrifttransport",
     "connectionreseterror",
     "cursor was closed",
+    # Auth / token expiry (multi-day idle eats PAT and OAuth tokens).
+    "401",
+    "403",
+    "unauthorized",
+    "authentication failed",
+    "invalid_grant",
+    "token has expired",
+    "token expired",
+    "could not be authenticated",
+    # Warehouse state (long idle scales the warehouse down).
+    "warehouse is not running",
+    "warehouse must be running",
+    "warehouse is stopped",
+    "warehouse is starting",
+    "warehouse is stopping",
+    "warehouse is terminating",
+    "no warehouses available",
+    "compute is not running",
+    # Network / transport at the HTTP layer.
+    "name or service not known",
+    "name resolution failure",
+    "connection refused",
+    "connection reset",
+    "timed out",
+    "read timed out",
+    "request timed out",
+    "service unavailable",
+    "bad gateway",
+    "502",
+    "503",
+    "504",
 )
 
 
@@ -137,12 +174,28 @@ def _connect(cfg: AppConfig):
 def _query(cfg: AppConfig, sql_text: str, params: Optional[dict[str, Any]] = None) -> pd.DataFrame:
     """Run a parameterized query against the shared warehouse connection.
 
-    Stale-connection retry: when the borrowed cursor raises a "session
-    closed" / "broken pipe" error (Databricks SQL warehouses idle out
-    after ~10 min), drop the cached connection and re-run once against a
-    freshly-handshaken one. Any other failure -- syntax error,
-    permission denied, dataset missing -- propagates immediately so the
-    caller can surface a real error instead of silently retrying.
+    Stale-connection retry: ANY first-attempt failure drops the cached
+    connection and reruns once against a fresh one. Previously this
+    was gated on a string-match heuristic against
+    ``_STALE_CONNECTION_HINTS``, but the hint set only covered Thrift
+    transport-level errors ("session closed", "broken pipe"). After
+    multi-day idle gaps the dominant failure modes are token expiry
+    ("401 Unauthorized", "invalid_grant", "token has expired"), cold
+    warehouse ("warehouse is not running", "warehouse is starting"),
+    and network ("connection refused", "name resolution failure") --
+    none of which matched the original hints, so the L1 panel would
+    fail with no automatic recovery after a long weekend.
+
+    Blanket retry on first failure costs one extra rebuild + one extra
+    query attempt (~2-3s total) on legitimate errors (syntax error,
+    missing table, permission denied); those errors fail identically on
+    retry and propagate. The cost is negligible compared to the
+    user-visible benefit of never serving stale-connection errors.
+
+    The stale-hint substring match is kept as a DIAGNOSTIC label so the
+    Diagnostics tab can distinguish "obviously stale" rebuilds from
+    blanket first-attempt retries, but the retry no longer depends on
+    a hint match.
 
     Tracing: when CR_QUERY_TRACE=1 in the environment, each attempt
     logs ``elapsed_ms``, attempt number, retry status, and the first
@@ -172,17 +225,23 @@ def _query(cfg: AppConfig, sql_text: str, params: Optional[dict[str, Any]] = Non
                 return df
             except Exception as exc:  # noqa: BLE001 -- classified below
                 last_exc = exc
-                stale = attempt == 0 and _looks_like_stale_connection(exc)
+                will_retry = attempt == 0
+                stale_hint = _looks_like_stale_connection(exc)
                 diagnostics.record(
                     "query_fail",
                     elapsed_ms=_ms(attempt_t0),
                     attempt=attempt,
-                    will_retry=stale,
+                    will_retry=will_retry,
+                    stale_hint_matched=stale_hint,
                     exc_type=type(exc).__name__,
                     sql=_short_sql(sql_text),
                 )
-                if stale:
-                    diagnostics.record("conn_clear", reason="stale_hint")
+                if will_retry:
+                    diagnostics.record(
+                        "conn_clear",
+                        reason="stale_hint" if stale_hint else "first_attempt_fail",
+                        exc_type=type(exc).__name__,
+                    )
                     _shared_warehouse_connection.clear()
                     continue
                 raise
